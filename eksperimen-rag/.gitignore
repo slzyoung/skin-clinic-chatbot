@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Local configuration & Secrets
+.env
+
+# Database & Storage
+qdrant_data/
+data/temp/
+data/output/
+logs/
+
+# IDE / System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
