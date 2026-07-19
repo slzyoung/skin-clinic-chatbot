@@ -9,25 +9,29 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-import { STAFF_DATA, DOCTOR_DATA } from "@/dummy/users"
 import { DoctorDetailsSheet } from "./components/doctor-details-sheet"
 import { UserAddSheet } from "./components/user-add-sheet"
 import { UserStaffProfileSheet } from "./components/user-staff-profile-sheet"
+import { useUsers } from "./hooks/use-users"
+import { UserResponse } from "./api/types"
 
 export default function UsersPage() {
-  const [selectedDoctor, setSelectedDoctor] = useState<(typeof DOCTOR_DATA)[0] | null>(null)
+  const { data: staffData = [], } = useUsers("STAFF")
+  const { data: doctorData = [], } = useUsers("DOCTOR")
+
+  const [selectedDoctor, setSelectedDoctor] = useState<UserResponse | null>(null)
   const [isSheetOpen, setIsSheetOpen] = useState(false)
   
   const [isAddUserOpen, setIsAddUserOpen] = useState(false)
-  const [selectedStaff, setSelectedStaff] = useState<(typeof STAFF_DATA)[0] | null>(null)
+  const [selectedStaff, setSelectedStaff] = useState<UserResponse | null>(null)
   const [isViewStaffOpen, setIsViewStaffOpen] = useState(false)
 
-  const handleViewDoctor = (doctor: typeof DOCTOR_DATA[0]) => {
+  const handleViewDoctor = (doctor: UserResponse) => {
     setSelectedDoctor(doctor)
     setIsSheetOpen(true)
   }
 
-  const handleViewStaff = (staff: typeof STAFF_DATA[0]) => {
+  const handleViewStaff = (staff: UserResponse) => {
     setSelectedStaff(staff)
     setIsViewStaffOpen(true)
   }
@@ -83,13 +87,13 @@ export default function UsersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {STAFF_DATA.map((staff) => (
+                {staffData.map((staff: UserResponse) => (
                   <TableRow key={staff.id}>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-10 w-10">
                           <AvatarFallback className="bg-gray-100 text-gray-600 font-medium">
-                            {staff.name.split(" ").map(n => n[0]).join("")}
+                            {staff.name ? staff.name.split(" ").map((n: string) => n[0]).join("") : "S"}
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex flex-col">
@@ -98,7 +102,7 @@ export default function UsersPage() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-gray-900">{staff.role}</TableCell>
+                    <TableCell className="text-gray-900">{staff.roles && staff.roles.length > 0 ? staff.roles[0].name : "Staff"}</TableCell>
                     <TableCell className="text-gray-900">{staff.email}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
@@ -127,13 +131,13 @@ export default function UsersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {DOCTOR_DATA.map((doc) => (
+                {doctorData.map((doc: UserResponse) => (
                   <TableRow key={doc.id}>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-10 w-10">
                           <AvatarFallback className="bg-gray-100 text-gray-600 font-medium">
-                            {doc.name.replace("Dr. ", "").split(" ").map(n => n[0]).join("")}
+                            {doc.name ? doc.name.replace("Dr. ", "").split(" ").map((n: string) => n[0]).join("") : "D"}
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex flex-col">
@@ -143,7 +147,7 @@ export default function UsersPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-gray-900">Doctor</TableCell>
-                    <TableCell className="text-gray-900">{`${doc.name.replace("Dr. ", "")}@gmail.com`}</TableCell>
+                    <TableCell className="text-gray-900">{doc.email}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
                         <Button variant="outline" size="md" className="border-gray-200 font-medium" onClick={() => handleViewDoctor(doc)}>

@@ -28,10 +28,14 @@ api.interceptors.response.use(
   async (error) => {
     // Check if error is 401 Unauthorized
     if (error.response && error.response.status === 401) {
+      // Do not redirect to login if we are already trying to login, fetching me, or already on the login page
+      const url = error.config?.url || "";
+      if (url.includes("/auth/login") || url.includes("/users/me")) {
+        return Promise.reject(error);
+      }
+
       // The user is not authenticated or their token expired.
-      // Depending on your auth flow, you might attempt to call a refresh endpoint here.
-      // For now, we will just redirect to the login page.
-      if (typeof window !== "undefined") {
+      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
         window.location.href = "/login";
       }
     }

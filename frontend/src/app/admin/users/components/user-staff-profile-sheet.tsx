@@ -7,7 +7,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Staff } from "@/dummy/users"
+import { UserResponse } from "../api/types"
 
 export function UserStaffProfileSheet({
   isOpen,
@@ -16,7 +16,7 @@ export function UserStaffProfileSheet({
 }: {
   isOpen: boolean
   onOpenChange: (open: boolean) => void
-  staff: Staff | null
+  staff: UserResponse | null
 }) {
   return (
     <Sheet open={isOpen} onOpenChange={onOpenChange}>
@@ -57,7 +57,7 @@ export function UserStaffProfileSheet({
 
                     <div className="flex flex-col gap-2">
                       <span className="text-sm text-gray-500">Role</span>
-                      <span className="text-sm text-gray-900">{staff.role}</span>
+                      <span className="text-sm text-gray-900">{staff.roles && staff.roles.length > 0 ? staff.roles[0].name : "Staff"}</span>
                     </div>
 
                     <div className="flex flex-col gap-2">
@@ -72,7 +72,16 @@ export function UserStaffProfileSheet({
 
                     <div className="flex flex-col gap-2">
                       <span className="text-sm text-gray-500">Date & Time Created</span>
-                      <span className="text-sm text-gray-900">4/27/2026 03:15 PM</span>
+                      <span className="text-sm text-gray-900">
+                        {new Date(staff.created_at).toLocaleString("en-US", {
+                          year: "numeric",
+                          month: "numeric",
+                          day: "numeric",
+                          hour: "numeric",
+                          minute: "numeric",
+                          hour12: true
+                        })}
+                      </span>
                     </div>
                   </div>
                 </div>

@@ -1,4 +1,15 @@
-export const mockBranches = [
+export type Branch = {
+  id: string;
+  name: string;
+  address: string;
+  tokensMonth: number;
+  used: number;
+  remaining: number;
+  image?: string;
+  logoUrl?: string;
+};
+
+export const mockBranches: Branch[] = [
   {
     id: "branch-1",
     name: "Erha Gunung Kidul",
@@ -23,6 +34,4 @@ export const mockBranches = [
     used: 80,
     remaining: 920,
   }
-]
-
-export type Branch = typeof mockBranches[0]
+];

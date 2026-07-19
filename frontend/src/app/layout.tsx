@@ -5,6 +5,9 @@ import { cn } from "@/lib/utils";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryProvider } from "@/components/providers/query-provider";
+import { Toaster } from "@/components/ui/sonner";
+
+import { AuthProvider } from "@/hooks/use-session";
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
@@ -30,7 +33,10 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <QueryProvider>
-          <TooltipProvider>{children}</TooltipProvider>
+          <AuthProvider>
+            <TooltipProvider>{children}</TooltipProvider>
+          </AuthProvider>
+          <Toaster />
         </QueryProvider>
       </body>
     </html>

@@ -25,6 +25,7 @@ import {
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { useLogout } from "@/app/login/hooks/use-logout"
 
 const adminNav = [
   {
@@ -56,6 +57,7 @@ const adminNav = [
 
 export function AdminSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
+  const { mutate: logout, isPending: isLoggingOut } = useLogout()
   
   return (
     <Sidebar collapsible="icon" {...props} className="border-r border-border">
@@ -114,7 +116,13 @@ export function AdminSidebar({ ...props }: React.ComponentProps<typeof Sidebar>)
                 <span className="text-xs text-zinc-500 truncate">Admin</span>
               </div>
             </SidebarMenuButton>
-            <Button variant="ghost" size="icon" className="text-zinc-500 hover:text-red-600 hover:bg-red-50 shrink-0 h-10 w-10 ml-1 group-data-[collapsible=icon]:hidden">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="text-zinc-500 hover:text-red-600 hover:bg-red-50 shrink-0 h-10 w-10 ml-1 group-data-[collapsible=icon]:hidden"
+              onClick={() => logout()}
+              disabled={isLoggingOut}
+            >
               <RiLogoutBoxRLine className="size-4" />
             </Button>
           </SidebarMenuItem>

@@ -46,7 +46,7 @@ export function BranchTokenTable() {
                 <TableCell className="max-w-50">
                   <div className="flex items-center gap-3">
                     <Avatar className="w-10 h-10 rounded-md after:rounded-md">
-                      <AvatarImage src={branch.image || "/mini-placeholder.svg"} alt={branch.name} className="object-cover rounded-md" />
+                      <AvatarImage src={branch.logoUrl || "/mini-placeholder.svg"} alt={branch.name} className="object-cover rounded-md" />
                       <AvatarFallback className="rounded-md">BR</AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col overflow-hidden">

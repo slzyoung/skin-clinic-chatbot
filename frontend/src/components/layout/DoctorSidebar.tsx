@@ -20,6 +20,7 @@ import {
 import Link from "next/link"
 import * as React from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { useLogout } from "@/app/login/hooks/use-logout"
 
 const recentChats = [
   {
@@ -60,6 +61,7 @@ const recentChats = [
 ]
 
 export function DoctorSidebar({ className, ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { mutate: logout, isPending: isLoggingOut } = useLogout()
   
   return (
     <Sidebar collapsible="icon" className={`border-r border-border ${className || ''}`} {...props}>
@@ -126,7 +128,13 @@ export function DoctorSidebar({ className, ...props }: React.ComponentProps<type
                 <span className="text-xs text-zinc-500 truncate">Doctor</span>
               </div>
             </SidebarMenuButton>
-            <Button variant="ghost" size="icon" className="text-zinc-500 hover:text-red-600 hover:bg-red-50 shrink-0 h-10 w-10 ml-1 group-data-[collapsible=icon]:hidden">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="text-zinc-500 hover:text-red-600 hover:bg-red-50 shrink-0 h-10 w-10 ml-1 group-data-[collapsible=icon]:hidden"
+              onClick={() => logout()}
+              disabled={isLoggingOut}
+            >
               <RiLogoutBoxRLine className="size-4" />
             </Button>
           </SidebarMenuItem>

@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { RiCheckLine, RiInformationLine } from "@remixicon/react";
-import { Doctor } from "@/dummy/users";
+import { UserResponse } from "../api/types";
 
 export function DoctorAdjustLimitDialog({
   isOpen,
@@ -18,8 +18,12 @@ export function DoctorAdjustLimitDialog({
 }: {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
-  doctor: Doctor | null;
+  doctor: UserResponse | null;
 }) {
+  const tokenLimit = doctor?.token_limit ?? 250;
+  const tokensUsed = doctor?.tokens_used ?? 0;
+  const tokensLeft = tokenLimit - tokensUsed;
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md p-0 flex flex-col gap-0 rounded-md overflow-hidden bg-white border-0">
@@ -31,9 +35,9 @@ export function DoctorAdjustLimitDialog({
 
         <div className="p-4 flex flex-col gap-4">
           <div className="flex flex-col gap-1 text-sm text-gray-900">
-            <span>Token limit: {doctor?.maxTokens || 250}</span>
-            <span>Remaining: {doctor?.tokensLeft || 25}</span>
-            <span>Used: {(doctor?.maxTokens || 250) - (doctor?.tokensLeft || 25)}</span>
+            <span>Token limit: {tokenLimit}</span>
+            <span>Remaining: {tokensLeft}</span>
+            <span>Used: {tokensUsed}</span>
           </div>
 
           <div className="flex flex-col gap-2">
@@ -43,7 +47,7 @@ export function DoctorAdjustLimitDialog({
             <div className="relative flex items-center">
               <Input
                 type="number"
-                defaultValue={doctor?.maxTokens || 250}
+                defaultValue={tokenLimit}
                 className="h-10 border-gray-200 focus-visible:ring-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
               <span className="absolute right-3 text-sm text-gray-400">
@@ -56,7 +60,7 @@ export function DoctorAdjustLimitDialog({
             <RiInformationLine className="h-5 w-5 shrink-0" />
             <span>
               We recommend not setting the token limit below the remaining token
-              amount, which is {doctor?.tokensLeft || 25}.
+              amount, which is {tokensLeft}.
             </span>
           </div>
         </div>

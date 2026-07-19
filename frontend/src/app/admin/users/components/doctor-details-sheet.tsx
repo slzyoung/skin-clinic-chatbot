@@ -12,7 +12,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { Doctor } from "@/dummy/users"
+import { UserResponse } from "../api/types"
 import { DoctorManageBranchDialog } from "./doctor-manage-branch-dialog"
 import { DoctorManageKnowledgeDialog } from "./doctor-manage-knowledge-dialog"
 import { DoctorAdjustLimitDialog } from "./doctor-adjust-limit-dialog"
@@ -24,7 +24,7 @@ export function DoctorDetailsSheet({
 }: {
   isOpen: boolean
   onOpenChange: (open: boolean) => void
-  doctor: Doctor | null
+  doctor: UserResponse | null
 }) {
   const [isManageBranchOpen, setIsManageBranchOpen] = useState(false)
   const [isManageKnowledgeOpen, setIsManageKnowledgeOpen] = useState(false)
@@ -74,14 +74,18 @@ export function DoctorDetailsSheet({
 
                     <div className="flex flex-col gap-2">
                       <span className="text-sm text-gray-500">Email</span>
-                      <span className="text-sm text-gray-900">{doctor.name.replace("Dr. ", "")}@gmail.com</span>
+                      <span className="text-sm text-gray-900">{doctor.email}</span>
                     </div>
 
                     <div className="flex flex-col gap-2">
                       <div className="flex justify-between items-center">
                         <div className="flex flex-col gap-2">
                           <span className="text-sm text-gray-500">Tokens Remaining</span>
-                          <span className="text-sm text-gray-900">{doctor.tokensLeft} / {doctor.maxTokens} tokens</span>
+                          <span className="text-sm text-gray-900">
+                            {doctor.token_limit !== undefined && doctor.tokens_used !== undefined 
+                              ? doctor.token_limit - doctor.tokens_used 
+                              : 0} / {doctor.token_limit ?? 0} tokens
+                          </span>
                         </div>
                         <Button variant="outline" className="" onClick={() => setIsAdjustLimitOpen(true)}>
                           <RiEdit2Line className="mr-2 h-4 w-4" />
@@ -99,8 +103,12 @@ export function DoctorDetailsSheet({
                             <AvatarFallback className="rounded-md"></AvatarFallback>
                           </Avatar>
                           <div className="flex flex-col">
-                            <span className="text-sm font-medium text-gray-900">{doctor.branch}</span>
-                            <span className="text-xs text-gray-500">Pakuwon Mall Jogja, Lantai 1, Kaliwaru, Condongcatur, Kec. Depok, Kabupaten Sleman, Daerah Istimewa Yogyakarta 55281</span>
+                            <span className="text-sm font-medium text-gray-900">
+                              {doctor.branches && doctor.branches.length > 0 ? doctor.branches[0].name : "No Branch"}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {doctor.branches && doctor.branches.length > 0 ? doctor.branches[0].address || "No address" : "-"}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -113,9 +121,13 @@ export function DoctorDetailsSheet({
                     <div className="flex flex-col gap-2 pt-2">
                       <span className="text-sm text-gray-500">Knowledge Base</span>
                       <div className="flex flex-wrap gap-2">
-                        <Badge variant="secondary" className="bg-gray-100 text-gray-900">Acne Care</Badge>
-                        <Badge variant="secondary" className="bg-gray-100 text-gray-900">Anti Aging</Badge>
-                        <Badge variant="secondary" className="bg-gray-100 text-gray-900">Dark Spot</Badge>
+                        {doctor.categories && doctor.categories.length > 0 ? (
+                          doctor.categories.map((cat) => (
+                            <Badge key={cat.id} variant="secondary" className="bg-gray-100 text-gray-900">{cat.name}</Badge>
+                          ))
+                        ) : (
+                          <span className="text-sm text-gray-400">No categories assigned</span>
+                        )}
                       </div>
                       <Button variant="outline" className="w-full mt-2 rounded-md" onClick={() => setIsManageKnowledgeOpen(true)}>
                         <RiSettings3Line className="mr-2 h-4 w-4" />
