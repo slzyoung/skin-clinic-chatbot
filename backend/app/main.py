@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.core.config import settings
-from app.api.routers import auth, users, branches, categories, knowledge, chats
+from app.api.routers import auth, users, branches, categories, knowledge, chats, webhooks
 from app.services.cis_sync import setup_cis_scheduler
 
 scheduler = setup_cis_scheduler()
@@ -38,6 +38,7 @@ app.include_router(branches.router, prefix="/api/branches")
 app.include_router(categories.router, prefix="/api/categories")
 app.include_router(knowledge.router, prefix="/api/knowledge")
 app.include_router(chats.router, prefix="/api/chats")
+app.include_router(webhooks.router, prefix="/api")
 
 @app.get("/health")
 async def health_check():

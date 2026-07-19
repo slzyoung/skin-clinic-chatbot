@@ -10,8 +10,8 @@ from app.models.user import User, UserType, Role, UserRole, UserTokenUsage
 from app.models.branch import Branch, UserBranch
 from app.models.category import Category, UserCategory
 from app.schemas.user import (
-    UserResponse, UserCreateStaff, UserCreateDoctor, UserUpdate,
-    UserUpdateRoles, UserUpdateBranches, UserUpdateCategories
+    UserResponse, UserCreateStaff, StaffUpdate, DoctorUpdate,
+    UserUpdateRoles, UserUpdateCategories
 )
 from datetime import datetime, timezone
 from app.core.security import get_password_hash
@@ -120,35 +120,7 @@ async def create_staff(
     await db.refresh(user)
     return await _hydrate_user(user, db)
 
-@router.post("/doctors", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def create_doctor(
-    user_in: UserCreateDoctor,
-    db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
-):
-    stmt = select(User).where((User.email == user_in.email) | (User.cis_id == user_in.cis_id))
-    if (await db.execute(stmt)).scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email or CIS ID already registered")
-        
-    user = User(
-        email=user_in.email,
-        name=user_in.name,
-        type=UserType.DOCTOR,
-        cis_id=user_in.cis_id,
-        token_limit=user_in.token_limit
-    )
-    db.add(user)
-    await db.flush()
-    
-    for branch_id in user_in.branches:
-        db.add(UserBranch(user_id=user.id, branch_id=branch_id))
-        
-    for cat_id in user_in.categories:
-        db.add(UserCategory(user_id=user.id, category_id=cat_id))
-        
-    await db.commit()
-    await db.refresh(user)
-    return await _hydrate_user(user, db)
+
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
@@ -165,7 +137,7 @@ async def get_user(
 @router.put("/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: uuid.UUID,
-    user_in: UserUpdate,
+    user_in: dict, # We take a dict and parse it manually since it can be either Staff or Doctor
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(require_admin_role)
 ):
@@ -174,7 +146,11 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    update_data = user_in.model_dump(exclude_unset=True)
+    if user.type == UserType.DOCTOR:
+        update_data = DoctorUpdate(**user_in).model_dump(exclude_unset=True)
+    else:
+        update_data = StaffUpdate(**user_in).model_dump(exclude_unset=True)
+
     if "password" in update_data and update_data["password"]:
         user.password_hash = get_password_hash(update_data["password"])
         del update_data["password"]
@@ -194,24 +170,7 @@ async def update_user(
     await db.refresh(user)
     return await _hydrate_user(user, db)
 
-@router.put("/{user_id}/branches", response_model=UserResponse)
-async def update_user_branches(
-    user_id: uuid.UUID,
-    branches_in: UserUpdateBranches,
-    db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
-):
-    stmt = select(User).where(User.id == user_id, User.type == UserType.DOCTOR)
-    user = (await db.execute(stmt)).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="Doctor not found")
-        
-    await db.execute(UserBranch.__table__.delete().where(UserBranch.user_id == user_id))
-    for branch_id in branches_in.branches:
-        db.add(UserBranch(user_id=user.id, branch_id=branch_id))
-        
-    await db.commit()
-    return await _hydrate_user(user, db)
+
 
 @router.put("/{user_id}/categories", response_model=UserResponse)
 async def update_user_categories(

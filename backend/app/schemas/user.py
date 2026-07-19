@@ -19,17 +19,13 @@ class UserCreateStaff(UserBase):
     password: str
     roles: Optional[List[str]] = ["Staff"]
 
-class UserCreateDoctor(UserBase):
-    cis_id: str
-    token_limit: int = 0
-    branches: Optional[List[UUID]] = []
-    categories: Optional[List[UUID]] = []
-
-class UserUpdate(BaseModel):
+class StaffUpdate(BaseModel):
     email: Optional[EmailStr] = None
     name: Optional[str] = None
     password: Optional[str] = None
-    cis_id: Optional[str] = None
+    status: Optional[str] = None
+
+class DoctorUpdate(BaseModel):
     token_limit: Optional[int] = None
     status: Optional[str] = None
 
