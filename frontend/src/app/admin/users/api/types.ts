@@ -49,6 +49,7 @@ export interface UserUpdate {
   cis_id?: string;
   token_limit?: number;
   status?: string;
+  has_ai_access?: boolean;
 }
 
 export interface UserUpdateRoles {
@@ -71,6 +72,7 @@ export interface UserResponse extends UserBase {
   created_at: string;
   
   status?: string;
+  has_ai_access?: boolean;
   tokens_used?: number;
   roles?: RoleResponse[];
   branches?: BranchResponse[];

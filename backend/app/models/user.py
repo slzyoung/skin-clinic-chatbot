@@ -1,7 +1,7 @@
 import uuid
 import enum
 from typing import Optional
-from sqlalchemy import String, Integer, Enum as SQLEnum, ForeignKey, CheckConstraint
+from sqlalchemy import String, Integer, Enum as SQLEnum, ForeignKey, CheckConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from .base import Base, TimestampMixin, SoftDeleteMixin
@@ -20,6 +20,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     password_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     cis_id: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True)
     token_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    has_ai_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false', nullable=False)
 
     __table_args__ = (
         CheckConstraint(

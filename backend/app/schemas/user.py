@@ -28,6 +28,7 @@ class StaffUpdate(BaseModel):
 class DoctorUpdate(BaseModel):
     token_limit: Optional[int] = None
     status: Optional[str] = None
+    has_ai_access: Optional[bool] = None
 
 class UserUpdateRoles(BaseModel):
     roles: List[str]
@@ -43,6 +44,7 @@ class UserResponse(UserBase):
     type: UserType
     cis_id: Optional[str] = None
     token_limit: Optional[int] = None
+    has_ai_access: bool
     created_at: datetime
     
     status: Optional[str] = None

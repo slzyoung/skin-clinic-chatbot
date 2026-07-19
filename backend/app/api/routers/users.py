@@ -27,6 +27,7 @@ async def _hydrate_user(user: User, db: AsyncSession) -> dict:
         "name": user.name,
         "cis_id": user.cis_id,
         "token_limit": user.token_limit,
+        "has_ai_access": user.has_ai_access,
         "created_at": user.created_at,
         "status": "Inactive" if user.deleted_at else "Active",
         "roles": [],
