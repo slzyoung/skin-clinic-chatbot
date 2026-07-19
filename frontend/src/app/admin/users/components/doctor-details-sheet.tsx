@@ -11,7 +11,6 @@ import { useState } from "react";
 import { UserResponse } from "../api/types";
 import { useUpdateDoctorAccess } from "../hooks/use-users";
 import { DoctorAdjustLimitDialog } from "./doctor-adjust-limit-dialog";
-import { DoctorManageBranchDialog } from "./doctor-manage-branch-dialog";
 import { DoctorManageKnowledgeDialog } from "./doctor-manage-knowledge-dialog";
 
 export function DoctorDetailsSheet({
@@ -23,7 +22,6 @@ export function DoctorDetailsSheet({
 	onOpenChange: (open: boolean) => void;
 	doctor: UserResponse | null;
 }) {
-	const [isManageBranchOpen, setIsManageBranchOpen] = useState(false);
 	const [isManageKnowledgeOpen, setIsManageKnowledgeOpen] = useState(false);
 	const [isAdjustLimitOpen, setIsAdjustLimitOpen] = useState(false);
 	const updateDoctorAccess = useUpdateDoctorAccess();
@@ -192,11 +190,6 @@ export function DoctorDetailsSheet({
 								Close
 							</Button>
 						</div>
-
-						<DoctorManageBranchDialog
-							isOpen={isManageBranchOpen}
-							onOpenChange={setIsManageBranchOpen}
-						/>
 
 						<DoctorManageKnowledgeDialog
 							isOpen={isManageKnowledgeOpen}

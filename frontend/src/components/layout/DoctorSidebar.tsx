@@ -22,46 +22,18 @@ import * as React from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { useLogout } from "@/app/login/hooks/use-logout"
 
-const recentChats = [
-  {
-    id: "1",
-    title: "Buatkan rencana perawatan untuk pasien dengan dokumen yang telah saya sertakan",
-    date: "4/27/2026 04:00 PM",
-    messages: 12
-  },
-  {
-    id: "2",
-    title: "Apa saja langkah yang bisa diambil untuk mengatasi dermatitis atopik? Produk dan perawatan apa saja yang dapat diberikan dengan kondisi khusus berdasarkan dokumen yang sudah saya sematkan.",
-    date: "4/27/2026 02:30 PM",
-    messages: 12
-  },
-  {
-    id: "3",
-    title: "Buatkan rencana perawatan untuk pasien dengan dokumen yang telah saya sertakan",
-    date: "4/27/2026 04:00 PM",
-    messages: 12
-  },
-  {
-    id: "4",
-    title: "Apa saja langkah yang bisa diambil untuk mengatasi dermatitis atopik? Produk dan perawatan apa saja yang dapat diberikan dengan kondisi khusus berdasarkan dokumen yang sudah saya sematkan.",
-    date: "4/27/2026 02:30 PM",
-    messages: 12
-  },{
-    id: "5",
-    title: "Buatkan rencana perawatan untuk pasien dengan dokumen yang telah saya sertakan",
-    date: "4/27/2026 04:00 PM",
-    messages: 12
-  },
-  {
-    id: "6",
-    title: "Apa saja langkah yang bisa diambil untuk mengatasi dermatitis atopik? Produk dan perawatan apa saja yang dapat diberikan dengan kondisi khusus berdasarkan dokumen yang sudah saya sematkan.",
-    date: "4/27/2026 02:30 PM",
-    messages: 12
-  }
-]
+import { useCurrentUser } from "@/hooks/use-current-user"
+import { useChatSessions } from "@/app/doctor/hooks/use-doctor-chat"
 
 export function DoctorSidebar({ className, ...props }: React.ComponentProps<typeof Sidebar>) {
   const { mutate: logout, isPending: isLoggingOut } = useLogout()
+  const { data: user } = useCurrentUser()
+  const { data: sessions } = useChatSessions()
+  
+  const userName = user?.name || "Doctor";
+  const userRole = user?.roles?.[0]?.name || "DOCTOR";
+  const initials = userName.split(" ").map((n) => n[0]).join("").toUpperCase().substring(0, 2);
+  const recentChats = sessions?.slice(0, 10) || [];
   
   return (
     <Sidebar collapsible="icon" className={`border-r border-border ${className || ''}`} {...props}>
@@ -84,21 +56,27 @@ export function DoctorSidebar({ className, ...props }: React.ComponentProps<type
               <Link href={`/doctor/chat/${chat.id}`} key={chat.id} className="block">
                 <div className="bg-transparent rounded-xl p-3 border border-gray-200 hover:border-gray-300 hover:bg-zinc-50 transition-colors">
                   <p className="text-zinc-950 text-sm font-medium leading-snug truncate mb-2">
-                    {chat.title}
+                    {chat.query || "New Chat Session"}
                   </p>
                   <div className="flex items-center gap-4 mt-auto">
                     <div className="flex items-center text-zinc-500">
                       <RiCalendarLine className="size-4 mr-1 text-zinc-950" />
-                      <span className="text-xs">{chat.date}</span>
+                      <span className="text-xs">{new Date(chat.created_at).toLocaleDateString()}</span>
                     </div>
                     <div className="flex items-center text-zinc-500 ml-auto">
                       <RiMessageAi3Line className="size-4 mr-1 text-zinc-950" />
-                      <span className="text-xs">{chat.messages}</span>
+                      <span className="text-xs">{chat.messages || 0}</span>
                     </div>
                   </div>
                 </div>
               </Link>
             ))}
+            
+            {recentChats.length === 0 && (
+              <div className="text-center p-4 border border-dashed border-gray-200 rounded-xl text-gray-500 text-sm">
+                No recent chats
+              </div>
+            )}
           </div>
         </div>
       </SidebarContent>
@@ -121,11 +99,11 @@ export function DoctorSidebar({ className, ...props }: React.ComponentProps<type
           <SidebarMenuItem className="flex items-center flex-row group-data-[collapsible=icon]:justify-center">
             <SidebarMenuButton size="lg" className="h-12 hover:bg-transparent hover:text-inherit active:bg-transparent cursor-default p-0 flex-1 overflow-hidden group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center">
               <Avatar className="size-10 group-data-[collapsible=icon]:size-8 rounded-md after:rounded-md">
-                <AvatarFallback className="rounded-md">VL</AvatarFallback>
+                <AvatarFallback className="rounded-md">{initials}</AvatarFallback>
               </Avatar>
               <div className="flex flex-col gap-1 leading-none ml-2 group-data-[collapsible=icon]:hidden">
-                <span className="font-semibold text-zinc-900 text-sm truncate">Dr. Vivian Lumina</span>
-                <span className="text-xs text-zinc-500 truncate">Doctor</span>
+                <span className="font-semibold text-zinc-900 text-sm truncate">{userName}</span>
+                <span className="text-xs text-zinc-500 truncate capitalize">{userRole.toLowerCase()}</span>
               </div>
             </SidebarMenuButton>
             <Button 

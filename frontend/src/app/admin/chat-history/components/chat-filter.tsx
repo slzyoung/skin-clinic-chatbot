@@ -7,9 +7,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { CHAT_HISTORY } from "@/dummy/chat-history"
 
-export function ChatFilter() {
+export function ChatFilter({ doctors = [] }: { doctors?: string[] }) {
   return (
     <div className="flex items-center gap-3">
       <DropdownMenu>
@@ -22,7 +21,7 @@ export function ChatFilter() {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-55">
           <DropdownMenuItem>All Doctors</DropdownMenuItem>
-          {Array.from(new Set(CHAT_HISTORY.map((item) => item.doctor))).map(
+          {doctors.map(
             (doctor) => (
               <DropdownMenuItem key={doctor}>
                 {doctor}

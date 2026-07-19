@@ -8,6 +8,8 @@ import { useChatHistories } from "./hooks/use-chat-history";
 export default function ChatHistoryPage() {
 	const { data: chatHistories, isLoading, isError } = useChatHistories();
 
+	const doctors = Array.from(new Set(chatHistories?.map(item => item.doctor) || []));
+
 	return (
 		<div className="flex flex-col h-full gap-6 p-6">
 			{/* Header */}
@@ -22,7 +24,7 @@ export default function ChatHistoryPage() {
 					<RiSearchLine className="absolute left-2.5 w-4 h-4 text-gray-400" />
 					<Input placeholder="Search chat sessions" className="pl-8 bg-white" />
 				</div>
-				<ChatFilter />
+				<ChatFilter doctors={doctors} />
 			</div>
 
 			{/* List */}

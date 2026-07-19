@@ -33,19 +33,15 @@ export default function KnowledgePage() {
 					</div>
 
 					<TabsContent value="product" className="mt-0 outline-none">
-						<KnowledgeTable />
+						<KnowledgeTable type="PRODUCT" />
 					</TabsContent>
 
 					<TabsContent value="treatment" className="mt-0 outline-none">
-						<div className="text-gray-500 p-8 text-center border border-gray-200 border-dashed rounded-md bg-white">
-							Treatment knowledge base content will appear here.
-						</div>
+						<KnowledgeTable type="TREATMENT" />
 					</TabsContent>
 
 					<TabsContent value="promotional" className="mt-0 outline-none">
-						<div className="text-gray-500 p-8 text-center border border-gray-200 border-dashed rounded-md bg-white">
-							Promotional content will appear here.
-						</div>
+						<KnowledgeTable type="PROMOTIONAL" />
 					</TabsContent>
 				</Tabs>
 			</div>

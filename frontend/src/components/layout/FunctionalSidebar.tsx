@@ -23,6 +23,8 @@ import { usePathname } from "next/navigation"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { useLogout } from "@/app/login/hooks/use-logout"
 
+import { useCurrentUser } from "@/hooks/use-current-user"
+
 const functionalNav = [
   {
     title: "Knowledge Base",
@@ -34,6 +36,11 @@ const functionalNav = [
 export function FunctionalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
   const { mutate: logout, isPending: isLoggingOut } = useLogout()
+  const { data: user } = useCurrentUser()
+  
+  const userName = user?.name || "Functional";
+  const userRole = user?.roles?.[0]?.name || "FUNCTIONAL";
+  const initials = userName.split(" ").map((n) => n[0]).join("").toUpperCase().substring(0, 2);
   
   return (
     <Sidebar collapsible="icon" {...props} className="border-r border-border">
@@ -85,11 +92,11 @@ export function FunctionalSidebar({ ...props }: React.ComponentProps<typeof Side
           <SidebarMenuItem className="flex items-center flex-row">
             <SidebarMenuButton size="lg" className="h-12 hover:bg-transparent hover:text-inherit active:bg-transparent cursor-default p-0 flex-1 overflow-hidden">
               <Avatar className="size-10 rounded-md after:rounded-md">
-                <AvatarFallback className="rounded-md">LS</AvatarFallback>
+                <AvatarFallback className="rounded-md">{initials}</AvatarFallback>
               </Avatar>
               <div className="flex flex-col gap-1 leading-none ml-2 group-data-[collapsible=icon]:hidden">
-                <span className="font-semibold text-zinc-900 text-sm truncate">Luna Smith</span>
-                <span className="text-xs text-zinc-500 truncate">Functional</span>
+                <span className="font-semibold text-zinc-900 text-sm truncate">{userName}</span>
+                <span className="text-xs text-zinc-500 truncate capitalize">{userRole.toLowerCase()}</span>
               </div>
             </SidebarMenuButton>
             <Button 
