@@ -1,18 +1,18 @@
 "use client";
 
-import { RiEdit2Line, RiSettings3Line } from "@remixicon/react";
-import { useState } from "react";
-import Image from "next/image";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Switch } from "@/components/ui/switch";
-import { useUpdateUser } from "../hooks/use-users";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
+import { RiEdit2Line, RiSettings3Line } from "@remixicon/react";
+import Image from "next/image";
+import { useState } from "react";
 import { UserResponse } from "../api/types";
+import { useUpdateDoctorAccess } from "../hooks/use-users";
+import { DoctorAdjustLimitDialog } from "./doctor-adjust-limit-dialog";
 import { DoctorManageBranchDialog } from "./doctor-manage-branch-dialog";
 import { DoctorManageKnowledgeDialog } from "./doctor-manage-knowledge-dialog";
-import { DoctorAdjustLimitDialog } from "./doctor-adjust-limit-dialog";
 
 export function DoctorDetailsSheet({
 	isOpen,
@@ -26,7 +26,7 @@ export function DoctorDetailsSheet({
 	const [isManageBranchOpen, setIsManageBranchOpen] = useState(false);
 	const [isManageKnowledgeOpen, setIsManageKnowledgeOpen] = useState(false);
 	const [isAdjustLimitOpen, setIsAdjustLimitOpen] = useState(false);
-	const updateUser = useUpdateUser();
+	const updateDoctorAccess = useUpdateDoctorAccess();
 
 	const initialAiAccess = doctor?.has_ai_access ?? false;
 	const [editedAiAccess, setEditedAiAccess] = useState<boolean | null>(null);
@@ -75,7 +75,7 @@ export function DoctorDetailsSheet({
 													onCheckedChange={(checked: boolean) => {
 														setEditedAiAccess(checked);
 														if (doctor?.id) {
-															updateUser.mutate(
+															updateDoctorAccess.mutate(
 																{ userId: doctor.id, data: { has_ai_access: checked } },
 																{
 																	onError: () => setEditedAiAccess(!checked), // rollback on error

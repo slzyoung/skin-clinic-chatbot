@@ -42,11 +42,14 @@ export interface UserCreateDoctor extends UserBase {
   categories?: string[]; // UUID strings
 }
 
-export interface UserUpdate {
+export interface StaffUpdate {
   email?: string;
   name?: string;
   password?: string;
-  cis_id?: string;
+  status?: string;
+}
+
+export interface DoctorUpdate {
   token_limit?: number;
   status?: string;
   has_ai_access?: boolean;
