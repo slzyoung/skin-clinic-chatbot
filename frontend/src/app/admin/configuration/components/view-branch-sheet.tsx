@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { RiDeleteBinLine, RiEdit2Line, RiEyeLine } from "@remixicon/react";
+import { RiDeleteBinLine, RiEyeLine } from "@remixicon/react";
 import Image from "next/image";
 import * as React from "react";
 
@@ -43,7 +43,7 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 								fill
 								className="object-cover"
 							/>
-							<div className="absolute top-4 right-4 z-10">
+							{/* <div className="absolute top-4 right-4 z-10">
 								<Button
 									variant="outline"
 									className="bg-white/80 backdrop-blur-sm border-black-50 text-black-500 hover:bg-white hover:text-black-600 px-3 py-0 rounded-lg shadow-none"
@@ -51,7 +51,7 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 									<RiEdit2Line className="size-4 mr-2" />
 									Edit Branch
 								</Button>
-							</div>
+							</div> */}
 						</div>
 
 						<Tabs defaultValue="information" className="w-full">
