@@ -92,15 +92,11 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 								<div className="flex items-center gap-4">
 									<div className="flex flex-col gap-1 flex-1">
 										<span className="text-sm text-black-300">Latitude</span>
-										<span className="text-sm font-medium text-black-500">
-											7&deg;45&apos;32.2&quot;S
-										</span>
+										<span className="text-sm font-medium text-black-500">{branch.latitude}</span>
 									</div>
 									<div className="flex flex-col gap-1 flex-1">
 										<span className="text-sm text-black-300">Longitude</span>
-										<span className="text-sm font-medium text-black-500">
-											110&deg;23&apos;57.3&quot;E
-										</span>
+										<span className="text-sm font-medium text-black-500">{branch.longitude}</span>
 									</div>
 								</div>
 
