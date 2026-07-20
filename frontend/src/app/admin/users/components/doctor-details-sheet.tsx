@@ -194,6 +194,7 @@ export function DoctorDetailsSheet({
 						<DoctorManageKnowledgeDialog
 							isOpen={isManageKnowledgeOpen}
 							onOpenChange={setIsManageKnowledgeOpen}
+							doctor={doctor}
 						/>
 
 						<DoctorAdjustLimitDialog

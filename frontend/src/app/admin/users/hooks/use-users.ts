@@ -92,3 +92,21 @@ export const useUpdateStaffDetails = () => {
 		},
 	});
 };
+
+export const useUpdateDoctorCategories = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({ userId, categories }: { userId: string; categories: string[] }) => {
+			const response = await api.put(`/users/${userId}/categories`, { categories });
+			return response.data;
+		},
+		onSuccess: () => {
+			toast.success("Doctor knowledge base updated successfully!");
+			queryClient.invalidateQueries({ queryKey: userKeys.lists() });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to update doctor knowledge base."));
+		},
+	});
+};
