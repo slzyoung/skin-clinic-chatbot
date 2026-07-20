@@ -114,7 +114,6 @@ export default function UsersPage() {
                         </Avatar>
                         <div className="flex flex-col">
                           <span className="font-medium text-sm text-gray-900">{staff.name}</span>
-                          <span className="text-xs text-gray-500">150 ml</span>
                         </div>
                       </div>
                     </TableCell>
@@ -158,7 +157,6 @@ export default function UsersPage() {
                         </Avatar>
                         <div className="flex flex-col">
                           <span className="font-medium text-sm text-gray-900">{doc.name}</span>
-                          <span className="text-xs text-gray-500">150 ml</span>
                         </div>
                       </div>
                     </TableCell>
