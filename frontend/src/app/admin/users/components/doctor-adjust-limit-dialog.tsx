@@ -80,8 +80,8 @@ export function DoctorAdjustLimitDialog({
 					<div className="bg-blue-50 border border-blue-600 rounded-md p-4 text-sm text-blue-600 flex gap-2">
 						<RiInformationLine className="h-5 w-5 shrink-0" />
 						<span>
-							We recommend not setting the token limit below the remaining token amount, which is{" "}
-							{tokensLeft}.
+							We recommend not setting the token limit below the used token amount, which is{" "}
+							{tokensUsed}.
 						</span>
 					</div>
 				</div>
@@ -89,7 +89,7 @@ export function DoctorAdjustLimitDialog({
 				<div className="p-4 border-t border-gray-100 flex justify-end">
 					<Button
 						variant="outline"
-						className="bg-gray-100 text-gray-500 border-0 hover:bg-gray-200 hover:text-gray-700 px-6 rounded-md"
+						className="bg-blue-600 text-white border-0 hover:bg-blue-700 hover:text-white px-6 rounded-md"
 						onClick={handleSave}
 						disabled={updateDoctorAccess.isPending}
 					>
