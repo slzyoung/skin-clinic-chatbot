@@ -26,7 +26,7 @@ class KnowledgeResponse(KnowledgeBase):
     ai_confidence: Optional[float] = None
     uploaded_by: UUID
     approved_by: Optional[UUID] = None
-    metadata_: Optional[Dict[str, Any]] = Field(default=None, alias="metadata")
+    metadata_: Optional[Dict[str, Any]] = Field(default=None, serialization_alias="metadata")
     created_at: datetime
     updated_at: datetime
     
