@@ -1,9 +1,9 @@
 import uuid
 import enum
 from typing import Optional
-from sqlalchemy import String, Integer, BigInteger, Numeric, Enum as SQLEnum, ForeignKey
+from sqlalchemy import String, Integer, BigInteger, Numeric, Enum as SQLEnum, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, TSVECTOR
 from pgvector.sqlalchemy import Vector
 from .base import Base, TimestampMixin, SoftDeleteMixin
 
@@ -39,7 +39,7 @@ class Knowledge(Base, TimestampMixin, SoftDeleteMixin):
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB, default=dict)
     
-    # Note: searchable_content is GENERATED ALWAYS in postgres, omitted from ORM to avoid insert conflicts
+    # Note: searchable_content on Knowledge is GENERATED ALWAYS in postgres if needed, but for chunks we define it below.
 
 class KnowledgeCategory(Base, TimestampMixin):
     __tablename__ = "knowledge_category"
@@ -49,9 +49,15 @@ class KnowledgeCategory(Base, TimestampMixin):
 
 class KnowledgeChunk(Base, TimestampMixin):
     __tablename__ = "knowledge_chunk"
+    
+    __table_args__ = (
+        Index('ix_knowledge_chunk_embedding', 'embedding', postgresql_using='hnsw', postgresql_with={'m': 16, 'ef_construction': 64}, postgresql_ops={'embedding': 'vector_cosine_ops'}),
+        Index('ix_knowledge_chunk_searchable_content', 'searchable_content', postgresql_using='gin'),
+    )
 
     knowledge_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("knowledge.id", ondelete="CASCADE"), primary_key=True)
     chunk_index: Mapped[int] = mapped_column(Integer, primary_key=True)
     content: Mapped[str] = mapped_column(String, nullable=False)
     embedding = mapped_column(Vector(1536))
+    searchable_content = mapped_column(TSVECTOR)
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB, default=dict)
