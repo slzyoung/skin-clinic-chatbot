@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { PromptInput } from "@/components/shared/prompt-input";
 import {
 	RiFileTextLine,
@@ -11,6 +12,7 @@ import { toast } from "sonner";
 import { useUploadKnowledge } from "@/app/admin/knowledge/hooks/use-knowledge";
 
 export default function IngestPage() {
+	const router = useRouter();
 	const uploadMutation = useUploadKnowledge();
 
 	const handleSend = (value: string, category: string | undefined, files: File[]) => {
@@ -29,10 +31,14 @@ export default function IngestPage() {
 		formData.append("type", category.toUpperCase());
 
 		files.forEach((file) => {
-			formData.append("files", file); // Adjust based on your backend field name for files
+			formData.append("file", file); // Adjust based on your backend field name for files
 		});
 
-		uploadMutation.mutate(formData);
+		uploadMutation.mutate(formData, {
+			onSuccess: (data) => {
+				router.push(`/functional/knowledge/${data.knowledge_id}`);
+			}
+		});
 	};
 
 	return (

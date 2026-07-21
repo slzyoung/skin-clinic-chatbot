@@ -7,9 +7,9 @@ import { RiArrowLeftLine, RiEdit2Line, RiDeleteBin7Line } from "@remixicon/react
 import { use } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useKnowledgeDetail, useDeleteKnowledge } from "../hooks/use-knowledge"
+import { useKnowledgeDetail, useDeleteKnowledge } from "@/app/admin/knowledge/hooks/use-knowledge"
 
-export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default function FunctionalKnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter()
   const unwrappedParams = use(params)
   const id = unwrappedParams.id
@@ -20,7 +20,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
     if (confirm("Are you sure you want to delete this knowledge document?")) {
       deleteMutation.mutate(id, {
         onSuccess: () => {
-          router.push("/admin/knowledge")
+          router.push("/functional/knowledge")
         }
       })
     }
@@ -34,7 +34,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
     <div className="flex flex-col absolute inset-0">
       {/* Title Header with Actions */}
       <div className="px-6 py-3 border-b border-black/10 bg-white shrink-0 flex items-center justify-between">
-        <Link href="/admin/knowledge" className="flex items-center gap-2 text-zinc-950 hover:text-zinc-700 transition-colors">
+        <Link href="/functional/knowledge" className="flex items-center gap-2 text-zinc-950 hover:text-zinc-700 transition-colors">
           <RiArrowLeftLine className="size-4" />
           <span className="text-sm font-semibold">{data?.title || "Knowledge Document"}</span>
         </Link>

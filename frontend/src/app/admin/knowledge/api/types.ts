@@ -1,5 +1,5 @@
 export type KnowledgeType = "PRODUCT" | "TREATMENT" | "PROMOTIONAL";
-export type KnowledgeStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type KnowledgeStatus = "PENDING" | "PROCESSING" | "APPROVED" | "REJECTED";
 
 export interface KnowledgeCreate {
 	title: string;

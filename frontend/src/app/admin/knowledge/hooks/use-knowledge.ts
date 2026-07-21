@@ -12,6 +12,31 @@ export const useKnowledgeBaseList = (type?: string) => {
 			const response = await api.get("/knowledge/", { params: { type } });
 			return response.data;
 		},
+		refetchInterval: (query) => {
+			const data = query.state.data;
+			if (data?.some((item) => item.status === "PROCESSING")) {
+				return 3000;
+			}
+			return false;
+		},
+	});
+};
+
+export const useKnowledgeDetail = (id: string) => {
+	return useQuery({
+		queryKey: knowledgeKeys.detail(id),
+		queryFn: async (): Promise<KnowledgeResponse> => {
+			const response = await api.get(`/knowledge/${id}`);
+			return response.data;
+		},
+		enabled: !!id,
+		refetchInterval: (query) => {
+			const data = query.state.data;
+			if (data?.status === "PROCESSING") {
+				return 1500;
+			}
+			return false;
+		},
 	});
 };
 
@@ -20,8 +45,7 @@ export const useUploadKnowledge = () => {
 
 	return useMutation({
 		mutationFn: async (formData: FormData) => {
-			// Sending multipart/form-data
-			const response = await api.post("/knowledge/upload", formData, {
+			const response = await api.post("/ai/ingest", formData, {
 				headers: {
 					"Content-Type": "multipart/form-data",
 				},
@@ -30,7 +54,7 @@ export const useUploadKnowledge = () => {
 		},
 		onSuccess: () => {
 			toast.success("Files uploaded successfully!");
-			queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to upload knowledge files."));
@@ -46,12 +70,33 @@ export const useUpdateKnowledgeStatus = () => {
 			const response = await api.patch(`/knowledge/${id}/status`, { status });
 			return response.data;
 		},
-		onSuccess: () => {
+		onSuccess: (_, variables) => {
 			toast.success("Status updated successfully!");
-			queryClient.invalidateQueries({ queryKey: knowledgeKeys.lists() });
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			if (variables?.id) {
+				queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
+			}
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to update status."));
+		},
+	});
+};
+
+export const useDeleteKnowledge = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (id: string) => {
+			const response = await api.delete(`/knowledge/${id}`);
+			return response.data;
+		},
+		onSuccess: () => {
+			toast.success("Knowledge deleted successfully!");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to delete knowledge document."));
 		},
 	});
 };
