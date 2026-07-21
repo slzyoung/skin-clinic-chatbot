@@ -19,12 +19,7 @@ export interface BranchBase {
 export type BranchCreate = BranchBase;
 
 export interface BranchUpdate {
-  name?: string | null;
-  address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  image_url?: string | null;
-  token_limit?: number | null;
+  token_limit: number;
 }
 
 export interface BranchDoctorResponse {

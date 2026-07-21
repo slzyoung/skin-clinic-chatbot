@@ -8,6 +8,7 @@ import Image from "next/image";
 import * as React from "react";
 
 import { BranchResponse } from "../api/types";
+import { EditBranchTokenDialog } from "./edit-branch-token-dialog";
 
 interface ViewBranchSheetProps {
 	branch: BranchResponse;
@@ -43,15 +44,9 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 								fill
 								className="object-cover"
 							/>
-							{/* <div className="absolute top-4 right-4 z-10">
-								<Button
-									variant="outline"
-									className="bg-white/80 backdrop-blur-sm border-black-50 text-black-500 hover:bg-white hover:text-black-600 px-3 py-0 rounded-lg shadow-none"
-								>
-									<RiEdit2Line className="size-4 mr-2" />
-									Edit Branch
-								</Button>
-							</div> */}
+							<div className="absolute top-4 right-4 z-10">
+								<EditBranchTokenDialog branch={branch} />
+							</div>
 						</div>
 
 						<Tabs defaultValue="information" className="w-full">
@@ -140,7 +135,7 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 
 								{/* Doctor List */}
 								<div className="flex flex-col gap-3">
-									<span className="text-sm text-black-300">Doctor (4)</span>
+									<span className="text-sm text-black-300">Doctor ({branch.doctors?.length || 0})</span>
 									<div className="flex flex-col border border-black-50 rounded-lg divide-y divide-black-50">
 										{branch.doctors?.map((doc) => (
 											<div key={doc.id} className="flex items-center gap-3 p-3">

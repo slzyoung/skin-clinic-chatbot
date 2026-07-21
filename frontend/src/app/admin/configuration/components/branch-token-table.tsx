@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/table";
 import { RiSearchLine } from "@remixicon/react";
 import { useBranches } from "../hooks/use-branches";
-import { AddBranchSheet } from "./add-branch-sheet";
 import { ViewBranchSheet } from "./view-branch-sheet";
 
 export function BranchTokenTable() {
@@ -32,7 +31,7 @@ export function BranchTokenTable() {
 
 				{/* Actions */}
 				<div className="flex items-center gap-3">
-					<AddBranchSheet />
+					{/* Add Branch functionality has been moved to CIS Dashboard sync */}
 				</div>
 			</div>
 

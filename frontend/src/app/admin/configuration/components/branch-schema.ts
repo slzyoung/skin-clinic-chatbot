@@ -40,3 +40,9 @@ export const branchSchema = z.object({
 });
 
 export type BranchValues = z.infer<typeof branchSchema>;
+
+export const editTokenSchema = z.object({
+	token_limit: branchSchema.shape.token_limit,
+});
+
+export type EditTokenValues = z.infer<typeof editTokenSchema>;
