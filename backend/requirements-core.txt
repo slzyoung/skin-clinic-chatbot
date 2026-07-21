@@ -14,18 +14,3 @@ apscheduler
 email-validator # Required for Pydantic EmailStr
 alembic # For database migrations
 python-dotenv
-
-# --- RAG / AI Dependencies ---
-langchain>=0.1.0
-langchain-google-genai
-langchain-openai
-langchain-community
-langchain-huggingface
-langchain-experimental
-qdrant-client
-sentence-transformers
-unstructured
-loguru
-docling
-langdetect
-rank-bm25

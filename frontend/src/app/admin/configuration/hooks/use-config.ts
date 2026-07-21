@@ -24,11 +24,19 @@ export const useUpdateConfig = () => {
       return response.data;
     },
     onSuccess: () => {
-      toast.success("Settings updated successfully!");
       queryClient.invalidateQueries({ queryKey: configKeys.lists() });
     },
     onError: (error: unknown) => {
       toast.error(getErrorMessage(error, "Failed to update settings."));
+    }
+  });
+};
+
+export const useValidateLLM = () => {
+  return useMutation({
+    mutationFn: async (data: { provider: string; model_name: string; api_key: string }) => {
+      const response = await api.post(`/config/validate-llm`, data);
+      return response.data;
     }
   });
 };

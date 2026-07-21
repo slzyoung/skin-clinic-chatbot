@@ -4,7 +4,7 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends gcc build-essential && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
 RUN python -m venv /opt/venv
@@ -24,6 +24,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY . .
 
 RUN chmod +x /app/start.sh
+RUN mkdir -p data/temp logs
 
 EXPOSE 8000
 
@@ -41,6 +42,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY . .
 
 RUN chmod +x /app/start.sh
+RUN mkdir -p data/temp logs
 
 EXPOSE 8000
 

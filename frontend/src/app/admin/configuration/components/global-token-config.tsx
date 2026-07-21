@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { RiCheckLine, RiEdit2Line, RiLoader4Line } from "@remixicon/react";
 import * as React from "react";
+import { toast } from "sonner";
 import { useConfigs, useUpdateConfig } from "../hooks/use-config";
 
 export function GlobalTokenConfig() {
@@ -36,6 +37,7 @@ export function GlobalTokenConfig() {
 			{
 				onSuccess: () => {
 					setIsEditing(false);
+					toast.success("Global token limit updated successfully!");
 				},
 			},
 		);
@@ -43,7 +45,14 @@ export function GlobalTokenConfig() {
 
 	const handleToggle = (checked: boolean) => {
 		setIsActive(checked);
-		updateConfig.mutate({ key: "GLOBAL_TOKEN_LIMIT_ACTIVE", data: { value: checked.toString() } });
+		updateConfig.mutate(
+			{ key: "GLOBAL_TOKEN_LIMIT_ACTIVE", data: { value: checked.toString() } },
+			{
+				onSuccess: () => {
+					toast.success(`Global token limit ${checked ? "activated" : "deactivated"}!`);
+				},
+			}
+		);
 	};
 
 	if (isLoading) {

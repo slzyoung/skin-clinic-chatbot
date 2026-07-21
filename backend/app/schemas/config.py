@@ -9,6 +9,11 @@ class ConfigBase(BaseModel):
 class ConfigUpdate(BaseModel):
     value: str
 
+class LLMValidateRequest(BaseModel):
+    provider: str
+    model_name: str
+    api_key: str
+
 class ConfigResponse(ConfigBase):
     id: uuid.UUID
     created_at: datetime

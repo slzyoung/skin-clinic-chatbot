@@ -7,7 +7,10 @@ from app.core.database import get_db
 from app.api.dependencies import require_admin_role
 from app.models.user import User
 from app.models.config import AppConfig
-from app.schemas.config import ConfigUpdate, ConfigResponse
+from app.schemas.config import ConfigUpdate, ConfigResponse, LLMValidateRequest
+import urllib.request
+import urllib.error
+import json
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -42,3 +45,50 @@ async def update_config(
     await db.commit()
     await db.refresh(config)
     return config
+
+@router.post("/validate-llm")
+async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(require_admin_role)):
+    provider = req.provider.lower()
+    
+    try:
+        if provider in ["openai", "deepseek"]:
+            # DeepSeek is OpenAI compatible API-wise for listing models
+            url = "https://api.openai.com/v1/models" if provider == "openai" else "https://api.deepseek.com/models"
+            headers = {"Authorization": f"Bearer {req.api_key}"}
+            req_obj = urllib.request.Request(url, headers=headers)
+            
+            with urllib.request.urlopen(req_obj, timeout=5) as response:
+                if response.status != 200:
+                    raise HTTPException(status_code=400, detail=f"Invalid API Key for {provider}")
+                
+                res_data = json.loads(response.read().decode())
+                models = [m["id"] for m in res_data.get("data", [])]
+                if req.model_name not in models:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Model '{req.model_name}' not found. Valid models include: {', '.join(models[:3])}..."
+                    )
+
+        elif provider == "gemini":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.model_name}?key={req.api_key}"
+            req_obj = urllib.request.Request(url)
+            with urllib.request.urlopen(req_obj, timeout=5) as response:
+                if response.status != 200:
+                    raise HTTPException(status_code=400, detail="Invalid API Key or Model for Gemini")
+        else:
+            raise HTTPException(status_code=400, detail="Unknown provider")
+            
+        return {"status": "ok", "message": "API Key and Model validated successfully."}
+
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise HTTPException(status_code=400, detail="Invalid API Key")
+        elif e.code == 404 and provider == "gemini":
+            raise HTTPException(status_code=400, detail=f"Model '{req.model_name}' not found for Gemini")
+        raise HTTPException(status_code=400, detail=f"Validation failed: HTTP {e.code} - {e.reason}")
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=400, detail=f"Network error during validation: {e.reason}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
