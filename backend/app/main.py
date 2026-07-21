@@ -49,7 +49,7 @@ app.include_router(sync.router, prefix="/api")
 
 # --- RAG Integration (Dynamic Load) ---
 try:
-    # Attempt to import the AI router; fails gracefully if requirements-rag.txt is missing
+    # Attempt to import the AI router; fails gracefully if RAG dependencies in requirements.txt are missing
     from app.rag.router import rag_router
     app.include_router(rag_router, prefix="/api/ai", tags=["RAG"])
     print("AI Module loaded successfully!")
