@@ -12,12 +12,10 @@ from app.models.config import AppConfig
 from app.models.knowledge import Knowledge, KnowledgeStatus, KnowledgeType
 from app.models.user import User
 
-from app.rag.generation.factory import get_dynamic_llm
-from app.rag.core.pgvector_adapter import PgVectorAdapter
+from app.rag.generation import get_dynamic_llm, GenerationPipeline, generate_document_summary
+from app.rag.core.vector import PgVectorAdapter
 from app.rag.retrieval.retriever import HybridRetriever
 from app.rag.retrieval.reranker import ExternalReranker
-from app.rag.generation.generator import GenerationPipeline
-
 from app.rag.embeddings import get_dynamic_embeddings
 
 rag_router = APIRouter()
@@ -43,32 +41,8 @@ async def process_document(file_path: str, knowledge_id: uuid.UUID, index: bool)
             knowledge = await session.get(Knowledge, knowledge_id)
             if knowledge:
                 knowledge.status = KnowledgeStatus.PENDING
-                
-                # Generate AI Summary using retriever & LLM
-                try:
-                    llm = await get_dynamic_llm(session)
-                    retriever = HybridRetriever(session=session, embeddings_model=embeddings, reranker=None)
-                    
-                    results = await retriever.retrieve(
-                        query="Provide a comprehensive summary of this document, including key points and important details.",
-                        top_k=5,
-                        filter_metadata={"knowledge_id": str(knowledge_id)}
-                    )
-                    
-                    if results:
-                        context = "\n\n".join([r.get("content", "") for r in results])
-                        prompt = f"Provide a clear, well-structured executive summary of the following document in markdown format:\n\n{context}"
-                        res = await llm.ainvoke(prompt)
-                        knowledge.ai_summary = res.content if hasattr(res, 'content') else str(res)
-                        knowledge.ai_confidence = 95.00
-                    else:
-                        knowledge.ai_summary = "Document successfully parsed and indexed."
-                        knowledge.ai_confidence = 90.00
-                except Exception as sum_err:
-                    logger.warning(f"Failed to generate AI summary for {knowledge_id}: {sum_err}")
-                    knowledge.ai_summary = "Document ingested and ready for review."
-                    knowledge.ai_confidence = 90.00
-
+                knowledge.ai_summary = await generate_document_summary(session, str(knowledge_id), embeddings)
+                knowledge.ai_confidence = 95.00
                 await session.commit()
                 
             logger.info(f"Finished background ingestion for {knowledge_id}")
