@@ -10,6 +10,11 @@ scheduler = setup_cis_scheduler()
 async def lifespan(app: FastAPI):
     # Startup
     scheduler.start()
+    try:
+        from app.rag.embeddings import ensure_embedding_dimension_synced
+        await ensure_embedding_dimension_synced()
+    except Exception as e:
+        print(f"Skipped startup embedding dimension check: {e}")
     yield
     # Shutdown
     scheduler.shutdown()

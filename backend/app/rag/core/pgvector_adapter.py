@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
@@ -16,8 +17,12 @@ class PgVectorAdapter(BaseVectorStoreAdapter):
             if not embedding:
                 embedding = await self.embeddings_model.aembed_query(chunk["content"])
                 
+            k_id = chunk["knowledge_id"]
+            if isinstance(k_id, str):
+                k_id = uuid.UUID(k_id)
+
             obj = KnowledgeChunk(
-                knowledge_id=chunk["knowledge_id"],
+                knowledge_id=k_id,
                 chunk_index=chunk["chunk_index"],
                 content=chunk["content"],
                 embedding=embedding,

@@ -8,11 +8,10 @@ from pgvector.sqlalchemy import Vector
 from .base import Base, TimestampMixin, SoftDeleteMixin
 
 class KnowledgeType(str, enum.Enum):
-    PDF = "PDF"
-    DOCX = "DOCX"
-    TXT = "TXT"
-    WEB = "WEB"
-    FAQ = "FAQ"
+    PRODUCT = "PRODUCT"
+    TREATMENT = "TREATMENT"
+    PROMOTIONAL = "PROMOTIONAL"
+    GENERAL = "GENERAL"
 
 class KnowledgeStatus(str, enum.Enum):
     PENDING = "PENDING"
@@ -58,6 +57,6 @@ class KnowledgeChunk(Base, TimestampMixin):
     knowledge_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("knowledge.id", ondelete="CASCADE"), primary_key=True)
     chunk_index: Mapped[int] = mapped_column(Integer, primary_key=True)
     content: Mapped[str] = mapped_column(String, nullable=False)
-    embedding = mapped_column(Vector(1536))
+    embedding = mapped_column(Vector(1024))
     searchable_content = mapped_column(TSVECTOR)
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB, default=dict)
