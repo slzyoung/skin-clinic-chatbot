@@ -1,4 +1,15 @@
-import { RiFilePdf2Line, RiCloseLine, RiRobot2Line, RiAttachmentLine, RiMedicineBottleLine, RiSyringeLine, RiMegaphoneLine, RiCornerDownLeftLine, RiUser3Line } from "@remixicon/react"
+import { useState, useRef } from "react"
+import {
+  RiRobot2Line,
+  RiUser3Line,
+  RiCornerDownLeftLine,
+  RiLoader4Line,
+  RiCheckLine,
+  RiAttachment2,
+  RiFileTextLine,
+  RiFilePdf2Line,
+  RiCloseLine
+} from "@remixicon/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -9,177 +20,213 @@ import {
   MessageScrollerItem,
   MessageScrollerButton,
 } from "@/components/ui/message-scroller"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { api } from "@/lib/axios"
+import { toast } from "sonner"
+import ReactMarkdown from "react-markdown"
 
-export function ChatPreview() {
+interface ChatPreviewProps {
+  knowledgeId?: string;
+  knowledgeStatus?: string;
+  aiSummary?: string | null;
+  fileName?: string | null;
+  isDetailLoading?: boolean;
+}
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  attachmentName?: string;
+}
+
+export function ChatPreview({ knowledgeId, knowledgeStatus, aiSummary, fileName, isDetailLoading }: ChatPreviewProps) {
+  const [userChatMessages, setUserChatMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const initialSummaryMessage: Message | null = aiSummary
+    ? { role: "assistant", content: `### AI Document Executive Summary\n\n${aiSummary}` }
+    : null;
+
+  const messages: Message[] = initialSummaryMessage
+    ? [initialSummaryMessage, ...userChatMessages]
+    : userChatMessages;
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setAttachedFile(e.target.files[0]);
+    }
+  };
+
+  const handleSend = async () => {
+    if ((!input.trim() && !attachedFile) || isLoading) return;
+    
+    const userMsg: Message = {
+      role: "user",
+      content: input.trim() || (attachedFile ? `Attached file: ${attachedFile.name}` : ""),
+      attachmentName: attachedFile ? attachedFile.name : undefined
+    };
+    
+    setUserChatMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setAttachedFile(null);
+    setIsLoading(true);
+
+    try {
+      const response = await api.post("/ai/chat", {
+        query: userMsg.content,
+        knowledge_id: knowledgeId,
+        history: messages
+      });
+      
+      setUserChatMessages((prev) => [...prev, { role: "assistant", content: response.data.answer }]);
+    } catch {
+      toast.error("Failed to send message to AI.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const isInputDisabled = knowledgeStatus === "PROCESSING" || isLoading || isDetailLoading;
+
   return (
     <div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
       <MessageScrollerProvider>
         <MessageScroller className="flex-1 min-h-0">
           <MessageScrollerViewport className="px-8">
             <MessageScrollerContent className="py-10 gap-6 w-full max-w-4xl mx-auto">
-              {/* Uploaded Files Bubbles */}
-              <MessageScrollerItem>
-                <div className="flex justify-end gap-4 w-full">
-                  <div className="flex items-center gap-2 px-2 py-2 rounded-md border border-black/10 bg-white">
-                    <div className="bg-red-100 p-1.5 rounded text-red-900">
-                      <RiFilePdf2Line className="size-4" />
+              
+              {isDetailLoading && (
+                <MessageScrollerItem>
+                  <div className="flex items-start gap-3 w-full">
+                    <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+                      <RiRobot2Line className="size-4 animate-pulse text-blue-500" />
                     </div>
-                    <div className="flex flex-col justify-center">
-                      <span className="text-xs font-medium text-zinc-950 truncate max-w-35">Profil_Hamdan_Zakirun_Naik</span>
-                      <span className="text-[10px] text-zinc-500">PDF</span>
+                    <div className="bg-blue-50/70 text-zinc-950 p-3 rounded-md text-sm w-full flex items-center gap-2 border border-blue-100/50">
+                      <RiLoader4Line className="size-4 animate-spin text-blue-600" />
+                      <span className="text-zinc-700 font-medium">Fetching document details and session...</span>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400 hover:text-zinc-600 ml-1 rounded-full hover:bg-zinc-100">
-                      <RiCloseLine className="size-4" />
-                    </Button>
                   </div>
-                  
-                  <div className="flex items-center gap-2 px-2 py-2 rounded-md border border-black/10 bg-white">
-                    <div className="bg-red-100 p-1.5 rounded text-red-900">
-                      <RiFilePdf2Line className="size-4" />
-                    </div>
-                    <div className="flex flex-col justify-center">
-                      <span className="text-xs font-medium text-zinc-950 truncate max-w-35">ERHA Acne Spot Gel Protocol</span>
-                      <span className="text-[10px] text-zinc-500">PDF</span>
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400 hover:text-zinc-600 ml-1 rounded-full hover:bg-zinc-100">
-                      <RiCloseLine className="size-4" />
-                    </Button>
-                  </div>
+                </MessageScrollerItem>
+              )}
+
+              {!isDetailLoading && messages.length === 0 && knowledgeStatus !== "PROCESSING" && (
+                <div className="flex flex-col items-center justify-center text-zinc-500 h-full pt-20">
+                  <RiRobot2Line className="size-10 mb-4 text-zinc-300" />
+                  <p>Ask anything about this document...</p>
                 </div>
-              </MessageScrollerItem>
+              )}
 
-              {/* AI Assistant Blue Bubble */}
-              <MessageScrollerItem>
-                <div className="flex items-start gap-3 w-full">
-                  <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-                    <RiRobot2Line className="size-4" />
-                  </div>
-                  <div className="bg-blue-50 text-zinc-950 p-3 rounded-md text-sm w-full">
-                    This document provides an overview of a skin concern and emphasizes the necessity of a certain product for its resolution.
-                  </div>
-                </div>
-              </MessageScrollerItem>
-
-              {/* AI Extracting Markdown Message */}
-              <MessageScrollerItem>
-                <div className="flex items-start gap-3 w-full">
-                  <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-                    <RiRobot2Line className="size-4" />
-                  </div>
-                  <div className="text-sm text-zinc-950 leading-relaxed w-full pt-1.5">
-                    Analysis complete. I&apos;ve extracted the text from ERHA Acne Spot Gel Protocol.pdf into markdown format for your review
-                  </div>
-                </div>
-              </MessageScrollerItem>
-
-              {/* Extracted Document Card */}
-              <MessageScrollerItem>
-                <div className="flex items-start gap-3 w-full">
-                  <div className="w-7 shrink-0" />
-                  <div className="border border-black/10 rounded-md p-4 bg-white w-full">
-                    <div className="flex items-center gap-2 mb-4">
-                      <RiFilePdf2Line className="size-5 text-zinc-950" />
-                      <h3 className="font-medium text-zinc-950">ERHA Acne Spot Gel Protocol</h3>
-                    </div>
-
-                    <div className="text-sm text-zinc-800 space-y-4 leading-relaxed">
-                      <p>
-                        <strong>ERHA Acne Spot Gel Protocol (v1.0)</strong><br/>
-                        This protocol describes the standardized clinical formulation review, quality assessment, and knowledge extraction procedure for ERHA Acne Spot Gel. The product is intended for localized application on acne lesions and should be classified as a targeted acne management product, not a full-face treatment protocol.
-                      </p>
-                      
-                      <p>
-                        <strong>Formulation and Active Component Review</strong><br/>
-                        <strong>Salicylic Acid:</strong> Supports keratolytic activity by promoting exfoliation within the follicular opening and reducing pore obstruction.<br/>
-                        <strong>Sulfur-Based Component:</strong> Assists in drying active lesions and reducing excess surface oil in acne-prone areas.<br/>
-                        <strong>Niacinamide:</strong> Supports reduction of visible redness and improves the appearance of post-inflammatory skin changes.<br/>
-                        <strong>Zinc PCA:</strong> Contributes to sebum regulation and supports control of acne-associated microbial imbalance.
-                      </p>
-
-                      <h4 className="text-blue-600 font-semibold pt-2">Clinical Quality Parameters</h4>
-                      
-                      <div className="border border-black/10 rounded-md overflow-hidden">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="w-[33%] font-normal text-zinc-950">Parameter</TableHead>
-                              <TableHead className="w-[33%] font-normal text-zinc-950">Target Range</TableHead>
-                              <TableHead className="w-[33%] font-normal text-zinc-950">Critical Limit</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            <TableRow>
-                              <TableCell>Viscosity</TableCell>
-                              <TableCell>900 - 1300 cP</TableCell>
-                              <TableCell>{">"} 1600 cP</TableCell>
-                            </TableRow>
-                            <TableRow>
-                              <TableCell>pH Balance</TableCell>
-                              <TableCell>4.5 - 5.5</TableCell>
-                              <TableCell>{"<"} 4.0 or {">"} 6.0</TableCell>
-                            </TableRow>
-                            <TableRow>
-                              <TableCell>Spreadability</TableCell>
-                              <TableCell>3.0 - 4.5 cm</TableCell>
-                              <TableCell>{"<"} 2.5 cm</TableCell>
-                            </TableRow>
-                            <TableRow>
-                              <TableCell>Drying Time</TableCell>
-                              <TableCell>1 - 3 minutes</TableCell>
-                              <TableCell>{">"} 5 minutes</TableCell>
-                            </TableRow>
-                            <TableRow>
-                              <TableCell>Microbial Limit</TableCell>
-                              <TableCell>Within topical product standard</TableCell>
-                              <TableCell>Exceeds accepted limit</TableCell>
-                            </TableRow>
-                          </TableBody>
-                        </Table>
+              {!isDetailLoading && knowledgeStatus === "PROCESSING" && messages.length === 0 && (
+                <MessageScrollerItem>
+                  <div className="flex flex-col w-full items-start">
+                    
+                    {/* Attached Document Badge OUTSIDE & ABOVE bubble */}
+                    {fileName && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
+                        <RiFilePdf2Line className="size-4 text-red-500 shrink-0" />
+                        <span className="font-semibold text-zinc-900 truncate max-w-md">{fileName}</span>
+                        <span className="text-[10px] text-zinc-600 font-mono uppercase bg-zinc-200/70 px-1.5 py-0.5 rounded">
+                          {fileName.split('.').pop() || 'Document'}
+                        </span>
                       </div>
+                    )}
 
-                      <p>
-                        <strong>Clinical Use Classification</strong><br/>
-                        The product should be tagged as a topical acne spot treatment. Recommended metadata classification includes dermatology, acne care, localized lesion treatment, oily and acne-prone skin, and doctor-directed product recommendation. The product should not be classified as a systemic acne therapy or prescription-only treatment unless supported by verified regulatory documentation.
-                      </p>
-
-                      <p>
-                        <strong>Safety and Application Notes</strong><br/>
-                        Apply a thin layer only to affected acne areas after cleansing. Avoid use around the eyes, lips, mucosal areas, and open wounds. Monitor for excessive dryness, irritation, peeling, or burning sensation. Daytime use should be accompanied by sunscreen when clinically appropriate. Use frequency and duration should follow product label instructions or doctor recommendation.
-                      </p>
-
-                      <p>
-                        <strong>Knowledge Extraction Notes</strong><br/>
-                        The AI identified inconsistent wording between product benefit claims and clinical treatment claims. The marketing brochure describes visible acne reduction, while the clinical reference document emphasizes targeted lesion management. Manual validation is required to ensure the chatbot does not overstate efficacy, imply guaranteed outcomes, or recommend full-face application without supporting evidence.
-                      </p>
-
-                      <p>
-                        <strong>Medical Review Status</strong><br/>
-                        This document should remain under medical review until the active ingredient list, concentration data, safety warnings, product version, and approved claims are verified against the latest official product label or internal clinical documentation. Only validated content should be published to the chatbot knowledge base.
-                      </p>
+                    <div className="flex items-start gap-3 w-full">
+                      <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+                        <RiRobot2Line className="size-4" />
+                      </div>
+                      <div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full border border-blue-100 flex flex-col gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="relative flex h-3 w-3">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                          </span>
+                          <span className="font-semibold text-blue-700">Processing Document</span>
+                        </div>
+                        <p className="text-zinc-600 text-xs leading-relaxed">
+                          Document processing progress:
+                        </p>
+                        <div className="flex flex-col gap-2.5 bg-white/90 rounded border border-blue-100 p-3.5 text-xs text-zinc-700">
+                          <div className="flex items-center gap-2.5 text-emerald-600 font-medium">
+                            <RiCheckLine className="size-4 shrink-0" />
+                            <span>1. Extracting Content</span>
+                          </div>
+                          <div className="flex items-center gap-2.5 text-emerald-600 font-medium">
+                            <RiCheckLine className="size-4 shrink-0" />
+                            <span>2. Structuring Information</span>
+                          </div>
+                          <div className="flex items-center gap-2.5 text-blue-600 font-semibold animate-pulse">
+                            <RiLoader4Line className="size-4 animate-spin shrink-0" />
+                            <span>3. Building Search Index...</span>
+                          </div>
+                          <div className="flex items-center gap-2.5 text-zinc-400">
+                            <span className="size-4 flex items-center justify-center text-[10px]">○</span>
+                            <span>4. Generating Summary</span>
+                          </div>
+                        </div>
+                        <span className="text-[11px] text-zinc-500 mt-0.5">
+                          You can navigate away anytime. Processing continues in the background.
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </MessageScrollerItem>
+                </MessageScrollerItem>
+              )}
 
-              {/* User Text Bubble */}
-              <MessageScrollerItem scrollAnchor>
-                <div className="flex items-start gap-3 mt-2 flex-row-reverse w-full">
-                  <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-                    <RiUser3Line className="size-4" />
+              {messages.map((msg, index) => (
+                <MessageScrollerItem key={index}>
+                  <div className={`flex flex-col w-full ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    
+                    {/* Attached Knowledge Document Badge OUTSIDE & ABOVE initial AI summary bubble */}
+                    {fileName && index === 0 && msg.role === 'assistant' && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
+                        <RiFilePdf2Line className="size-4 text-red-500 shrink-0" />
+                        <span className="font-semibold text-zinc-900 truncate max-w-md">{fileName}</span>
+                        <span className="text-[10px] text-zinc-600 font-mono uppercase bg-zinc-200/70 px-1.5 py-0.5 rounded">
+                          {fileName.split('.').pop() || 'Document'}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* User File Attachment Chip OUTSIDE & ABOVE user bubble */}
+                    {msg.attachmentName && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
+                        <RiFileTextLine className="size-3.5 text-blue-600 shrink-0" />
+                        <span className="truncate max-w-xs">{msg.attachmentName}</span>
+                      </div>
+                    )}
+
+                    <div className={`flex items-start gap-3 w-full ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                      <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+                        {msg.role === 'user' ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
+                      </div>
+                      <div className={`${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-zinc-950'} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100`}>
+                        {msg.role === 'assistant' ? (
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        ) : (
+                          msg.content
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="bg-blue-500 text-white p-3 rounded-md text-sm w-full">
-                    Please analyze these documents and extract the key information for the Acne Spot Gel Protocol.
+                </MessageScrollerItem>
+              ))}
+
+              {isLoading && (
+                <MessageScrollerItem scrollAnchor>
+                  <div className="flex items-start gap-3 w-full">
+                    <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+                      <RiRobot2Line className="size-4 animate-bounce text-blue-500" />
+                    </div>
+                    <div className="text-sm text-zinc-500 pt-1.5 italic animate-pulse">
+                      Thinking...
+                    </div>
                   </div>
-                </div>
-              </MessageScrollerItem>
+                </MessageScrollerItem>
+              )}
+
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton />
@@ -188,31 +235,57 @@ export function ChatPreview() {
       
       {/* Chatbox Input */}
       <div className="px-8 py-4 shrink-0">
-        <div className="bg-white-500 rounded-md p-4 flex flex-col gap-4 border border-black/10">
+        <div className="bg-white rounded-md p-4 flex flex-col gap-3 border border-black/10 shadow-xs">
+          
+          {/* File Attachment Pill Preview in Input */}
+          {attachedFile && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-800 rounded-md text-xs font-medium w-fit">
+              <RiFileTextLine className="size-3.5 text-blue-600 shrink-0" />
+              <span className="truncate max-w-xs">{attachedFile.name}</span>
+              <button
+                type="button"
+                onClick={() => setAttachedFile(null)}
+                className="text-blue-600 hover:text-blue-900 ml-1 p-0.5 rounded-full hover:bg-blue-100"
+              >
+                <RiCloseLine className="size-3.5" />
+              </button>
+            </div>
+          )}
+
           <Input 
-            placeholder="Reply here..." 
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+            placeholder={knowledgeStatus === "PROCESSING" ? "Waiting for ingestion to complete..." : "Ask questions or request adjustments..."} 
+            disabled={isInputDisabled}
             className="w-full bg-transparent border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-gray-700 placeholder:text-gray-500"
           />
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Button variant="outline" className="gap-1.5 bg-white text-gray-700 hover:bg-gray-50 border-gray-200">
-                <RiAttachmentLine className="w-4 h-4" />
-                attach file
-              </Button>
-              <Button variant="outline" className="gap-1.5 bg-white text-gray-700 hover:bg-gray-50 border-gray-200">
-                <RiMedicineBottleLine className="w-4 h-4" />
-                Product
-              </Button>
-              <Button variant="outline" className="gap-1.5 bg-white text-gray-700 hover:bg-gray-50 border-gray-200">
-                <RiSyringeLine className="w-4 h-4" />
-                Treatment
-              </Button>
-              <Button variant="outline" className="gap-1.5 bg-white text-gray-700 hover:bg-gray-50 border-gray-200">
-                <RiMegaphoneLine className="w-4 h-4" />
-                Promotional
-              </Button>
-            </div>
-            <Button size="icon" className="bg-blue-500 text-white hover:bg-blue-600 shrink-0">
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+
+          <div className="flex items-center justify-between pt-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isInputDisabled}
+              className="text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+              title="Attach a file"
+            >
+              <RiAttachment2 className="size-4" />
+            </Button>
+            <Button
+              onClick={handleSend}
+              disabled={isInputDisabled || (!input.trim() && !attachedFile)}
+              size="icon"
+              className="bg-blue-500 text-white hover:bg-blue-600 shrink-0"
+            >
               <RiCornerDownLeftLine className="w-4 h-4" />
             </Button>
           </div>
@@ -221,3 +294,4 @@ export function ChatPreview() {
     </div>
   )
 }
+
