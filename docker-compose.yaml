@@ -18,10 +18,19 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/arya_noble
+      - CIS_BASE_URL=http://mock-cis:8001
+      - CIS_API_TOKEN=default_cis_token
     depends_on:
       - db
+      - mock-cis
     volumes:
       - ./backend:/app
+
+  mock-cis:
+    build:
+      context: ./mock-cis
+    ports:
+      - "8001:8001"
 
 volumes:
   pgdata:
