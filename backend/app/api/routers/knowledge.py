@@ -18,9 +18,24 @@ async def list_knowledge(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_functional_or_admin)
 ):
-    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None))
+    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None)).order_by(Knowledge.created_at.desc())
     result = await db.execute(stmt)
     return result.scalars().all()
+
+@router.get("/{knowledge_id}", response_model=KnowledgeResponse)
+async def get_knowledge(
+    knowledge_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_functional_or_admin)
+):
+    stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
+    result = await db.execute(stmt)
+    knowledge = result.scalar_one_or_none()
+    
+    if not knowledge:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found")
+        
+    return knowledge
 
 @router.post("/", response_model=KnowledgeResponse, status_code=status.HTTP_201_CREATED)
 async def create_knowledge(
@@ -61,11 +76,12 @@ async def upload_knowledge_file(
     return {"message": f"{len(files)} files received. Processing is handled by Langchain integration.", "filenames": results}
 
 @router.put("/{knowledge_id}/status", response_model=KnowledgeResponse)
+@router.patch("/{knowledge_id}/status", response_model=KnowledgeResponse)
 async def update_knowledge_status(
     knowledge_id: uuid.UUID,
     status_in: KnowledgeUpdateStatus,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_user: User = Depends(require_functional_or_admin)
 ):
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -76,7 +92,7 @@ async def update_knowledge_status(
         
     knowledge.status = status_in.status
     if status_in.status == KnowledgeStatus.APPROVED:
-        knowledge.approved_by = current_admin.id
+        knowledge.approved_by = current_user.id
         
     await db.commit()
     await db.refresh(knowledge)

@@ -2,8 +2,8 @@ import os
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
-from core.interfaces import BaseLLMAdapter
-from retrieval.retriever import HybridRetriever
+from app.rag.core.interfaces import BaseLLMAdapter
+from app.rag.retrieval.retriever import HybridRetriever
 
 SYSTEM_PROMPT = """You are CHAT AI ERHA, a helpful, professional, and highly knowledgeable medical aesthetic assistant for ERHA (PT Arya Noble) products, treatments, FAQs, promotions, and clinical SOPs.
 Your tone should be professional, polite, and empathetic.

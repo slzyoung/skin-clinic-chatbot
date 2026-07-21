@@ -3,17 +3,17 @@ import json
 import asyncio
 from loguru import logger
 
-from typing import Optional
+from typing import Optional, Any
 from app.rag.core.interfaces import BaseVectorStoreAdapter
 from .parser import DocumentParser
 from .chunker import CustomChunker
 from .metadata import MetadataEnricher
 
 class IngestionPipeline:
-    def __init__(self, vector_store: Optional[BaseVectorStoreAdapter] = None):
+    def __init__(self, vector_store: Optional[BaseVectorStoreAdapter] = None, embeddings: Any = None):
         logger.info("Initializing Ingestion Pipeline...")
         self.parser = DocumentParser()
-        self.chunker = CustomChunker(embedding_model_name="BAAI/bge-m3") # Hardcoded for now or fetch from config
+        self.chunker = CustomChunker(embeddings=embeddings)
         self.metadata_enricher = MetadataEnricher()
         self.vector_store = vector_store
         

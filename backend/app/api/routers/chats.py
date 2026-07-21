@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
 import uuid
+import os
+from loguru import logger
+from app.core.database import AsyncSessionLocal
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -12,8 +15,61 @@ from app.schemas.chat import (
     ChatSessionCreate, ChatSessionUpdate, ChatSessionResponse,
     ChatHistoryResponse, ChatMessageCreate, ChatMessageResponse
 )
+from app.models.config import AppConfig
 
 router = APIRouter(tags=["Chats"])
+
+async def process_ai_response(session_id: uuid.UUID, user_query: str):
+    """
+    Background task to generate AI response without exposing AI dependencies to core.
+    """
+    try:
+        from app.rag.generation.factory import get_dynamic_llm
+        from app.rag.retrieval.retriever import HybridRetriever
+        from app.rag.retrieval.reranker import ExternalReranker
+        from app.rag.generation.generator import GenerationPipeline
+        from app.rag.embeddings import get_dynamic_embeddings
+    except ImportError as e:
+        logger.error(f"AI dependencies missing: {e}")
+        return
+
+    async with AsyncSessionLocal() as db:
+        try:
+            llm = await get_dynamic_llm(db)
+            embeddings = await get_dynamic_embeddings(db)
+            
+            reranker = ExternalReranker(llm=llm)
+            retriever = HybridRetriever(session=db, embeddings_model=embeddings, reranker=reranker)
+            pipeline = GenerationPipeline(retriever=retriever, llm_adapter=llm)
+            
+            stmt_msg = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+            result_msg = await db.execute(stmt_msg)
+            messages = result_msg.scalars().all()
+            
+            history = [{"role": msg.role, "content": msg.content} for msg in messages if msg.role in ["user", "assistant"]]
+            if history and history[-1]["role"] == "user":
+                history.pop()
+            
+            response_dict = await pipeline.generate_answer(
+                query=user_query,
+                top_k=5,
+                rerank=False,
+                history=history
+            )
+            
+            ai_msg = ChatMessage(
+                session_id=session_id,
+                role="assistant",
+                content=response_dict["answer"]
+            )
+            db.add(ai_msg)
+            await db.commit()
+            
+        except Exception as e:
+            logger.error(f"Error generating AI response: {e}")
+            fallback = ChatMessage(session_id=session_id, role="assistant", content="Maaf, terjadi kesalahan pada pemrosesan AI.")
+            db.add(fallback)
+            await db.commit()
 
 async def is_admin_user(user: User, db: AsyncSession) -> bool:
     if user.type != UserType.STAFF:
@@ -148,6 +204,7 @@ async def create_chat_message(
     session_id: uuid.UUID,
     role: str = Form(...),
     content: str = Form(...),
+    background_tasks: BackgroundTasks = None,
     files: Optional[List[UploadFile]] = File(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -179,4 +236,8 @@ async def create_chat_message(
     db.add(message)
     await db.commit()
     await db.refresh(message)
+    
+    if role == "user" and background_tasks is not None:
+        background_tasks.add_task(process_ai_response, session_id, content)
+        
     return message

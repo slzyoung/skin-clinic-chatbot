@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
     top_k: int = Field(5, description="Number of final matches to retrieve")
     rerank: bool = Field(True, description="Whether to apply Cross-Encoder rerank")
     document_type: Optional[str] = Field(None, description="Filter by document type")
+    knowledge_id: Optional[str] = Field(None, description="Filter by specific knowledge document")
     section: Optional[str] = Field(None, description="Filter by section name")
     confidence_threshold: Optional[float] = Field(None, description="Optional custom confidence threshold")
     history: List[ChatMessage] = Field(default=[], description="Chat history context")

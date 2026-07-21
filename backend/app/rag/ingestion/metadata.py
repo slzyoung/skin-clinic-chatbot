@@ -140,7 +140,7 @@ class MetadataEnricher:
             }
 
             enriched_data.append({
-                "text": text,
+                "content": text,
                 "metadata": enriched_meta
             })
 

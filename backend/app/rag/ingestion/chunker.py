@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 from loguru import logger
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_experimental.text_splitter import SemanticChunker
 
 try:
     from docling.chunking import HierarchicalChunker
@@ -12,7 +12,7 @@ except ImportError:
     logger.error("docling is not installed.")
 
 class CustomChunker:
-    def __init__(self, embedding_model_name: str = "BAAI/bge-m3"):
+    def __init__(self, embeddings: Any = None):
         logger.info("Initializing Custom Chunker (Docling Hierarchical + Semantic)...")
         
         # 1. Structural Chunker (Docling)
@@ -23,12 +23,15 @@ class CustomChunker:
             
         # 2. Semantic Chunker
         try:
-            logger.info(f"Loading Embedding Model for Semantic Chunking: {embedding_model_name}")
-            self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
-            self.semantic_splitter = SemanticChunker(
-                self.embeddings, 
-                breakpoint_threshold_type="percentile"
-            )
+            self.embeddings = embeddings
+            if self.embeddings:
+                logger.info("Using provided embeddings for Semantic Chunking")
+                self.semantic_splitter = SemanticChunker(
+                    self.embeddings, 
+                    breakpoint_threshold_type="percentile"
+                )
+            else:
+                self.semantic_splitter = None
         except Exception as e:
             logger.error(f"Failed to initialize SemanticChunker: {e}")
             self.semantic_splitter = None

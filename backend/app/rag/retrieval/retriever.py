@@ -31,7 +31,10 @@ class HybridRetriever:
 
         if filter_metadata:
             for k, v in filter_metadata.items():
-                dense_stmt = dense_stmt.where(KnowledgeChunk.metadata_[k].astext == str(v))
+                if k == "knowledge_id":
+                    dense_stmt = dense_stmt.where(KnowledgeChunk.knowledge_id == v)
+                else:
+                    dense_stmt = dense_stmt.where(KnowledgeChunk.metadata_[k].astext == str(v))
                 
         dense_results = await self.session.execute(dense_stmt)
         dense_chunks = dense_results.scalars().all()
@@ -45,7 +48,10 @@ class HybridRetriever:
 
         if filter_metadata:
             for k, v in filter_metadata.items():
-                sparse_stmt = sparse_stmt.where(KnowledgeChunk.metadata_[k].astext == str(v))
+                if k == "knowledge_id":
+                    sparse_stmt = sparse_stmt.where(KnowledgeChunk.knowledge_id == v)
+                else:
+                    sparse_stmt = sparse_stmt.where(KnowledgeChunk.metadata_[k].astext == str(v))
 
         sparse_results = await self.session.execute(sparse_stmt)
         sparse_chunks = sparse_results.scalars().all()

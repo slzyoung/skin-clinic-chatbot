@@ -1,0 +1,6 @@
+/.hf_cache
+/eksperimen-rag
+*.md
+.venv
+.env
+.env.*
