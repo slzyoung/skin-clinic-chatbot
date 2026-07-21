@@ -15,6 +15,8 @@ def get_cis_client():
     headers = {"Authorization": f"Bearer {settings.CIS_API_TOKEN}"}
     return httpx.AsyncClient(base_url=settings.CIS_BASE_URL, headers=headers)
 
+import uuid
+
 async def pull_branch_from_cis(db: AsyncSession, branch_id: str):
     """Fetch a single branch from CIS and upsert it."""
     async with get_cis_client() as client:
@@ -23,7 +25,8 @@ async def pull_branch_from_cis(db: AsyncSession, branch_id: str):
         data = resp.json()
         
     # data has 'id', 'name', 'address', 'image_url'
-    b_id = data.get("id", branch_id)
+    b_id_str = data.get("id", branch_id)
+    b_id = uuid.UUID(b_id_str)
     name = data.get("name")
     address = data.get("address")
     image_url = data.get("image_url")
@@ -43,6 +46,7 @@ async def pull_branch_from_cis(db: AsyncSession, branch_id: str):
         branch.name = name
         branch.address = address
         branch.image_url = image_url
+        branch.deleted_at = None
         
     await db.flush()
     return branch
@@ -74,24 +78,27 @@ async def pull_doctor_from_cis(db: AsyncSession, cis_id: str):
     else:
         user.name = name
         user.email = email
+        user.deleted_at = None
         
     await db.flush()
     
     # Sync Branches
     # First, make sure branches exist locally
-    for b_id in branch_ids:
+    for b_id_str in branch_ids:
+        b_id = uuid.UUID(b_id_str)
         # Check if exists
         b_stmt = select(Branch).where(Branch.id == b_id)
         b = (await db.execute(b_stmt)).scalar_one_or_none()
         if not b:
             # We don't have this branch yet, pull it individually
-            await pull_branch_from_cis(db, b_id)
+            await pull_branch_from_cis(db, b_id_str)
             
     # Remove old branch assignments
     await db.execute(UserBranch.__table__.delete().where(UserBranch.user_id == user.id))
     
     # Add new branch assignments
-    for b_id in branch_ids:
+    for b_id_str in branch_ids:
+        b_id = uuid.UUID(b_id_str)
         db.add(UserBranch(user_id=user.id, branch_id=b_id))
         
     await db.flush()
@@ -104,14 +111,19 @@ async def sync_doctors_from_cis_task(db: AsyncSession):
     logger.info("Starting scheduled CIS data sync...")
     
     try:
+        from datetime import datetime, timezone
+        
         async with get_cis_client() as client:
             # 1. Fetch all branches
             b_resp = await client.get("/api/v1/branches")
             if b_resp.status_code == 200:
+                pulled_branch_ids = set()
                 b_data = b_resp.json().get("branches", [])
                 for branch_data in b_data:
-                    b_id = branch_data.get("branch_id") or branch_data.get("id")
-                    if b_id:
+                    b_id_str = branch_data.get("branch_id") or branch_data.get("id")
+                    if b_id_str:
+                        b_id = uuid.UUID(b_id_str)
+                        pulled_branch_ids.add(b_id)
                         stmt = select(Branch).where(Branch.id == b_id)
                         branch = (await db.execute(stmt)).scalar_one_or_none()
                         if not branch:
@@ -126,18 +138,37 @@ async def sync_doctors_from_cis_task(db: AsyncSession):
                             branch.name = branch_data.get("name")
                             branch.address = branch_data.get("address")
                             branch.image_url = branch_data.get("image_url")
+                            branch.deleted_at = None
+                await db.flush()
+                
+                # Soft delete branches not in the pulled set
+                all_b_stmt = select(Branch).where(Branch.deleted_at.is_(None))
+                all_branches = (await db.execute(all_b_stmt)).scalars().all()
+                for b in all_branches:
+                    if b.id not in pulled_branch_ids:
+                        b.deleted_at = datetime.now(timezone.utc)
                 await db.flush()
                 
             # 2. Fetch all doctors
             d_resp = await client.get("/api/v1/doctors")
             if d_resp.status_code == 200:
+                pulled_doc_cis_ids = set()
                 d_data = d_resp.json().get("doctors", [])
                 for doctor_data in d_data:
                     # 'doctor_cis_id' from list endpoint
                     cis_id = doctor_data.get("doctor_cis_id") or doctor_data.get("cis_id")
                     if cis_id:
+                        pulled_doc_cis_ids.add(cis_id)
                         # Pull detailed doctor data to get branch mappings
                         await pull_doctor_from_cis(db, cis_id)
+                        
+                # Soft delete doctors not in the pulled set
+                all_d_stmt = select(User).where(User.type == UserType.DOCTOR, User.deleted_at.is_(None))
+                all_doctors = (await db.execute(all_d_stmt)).scalars().all()
+                for d in all_doctors:
+                    if d.cis_id and d.cis_id not in pulled_doc_cis_ids:
+                        d.deleted_at = datetime.now(timezone.utc)
+                await db.flush()
 
         await db.commit()
         logger.info("CIS data sync complete.")
