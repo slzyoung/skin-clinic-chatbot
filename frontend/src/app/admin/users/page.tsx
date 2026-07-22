@@ -1,6 +1,6 @@
 "use client";
 
-import { RiEyeLine, RiSearchLine, RiAddLine, RiRefreshLine } from "@remixicon/react";
+import { RiEyeLine, RiSearchLine, RiAddLine } from "@remixicon/react";
 import { useState } from "react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -20,13 +20,11 @@ import { DoctorDetailsSheet } from "./components/doctor-details-sheet";
 import { UserAddSheet } from "./components/user-add-sheet";
 import { UserStaffProfileSheet } from "./components/user-staff-profile-sheet";
 import { useUsers } from "./hooks/use-users";
-import { useSyncCIS } from "./hooks/use-sync";
 import { UserResponse } from "./api/types";
 
 export default function UsersPage() {
 	const { data: staffData = [] } = useUsers("STAFF");
 	const { data: doctorData = [] } = useUsers("DOCTOR");
-	const syncCIS = useSyncCIS();
 
 	const [selectedDoctor, setSelectedDoctor] = useState<UserResponse | null>(null);
 	const [isSheetOpen, setIsSheetOpen] = useState(false);
@@ -79,17 +77,6 @@ export default function UsersPage() {
 						<Input placeholder="Search for user, staff, or doctor" className="pl-8 bg-white" />
 					</div>
 					<div className="flex items-center gap-2">
-						<Button
-							variant="outline"
-							className="bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:text-gray-900"
-							onClick={() => syncCIS.mutate()}
-							disabled={syncCIS.isPending}
-						>
-							<RiRefreshLine
-								className={`mr-2 h-4 w-4 ${syncCIS.isPending ? "animate-spin" : ""}`}
-							/>
-							{syncCIS.isPending ? "Syncing..." : "Sync with CIS"}
-						</Button>
 						<Button
 							className="bg-blue-600 hover:bg-blue-700"
 							onClick={() => setIsAddUserOpen(true)}
