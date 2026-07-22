@@ -7,6 +7,9 @@ from app.core.security import create_access_token, create_refresh_token
 from app.core.config import settings
 from jose import jwt, JWTError
 
+from sqlalchemy import select
+from app.models.user import User, UserType, Role, UserRole
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/login")
@@ -23,7 +26,13 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-    access_token = create_access_token(subject=str(user.id), user_type=user.type)
+    roles = []
+    if user.type == UserType.STAFF:
+        stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
+        result = await db.execute(stmt)
+        roles = list(result.scalars().all())
+
+    access_token = create_access_token(subject=str(user.id), user_type=user.type, roles=roles)
     refresh_token = create_refresh_token(subject=str(user.id))
     
     response.set_cookie(
@@ -53,20 +62,33 @@ async def logout(response: Response):
     return {"message": "Logged out successfully"}
 
 @router.post("/refresh")
-async def refresh_token(request: Request, response: Response):
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
+async def refresh_token(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    refresh_token_cookie = request.cookies.get("refresh_token")
+    if not refresh_token_cookie:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token missing")
         
     try:
-        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(refresh_token_cookie, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id = payload.get("sub")
         is_refresh = payload.get("refresh")
         
         if not user_id or not is_refresh:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
-            
-        new_access_token = create_access_token(subject=user_id, user_type="STAFF")
+
+        # Fetch current user to determine type and roles
+        import uuid
+        stmt_user = select(User).where(User.id == uuid.UUID(user_id), User.deleted_at.is_(None))
+        res_user = await db.execute(stmt_user)
+        user = res_user.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+        roles = []
+        if user.type == UserType.STAFF:
+            stmt_roles = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
+            roles = list((await db.execute(stmt_roles)).scalars().all())
+
+        new_access_token = create_access_token(subject=str(user.id), user_type=user.type, roles=roles)
         
         response.set_cookie(
             key="access_token",

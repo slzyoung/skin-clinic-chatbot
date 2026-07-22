@@ -3,8 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
 import uuid
-import os
-from loguru import logger
+try:
+    from loguru import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
 from app.core.database import AsyncSessionLocal
 
 from app.core.database import get_db
@@ -131,6 +134,12 @@ async def create_chat_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if current_user.type == UserType.DOCTOR and not current_user.has_ai_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="AI Assistant access is disabled for your account. Please contact an administrator."
+        )
+
     session = ChatSession(
         user_id=current_user.id,
         branch_id=session_in.branch_id
@@ -209,6 +218,11 @@ async def create_chat_message(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if current_user.type == UserType.DOCTOR and not current_user.has_ai_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="AI Assistant access is disabled for your account. Please contact an administrator."
+        )
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
     if not await is_admin_user(current_user, db):
