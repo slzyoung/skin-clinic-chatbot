@@ -67,7 +67,7 @@ MOCK_DOCTORS = [
     {
         "cis_id": "DR-12345",
         "name": "Dr. Jane Doe, Sp.D.V.E.",
-        "email": "jane.doe@example.com",
+        "email": "doctor@mail.com",
         "branch_ids": [
             "11111111-1111-1111-1111-111111111111"
         ]
