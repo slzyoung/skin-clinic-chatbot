@@ -18,11 +18,14 @@ import { RiErrorWarningLine, RiLoader4Line } from "@remixicon/react"
 import { toast } from "sonner"
 import { loginSchema, type LoginValues } from "./login-schema"
 
+import { useSearchParams } from "next/navigation"
+
 export function LoginForm({
   className,
   ...props
 }: React.ComponentProps<"form">) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [loginError, setLoginError] = useState<string | null>(null)
   const { mutate: login, isPending } = useLogin()
 
@@ -46,18 +49,34 @@ export function LoginForm({
 
       login(credentials, {
         onSuccess: ({ userProfile }) => {
-          // Handle RBAC redirect
+          const fromParam = searchParams.get("from")
+          let defaultTarget = "/login"
+
+          // Determine standard home
           if (userProfile.type === "DOCTOR") {
-            router.push("/doctor")
+            defaultTarget = "/doctor"
           } else if (userProfile.type === "STAFF") {
             const isAdmin = userProfile.roles.some((r) => r.name === "ADMIN")
             if (isAdmin) {
-              router.push("/admin/knowledge")
+              defaultTarget = "/admin/knowledge"
             } else {
-              // Default staff redirect
-              router.push("/functional/ingest")
+              defaultTarget = "/functional/ingest"
             }
           }
+
+          // Check if fromParam is allowed for user
+          let target = defaultTarget
+          if (fromParam && fromParam.startsWith("/")) {
+            if (fromParam.startsWith("/admin") && userProfile.type === "STAFF" && userProfile.roles.some((r) => r.name === "ADMIN")) {
+              target = fromParam
+            } else if (fromParam.startsWith("/functional") && userProfile.type === "STAFF") {
+              target = fromParam
+            } else if (fromParam.startsWith("/doctor") && userProfile.type === "DOCTOR") {
+              target = fromParam
+            }
+          }
+
+          router.push(target)
 
           // slight delay to show toast after page transition
           setTimeout(() => {

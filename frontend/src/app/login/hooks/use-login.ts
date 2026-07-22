@@ -1,10 +1,13 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { api } from "@/lib/axios";
 import type { LoginResponse } from "../api/types";
 import type { ApiError, UserResponse } from "@/lib/types";
+import { authKeys } from "../api/keys";
 
 export const useLogin = () => {
+  const queryClient = useQueryClient();
+
   return useMutation<
     { loginResponse: LoginResponse, userProfile: UserResponse },
     AxiosError<ApiError>,
@@ -26,9 +29,8 @@ export const useLogin = () => {
         userProfile: meRes.data,
       };
     },
-    onSuccess: () => {
-      // Optionally cache the user profile
-      // queryClient.setQueryData(authKeys.me(), data.userProfile);
+    onSuccess: (data) => {
+      queryClient.setQueryData(authKeys.me(), data.userProfile);
     },
   });
 };

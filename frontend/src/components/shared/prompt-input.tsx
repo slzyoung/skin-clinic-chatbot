@@ -28,9 +28,10 @@ export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
   showAttachText?: boolean
   placeholder?: string
   minRows?: number
+  disabled?: boolean
 }
 
-export function PromptInput({ className, onSend, hideCategories, showAttachText, placeholder, minRows = 1, ...props }: PromptInputProps) {
+export function PromptInput({ className, onSend, hideCategories, showAttachText, placeholder, minRows = 1, disabled, ...props }: PromptInputProps) {
   const [activeCategory, setActiveCategory] = React.useState<"Product" | "Treatment" | "Promotional" | undefined>()
   const [inputValue, setInputValue] = React.useState("")
   const [attachedFiles, setAttachedFiles] = React.useState<File[]>([])
@@ -84,8 +85,9 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
       <div className="mb-2">
         <textarea
           rows={minRows}
-          className="w-full bg-transparent resize-none outline-none border-none text-sm text-zinc-950 placeholder:text-zinc-500 overflow-y-auto max-h-32 custom-scrollbar"
-          placeholder={placeholder || "Describe what you want to describe the knowledge is about..."}
+          disabled={disabled}
+          className="w-full bg-transparent resize-none outline-none border-none text-sm text-zinc-950 placeholder:text-zinc-500 overflow-y-auto max-h-32 custom-scrollbar disabled:opacity-50 disabled:cursor-not-allowed"
+          placeholder={disabled ? "AI Assistant access is disabled..." : placeholder || "Describe what you want to describe the knowledge is about..."}
           value={inputValue}
           onChange={(e) => {
             setInputValue(e.target.value)
@@ -100,16 +102,18 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
         <div className="flex items-center gap-1.5 flex-wrap">
           {/* Attach Button */}
           <label 
-            htmlFor="file-upload" 
+            htmlFor={disabled ? undefined : "file-upload"} 
             className={cn(
-              "cursor-pointer flex items-center justify-center rounded-md border border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700 transition-colors",
+              "flex items-center justify-center rounded-md border border-border bg-white text-zinc-700 transition-colors",
+              disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700",
               showAttachText ? "py-1.5 px-2.5 gap-1.5" : "aspect-square p-1.5"
             )} 
-            title="Attach file"
+            title={disabled ? "Access disabled" : "Attach file"}
           >
             <input 
               id="file-upload"
               type="file" 
+              disabled={disabled}
               className="sr-only" 
               onChange={handleFileChange}
               onClick={(e) => {
@@ -126,9 +130,10 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
             <>
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => setActiveCategory("Product")}
                 className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   activeCategory === "Product" 
                     ? "border-blue-500 bg-blue-50 text-blue-700" 
                     : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
@@ -139,9 +144,10 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
               </button>
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => setActiveCategory("Treatment")}
                 className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   activeCategory === "Treatment" 
                     ? "border-blue-500 bg-blue-50 text-blue-700" 
                     : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
@@ -152,9 +158,10 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
               </button>
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => setActiveCategory("Promotional")}
                 className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   activeCategory === "Promotional" 
                     ? "border-blue-500 bg-blue-50 text-blue-700" 
                     : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
@@ -170,7 +177,8 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
         {/* Send Button */}
         <Button 
           size="icon" 
-          className="h-8 w-8 bg-blue-500 hover:bg-blue-600 rounded-md shrink-0 text-white"
+          disabled={disabled || (!inputValue.trim() && attachedFiles.length === 0)}
+          className="h-8 w-8 bg-blue-500 hover:bg-blue-600 rounded-md shrink-0 text-white disabled:opacity-50"
           onClick={handleSend}
         >
           <RiCornerDownLeftLine className="size-5" />
