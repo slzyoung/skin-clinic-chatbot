@@ -1,72 +1,84 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Security
-from fastapi.security import APIKeyHeader
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+import base64
+import logging
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel
-from typing import List, Optional
-import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
 
 from app.core.database import get_db
-from app.core.config import settings
-from app.models.user import User, UserType
-from app.models.branch import UserBranch, Branch
-
-from fastapi import APIRouter, Depends, HTTPException, status, Security, BackgroundTasks
-from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
-from typing import Optional
-import logging
-
-from app.core.config import settings
-from app.core.database import AsyncSessionLocal
-from app.services.cis_sync import pull_doctor_from_cis, pull_branch_from_cis, sync_doctors_from_cis_task
+from app.services.cis_sync import (
+    get_cis_public_key,
+    upsert_branch_payload,
+    delete_branch_payload,
+    upsert_doctor_payload,
+    delete_doctor_payload,
+    bulk_sync_payload
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
-
-def verify_api_key(api_key: str = Security(api_key_header)):
-    expected_api_key = getattr(settings, "CIS_API_KEY", "default_secret_api_key")
-    if api_key != expected_api_key:
+async def verify_rsa_signature(request: Request, x_signature: Optional[str] = Header(None, alias="X-Signature")):
+    """Dependency verifying RSA signature on raw HTTP request body against X-Signature header."""
+    if not x_signature:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key"
+            detail="Missing X-Signature header"
         )
-    return api_key
+        
+    body_bytes = await request.body()
+    try:
+        signature_bytes = base64.b64decode(x_signature)
+        public_key = get_cis_public_key()
+        public_key.verify(
+            signature_bytes,
+            body_bytes,
+            padding.PKCS1v15(),
+            hashes.SHA256()
+        )
+    except Exception as e:
+        logger.error(f"RSA signature verification failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid RSA signature"
+        )
+    return True
 
-class CISTriggerPayload(BaseModel):
-    type: str # e.g., "doctor_updated", "branch_updated", "sync_all"
-    cis_id: Optional[str] = None
-    branch_id: Optional[str] = None
+class WebhookEventPayload(BaseModel):
+    event: str # "branch.upsert", "branch.delete", "doctor.upsert", "doctor.delete", "bulk.sync"
+    data: Dict[str, Any]
 
-async def run_sync_task(payload: CISTriggerPayload):
-    async with AsyncSessionLocal() as session:
-        try:
-            if payload.type == "doctor_updated" and payload.cis_id:
-                await pull_doctor_from_cis(session, payload.cis_id)
-                await session.commit()
-                logger.info(f"Successfully synced doctor {payload.cis_id}")
-            elif payload.type == "branch_updated" and payload.branch_id:
-                await pull_branch_from_cis(session, payload.branch_id)
-                await session.commit()
-                logger.info(f"Successfully synced branch {payload.branch_id}")
-            else:
-                await sync_doctors_from_cis_task(session)
-                logger.info("Successfully synced all CIS data")
-        except Exception as e:
-            logger.error(f"Webhook sync failed for payload {payload}: {e}")
-            await session.rollback()
-
-@router.post("/cis/sync", status_code=status.HTTP_202_ACCEPTED)
-async def trigger_cis_sync(
-    payload: CISTriggerPayload,
-    background_tasks: BackgroundTasks,
-    api_key: str = Depends(verify_api_key)
+@router.post("/cis", status_code=status.HTTP_200_OK, dependencies=[Depends(verify_rsa_signature)])
+async def handle_cis_webhook(
+    payload: WebhookEventPayload,
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Webhook endpoint for CIS to trigger a data pull.
+    Receive RSA-signed data pushes from CIS.
     """
-    background_tasks.add_task(run_sync_task, payload)
-    return {"status": "accepted", "message": "Sync task queued"}
+    try:
+        if payload.event == "branch.upsert":
+            await upsert_branch_payload(db, payload.data)
+        elif payload.event == "branch.delete":
+            branch_id = payload.data.get("id") or payload.data.get("branch_id")
+            if branch_id:
+                await delete_branch_payload(db, branch_id)
+        elif payload.event == "doctor.upsert":
+            await upsert_doctor_payload(db, payload.data)
+        elif payload.event == "doctor.delete":
+            cis_id = payload.data.get("cis_id") or payload.data.get("doctor_cis_id")
+            if cis_id:
+                await delete_doctor_payload(db, cis_id)
+        elif payload.event == "bulk.sync":
+            await bulk_sync_payload(db, payload.data)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported event type: {payload.event}")
 
+        await db.commit()
+        return {"status": "success", "event": payload.event}
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed processing CIS webhook event '{payload.event}': {e}")
+        raise HTTPException(status_code=500, detail=f"Webhook processing error: {str(e)}")

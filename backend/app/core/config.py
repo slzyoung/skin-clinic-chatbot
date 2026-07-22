@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    CIS_BASE_URL: str = "http://localhost:8001" # Default fallback
-    CIS_API_TOKEN: str = "default_cis_token"
+    CIS_RSA_PUBLIC_KEY: Optional[str] = None
+    CIS_RSA_PUBLIC_KEY_PATH: Optional[str] = None
     UPLOAD_DIR: str = "data/uploads"
 
     # RAG & LLM Settings

@@ -1,31 +1,48 @@
+import os
 import logging
-import httpx
-from typing import List, Optional
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import uuid
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from cryptography.hazmat.primitives import serialization
+
 from app.models.user import User, UserType
 from app.models.branch import Branch, UserBranch
-from app.core.database import AsyncSessionLocal
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-def get_cis_client():
-    headers = {"Authorization": f"Bearer {settings.CIS_API_TOKEN}"}
-    return httpx.AsyncClient(base_url=settings.CIS_BASE_URL, headers=headers)
+def get_cis_public_key():
+    """Load RSA Public Key supporting PEM (PKCS#1 / PKCS#8) and OpenSSH (ssh-rsa) formats."""
+    if settings.CIS_RSA_PUBLIC_KEY:
+        raw_key = settings.CIS_RSA_PUBLIC_KEY.replace("\\n", "\n")
+        key_bytes = raw_key.encode("utf-8")
+    elif settings.CIS_RSA_PUBLIC_KEY_PATH:
+        path = settings.CIS_RSA_PUBLIC_KEY_PATH
+        if not os.path.isabs(path):
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            path = os.path.join(base_dir, path)
+            
+        if not os.path.exists(path):
+            raise RuntimeError(f"CIS RSA Public Key file not found at: {path}")
+            
+        with open(path, "rb") as f:
+            key_bytes = f.read()
+    else:
+        raise RuntimeError("CIS RSA Public Key is not configured in environment variables (CIS_RSA_PUBLIC_KEY or CIS_RSA_PUBLIC_KEY_PATH).")
 
-import uuid
+    key_str = key_bytes.decode("utf-8", errors="ignore").strip()
+    if key_str.startswith("ssh-rsa"):
+        return serialization.load_ssh_public_key(key_bytes)
+    return serialization.load_pem_public_key(key_bytes)
 
-async def pull_branch_from_cis(db: AsyncSession, branch_id: str):
-    """Fetch a single branch from CIS and upsert it."""
-    async with get_cis_client() as client:
-        resp = await client.get(f"/api/v1/branches/{branch_id}")
-        resp.raise_for_status()
-        data = resp.json()
-        
-    # data has 'id', 'name', 'address', 'image_url'
-    b_id_str = data.get("id", branch_id)
+async def upsert_branch_payload(db: AsyncSession, data: Dict[str, Any]) -> Branch:
+    """Upsert a branch record from pushed webhook data payload."""
+    b_id_str = data.get("id") or data.get("branch_id")
+    if not b_id_str:
+        raise ValueError("Missing branch id in payload")
+    
     b_id = uuid.UUID(b_id_str)
     name = data.get("name")
     address = data.get("address")
@@ -51,26 +68,33 @@ async def pull_branch_from_cis(db: AsyncSession, branch_id: str):
     await db.flush()
     return branch
 
-async def pull_doctor_from_cis(db: AsyncSession, cis_id: str):
-    """Fetch a single doctor from CIS and upsert."""
-    async with get_cis_client() as client:
-        resp = await client.get(f"/api/v1/doctors/{cis_id}")
-        resp.raise_for_status()
-        data = resp.json()
+async def delete_branch_payload(db: AsyncSession, branch_id: str):
+    """Soft delete a branch record."""
+    b_id = uuid.UUID(branch_id)
+    stmt = select(Branch).where(Branch.id == b_id)
+    branch = (await db.execute(stmt)).scalar_one_or_none()
+    if branch:
+        branch.deleted_at = datetime.now(timezone.utc)
+        await db.flush()
+
+async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
+    """Upsert a doctor record and branch associations from pushed webhook payload."""
+    cis_id = data.get("cis_id") or data.get("doctor_cis_id")
+    if not cis_id:
+        raise ValueError("Missing doctor cis_id in payload")
         
-    d_cis_id = data.get("cis_id", cis_id)
     name = data.get("name")
     email = data.get("email")
     branch_ids = data.get("branch_ids", [])
     
-    stmt = select(User).where(User.cis_id == d_cis_id)
+    stmt = select(User).where(User.cis_id == cis_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
     
     if not user:
         user = User(
             email=email,
             name=name,
-            cis_id=d_cis_id,
+            cis_id=cis_id,
             type=UserType.DOCTOR,
             token_limit=0
         )
@@ -82,105 +106,56 @@ async def pull_doctor_from_cis(db: AsyncSession, cis_id: str):
         
     await db.flush()
     
-    # Sync Branches
-    # First, make sure branches exist locally
-    for b_id_str in branch_ids:
-        b_id = uuid.UUID(b_id_str)
-        # Check if exists
-        b_stmt = select(Branch).where(Branch.id == b_id)
-        b = (await db.execute(b_stmt)).scalar_one_or_none()
-        if not b:
-            # We don't have this branch yet, pull it individually
-            await pull_branch_from_cis(db, b_id_str)
-            
-    # Remove old branch assignments
+    # Sync Doctor-Branch associations
+    # Remove existing branch mappings for this user
     await db.execute(UserBranch.__table__.delete().where(UserBranch.user_id == user.id))
     
-    # Add new branch assignments
+    # Re-add mappings if branch exists
     for b_id_str in branch_ids:
         b_id = uuid.UUID(b_id_str)
-        db.add(UserBranch(user_id=user.id, branch_id=b_id))
-        
+        b_stmt = select(Branch).where(Branch.id == b_id)
+        branch = (await db.execute(b_stmt)).scalar_one_or_none()
+        if branch:
+            db.add(UserBranch(user_id=user.id, branch_id=b_id))
+            
     await db.flush()
     return user
 
-async def sync_doctors_from_cis_task(db: AsyncSession):
-    """
-    Full scheduled sync. Fetches all branches and doctors.
-    """
-    logger.info("Starting scheduled CIS data sync...")
+async def delete_doctor_payload(db: AsyncSession, cis_id: str):
+    """Soft delete a doctor record."""
+    stmt = select(User).where(User.cis_id == cis_id, User.type == UserType.DOCTOR)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if user:
+        user.deleted_at = datetime.now(timezone.utc)
+        await db.flush()
+
+async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]):
+    """Process a full bulk sync payload containing branches and doctors lists."""
+    branches_data = data.get("branches", [])
+    doctors_data = data.get("doctors", [])
     
-    try:
-        from datetime import datetime, timezone
+    pulled_branch_ids = set()
+    for b_data in branches_data:
+        branch = await upsert_branch_payload(db, b_data)
+        pulled_branch_ids.add(branch.id)
         
-        async with get_cis_client() as client:
-            # 1. Fetch all branches
-            b_resp = await client.get("/api/v1/branches")
-            if b_resp.status_code == 200:
-                pulled_branch_ids = set()
-                b_data = b_resp.json().get("branches", [])
-                for branch_data in b_data:
-                    b_id_str = branch_data.get("branch_id") or branch_data.get("id")
-                    if b_id_str:
-                        b_id = uuid.UUID(b_id_str)
-                        pulled_branch_ids.add(b_id)
-                        stmt = select(Branch).where(Branch.id == b_id)
-                        branch = (await db.execute(stmt)).scalar_one_or_none()
-                        if not branch:
-                            branch = Branch(
-                                id=b_id,
-                                name=branch_data.get("name"),
-                                address=branch_data.get("address"),
-                                image_url=branch_data.get("image_url")
-                            )
-                            db.add(branch)
-                        else:
-                            branch.name = branch_data.get("name")
-                            branch.address = branch_data.get("address")
-                            branch.image_url = branch_data.get("image_url")
-                            branch.deleted_at = None
-                await db.flush()
-                
-                # Soft delete branches not in the pulled set
-                all_b_stmt = select(Branch).where(Branch.deleted_at.is_(None))
-                all_branches = (await db.execute(all_b_stmt)).scalars().all()
-                for b in all_branches:
-                    if b.id not in pulled_branch_ids:
-                        b.deleted_at = datetime.now(timezone.utc)
-                await db.flush()
-                
-            # 2. Fetch all doctors
-            d_resp = await client.get("/api/v1/doctors")
-            if d_resp.status_code == 200:
-                pulled_doc_cis_ids = set()
-                d_data = d_resp.json().get("doctors", [])
-                for doctor_data in d_data:
-                    # 'doctor_cis_id' from list endpoint
-                    cis_id = doctor_data.get("doctor_cis_id") or doctor_data.get("cis_id")
-                    if cis_id:
-                        pulled_doc_cis_ids.add(cis_id)
-                        # Pull detailed doctor data to get branch mappings
-                        await pull_doctor_from_cis(db, cis_id)
-                        
-                # Soft delete doctors not in the pulled set
-                all_d_stmt = select(User).where(User.type == UserType.DOCTOR, User.deleted_at.is_(None))
-                all_doctors = (await db.execute(all_d_stmt)).scalars().all()
-                for d in all_doctors:
-                    if d.cis_id and d.cis_id not in pulled_doc_cis_ids:
-                        d.deleted_at = datetime.now(timezone.utc)
-                await db.flush()
-
-        await db.commit()
-        logger.info("CIS data sync complete.")
-    except Exception as e:
-        logger.error(f"CIS sync failed: {e}")
-        await db.rollback()
-
-async def sync_doctors_from_cis():
-    async with AsyncSessionLocal() as session:
-        await sync_doctors_from_cis_task(session)
-
-def setup_cis_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(sync_doctors_from_cis, 'cron', hour=2, minute=0)
-    return scheduler
+    # Soft delete local branches omitted from full sync
+    all_b_stmt = select(Branch).where(Branch.deleted_at.is_(None))
+    all_branches = (await db.execute(all_b_stmt)).scalars().all()
+    for b in all_branches:
+        if b.id not in pulled_branch_ids:
+            b.deleted_at = datetime.now(timezone.utc)
+            
+    pulled_doc_cis_ids = set()
+    for d_data in doctors_data:
+        doctor = await upsert_doctor_payload(db, d_data)
+        pulled_doc_cis_ids.add(doctor.cis_id)
+        
+    # Soft delete local doctors omitted from full sync
+    all_d_stmt = select(User).where(User.type == UserType.DOCTOR, User.deleted_at.is_(None))
+    all_doctors = (await db.execute(all_d_stmt)).scalars().all()
+    for d in all_doctors:
+        if d.cis_id and d.cis_id not in pulled_doc_cis_ids:
+            d.deleted_at = datetime.now(timezone.utc)
+            
+    await db.flush()

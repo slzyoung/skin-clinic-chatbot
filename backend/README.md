@@ -23,7 +23,7 @@ FastAPI Modular Monolith backend powering the Skin Clinic AI Chatbot system. It 
 
 The backend is structured as a **FastAPI Modular Monolith** designed for scalability, clean domain separation, and dynamic feature loading:
 
-- **Core Module**: Provides core REST API services including user management, JWT authentication, clinic branch configuration, category management, and background scheduling for daily CIS attendance sync via `APScheduler`.
+- **Core Module**: Provides core REST API services including user management, JWT authentication, clinic branch administration, category management, and event-driven CIS data synchronization via RSA-signed webhooks (`POST /api/webhooks/cis`).
 - **AI/RAG Module (`app/rag`)**: Implements an enterprise RAG pipeline. It handles document parsing (via `Docling`), text chunking, dynamic embedding generation, hybrid vector similarity search (`pgvector`), reranking, and contextual LLM answer generation.
 - **Dual-Mode Startup**: If RAG-specific dependencies in `requirements.txt` are absent, `app/main.py` gracefully boots in **Core-Only** mode without breaking core API services.
 
@@ -33,10 +33,10 @@ The backend is structured as a **FastAPI Modular Monolith** designed for scalabi
        └───────┬────────┘
                │ HTTP / REST
                ▼
-┌───────────────────────────────┐
-│     FastAPI Backend Core      │
-│  ┌──────────┬──────────────┐  │
-│  │   Auth   │  Branch/CIS  │  │
+┌───────────────────────────────┐                  ┌─────────────────┐
+│     FastAPI Backend Core      │ <── Webhooks ─── │    Mock CIS     │
+│  ┌──────────┬──────────────┐  │  RSA Signed      │ (Automated Sync)│
+│  │   Auth   │  Branch/User │  │ (X-Signature)    └─────────────────┘
 │  ├──────────┴──────────────┤  │
 │  │  RAG Engine (app/rag)   │  │
 │  └──────────┬──────────────┘  │
@@ -78,9 +78,8 @@ backend/
 │   │       ├── chats.py          # Chat session history & user message persistence
 │   │       ├── config.py         # Dynamic AppConfig (active LLM keys, embedding models)
 │   │       ├── knowledge.py      # Knowledge base admin review & CRUD
-│   │       ├── sync.py           # Manual CIS attendance synchronization trigger
 │   │       ├── users.py          # User management & RBAC profile administration
-│   │       └── webhooks.py       # External service webhooks
+│   │       └── webhooks.py       # External service webhooks & RSA-signed CIS triggers
 │   ├── core/                     # Core application infrastructure
 │   │   ├── config.py             # Base Pydantic settings & environment validation
 │   │   ├── database.py           # Async SQLAlchemy engine & AsyncSessionLocal factory
@@ -94,7 +93,7 @@ backend/
 │   │   └── user.py               # User accounts & role models
 │   ├── schemas/                  # Pydantic DTOs for request/response validation
 │   ├── services/                 # Core domain business logic
-│   │   └── cis_sync.py           # Mock CIS API synchronization background task
+│   │   └── cis_sync.py           # RSA-signed CIS webhook event processors & key loader
 │   │
 │   ├── rag/                      # RAG Engine Subsystem (Merged & Adapted from eksperimen-rag)
 │   │   ├── core/                 # Core Abstractions & Vector Store Adapters
@@ -176,8 +175,8 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 UPLOAD_DIR=data/uploads
 
 # --- External CIS Integration ---
-CIS_BASE_URL=http://localhost:8001
-CIS_API_TOKEN=default_cis_token
+CIS_RSA_PUBLIC_KEY_PATH=keys/cis_public_key.pem
+# CIS_RSA_PUBLIC_KEY="-----BEGIN RSA PUBLIC KEY-----\n...\n-----END RSA PUBLIC KEY-----"
 
 # --- RAG & Embedding Model Settings ---
 # EMBEDDING_PROVIDER options: huggingface | openai | google
@@ -320,7 +319,7 @@ docker compose -f docker-compose.prod.yaml up --build backend
 | **Clinic Branches**     | `/api/branches`   | Clinic location list, operating hours, branch configuration.                                      |
 | **Categories**          | `/api/categories` | Product & service categories catalog.                                                             |
 | **Chat Sessions**       | `/api/chats`      | Chat session creation, user message history persistence.                                          |
-| **CIS Sync**            | `/api/sync`       | Manual trigger for daily attendance sync with Mock CIS service.                                   |
+| **Webhooks**            | `/api/webhooks`   | `/cis` (Receive RSA-signed data pushes from CIS).                                                 |
 
 ---
 

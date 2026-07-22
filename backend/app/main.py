@@ -1,15 +1,11 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.core.config import settings
-from app.api.routers import auth, users, branches, categories, knowledge, chats, webhooks, config, sync
-from app.services.cis_sync import setup_cis_scheduler
-
-scheduler = setup_cis_scheduler()
+from app.api.routers import auth, users, branches, categories, knowledge, chats, webhooks, config
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    scheduler.start()
     try:
         from app.rag.embeddings import ensure_embedding_dimension_synced
         await ensure_embedding_dimension_synced()
@@ -17,7 +13,6 @@ async def lifespan(app: FastAPI):
         print(f"Skipped startup embedding dimension check: {e}")
     yield
     # Shutdown
-    scheduler.shutdown()
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -45,7 +40,6 @@ app.include_router(knowledge.router, prefix="/api/knowledge")
 app.include_router(chats.router, prefix="/api/chats")
 app.include_router(webhooks.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
-app.include_router(sync.router, prefix="/api")
 
 # --- RAG Integration (Dynamic Load) ---
 try:
