@@ -25,6 +25,22 @@ services:
       - mock-cis
     volumes:
       - ./backend:/app
+      - ./.hf_cache:/root/.cache/huggingface
+
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
 
   mock-cis:
     build:
