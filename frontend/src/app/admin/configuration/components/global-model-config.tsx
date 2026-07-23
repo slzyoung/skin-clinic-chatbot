@@ -193,7 +193,13 @@ export function GlobalModelConfig() {
 							type="text"
 							disabled={!isEditing}
 							value={modelName}
-							placeholder="e.g. gpt-4o, deepseek-chat"
+							placeholder={
+								activeProvider === "gemini"
+									? "e.g. gemini-2.5-flash, gemini-1.5-pro"
+									: activeProvider === "deepseek"
+										? "e.g. deepseek-chat, deepseek-coder"
+										: "e.g. gpt-4o-mini, gpt-4o"
+							}
 							onChange={(e) => {
 								setModelName(e.target.value);
 								setIsValidated(null);
@@ -209,7 +215,13 @@ export function GlobalModelConfig() {
 								type={showKeys ? "text" : "password"}
 								disabled={!isEditing}
 								value={apiKey}
-								placeholder="Enter API Key..."
+								placeholder={
+									activeProvider === "gemini"
+										? "e.g. AIzaSy..."
+										: activeProvider === "deepseek"
+											? "e.g. sk-..."
+											: "e.g. sk-proj-..."
+								}
 								onChange={(e) => {
 									setApiKey(e.target.value);
 									setIsValidated(null);

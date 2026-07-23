@@ -23,6 +23,8 @@ import {
 import { api } from "@/lib/axios"
 import { toast } from "sonner"
 import ReactMarkdown from "react-markdown"
+import { useQueryClient } from "@tanstack/react-query"
+import { knowledgeKeys } from "@/app/admin/knowledge/api/keys"
 
 interface ChatPreviewProps {
   knowledgeId?: string;
@@ -44,8 +46,9 @@ export function ChatPreview({ knowledgeId, knowledgeStatus, aiSummary, fileName,
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
-  const initialSummaryMessage: Message | null = aiSummary
+  const initialSummaryMessage: Message | null = aiSummary && knowledgeStatus !== "PROCESSING"
     ? { role: "assistant", content: `### AI Document Executive Summary\n\n${aiSummary}` }
     : null;
 
@@ -74,13 +77,27 @@ export function ChatPreview({ knowledgeId, knowledgeStatus, aiSummary, fileName,
     setIsLoading(true);
 
     try {
-      const response = await api.post("/ai/chat", {
-        query: userMsg.content,
-        knowledge_id: knowledgeId,
-        history: messages
-      });
-      
-      setUserChatMessages((prev) => [...prev, { role: "assistant", content: response.data.answer }]);
+      if (knowledgeStatus === "PENDING" && fileName) {
+        const response = await api.post(`/ai/ingest/pending/${fileName}/refine`, {
+          prompt: userMsg.content,
+        });
+        const chatResponse = response.data.summary 
+          ? `Here is the updated summary:\n\n${response.data.summary}`
+          : "I've updated the document summary based on your instructions.";
+        setUserChatMessages((prev) => [...prev, { role: "assistant", content: chatResponse }]);
+        
+        if (knowledgeId) {
+          queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(knowledgeId) });
+        }
+      } else {
+        const response = await api.post("/ai/chat", {
+          query: userMsg.content,
+          knowledge_id: knowledgeId,
+          history: messages
+        });
+        
+        setUserChatMessages((prev) => [...prev, { role: "assistant", content: response.data.answer }]);
+      }
     } catch {
       toast.error("Failed to send message to AI.");
     } finally {
