@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     LLM_MODEL_NAME: str = "gpt-4o-mini"
     OPENAI_API_KEY: Optional[str] = None
-    GEMINI_API_KEY: Optional[str] = None
 
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 

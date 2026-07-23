@@ -24,26 +24,29 @@ router = APIRouter(tags=["Chats"])
 
 async def process_ai_response(session_id: uuid.UUID, user_query: str):
     """
-    Background task to generate AI response without exposing AI dependencies to core.
+    Background task to generate AI response using app.rag pipeline.
     """
     try:
-        from app.rag.generation.factory import get_dynamic_llm
-        from app.rag.retrieval.retriever import HybridRetriever
-        from app.rag.retrieval.reranker import ExternalReranker
-        from app.rag.generation.generator import GenerationPipeline
-        from app.rag.embeddings import get_dynamic_embeddings
+        from app.rag.services.factory import AdapterFactory
+        from app.rag.services.rag_retriever import HybridRetriever, BM25Index, Reranker
+        from app.rag.services.rag_generator import GenerationPipeline
+        from app.rag.config import settings as rag_settings
     except ImportError as e:
         logger.error(f"AI dependencies missing: {e}")
         return
 
     async with AsyncSessionLocal() as db:
         try:
-            llm = await get_dynamic_llm(db)
-            embeddings = await get_dynamic_embeddings(db)
-            
-            reranker = ExternalReranker(llm=llm)
-            retriever = HybridRetriever(session=db, embeddings_model=embeddings, reranker=reranker)
-            pipeline = GenerationPipeline(retriever=retriever, llm_adapter=llm)
+            vector_store = AdapterFactory.get_vector_store()
+            bm25_index = BM25Index()
+            try:
+                bm25_index.load(rag_settings.bm25_index_path)
+            except Exception:
+                pass
+            reranker = Reranker(model_name=rag_settings.reranker_model_name)
+            retriever = HybridRetriever(vector_store=vector_store, bm25_index=bm25_index, reranker=reranker)
+            llm_adapter = await AdapterFactory.get_dynamic_llm(db)
+            pipeline = GenerationPipeline(retriever=retriever, llm_adapter=llm_adapter)
             
             stmt_msg = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
             result_msg = await db.execute(stmt_msg)
@@ -53,10 +56,10 @@ async def process_ai_response(session_id: uuid.UUID, user_query: str):
             if history and history[-1]["role"] == "user":
                 history.pop()
             
-            response_dict = await pipeline.generate_answer(
+            response_dict = pipeline.generate_answer(
                 query=user_query,
                 top_k=5,
-                rerank=False,
+                rerank=True,
                 history=history
             )
             

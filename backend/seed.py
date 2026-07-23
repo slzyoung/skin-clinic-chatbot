@@ -11,7 +11,7 @@ import app.models # Ensure all models are loaded
 
 async def init_db():
     print("Connecting to database...")
-    engine = create_async_engine(settings.DATABASE_URL, echo=True)
+    engine = create_async_engine(settings.DATABASE_URL, echo=False)
     
     print("Creating tables...")
     async with engine.begin() as conn:

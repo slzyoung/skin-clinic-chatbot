@@ -51,9 +51,25 @@ async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(re
     provider = req.provider.lower()
     
     try:
-        if provider in ["openai", "deepseek"]:
-            # DeepSeek is OpenAI compatible API-wise for listing models
-            url = "https://api.openai.com/v1/models" if provider == "openai" else "https://api.deepseek.com/models"
+        if provider == "gemini":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.model_name}?key={req.api_key}"
+            req_obj = urllib.request.Request(url)
+            with urllib.request.urlopen(req_obj, timeout=5) as response:
+                if response.status != 200:
+                    raise HTTPException(status_code=400, detail="Invalid API Key or Model for Gemini")
+        elif provider in ["openai", "deepseek", "ollama"]:
+            from app.rag.services.factory import AdapterFactory
+            resolved_base_url = AdapterFactory._resolve_provider_base_url(provider)
+            
+            if provider == "openai":
+                url = "https://api.openai.com/v1/models"
+            elif provider == "deepseek":
+                url = "https://api.deepseek.com/models"
+            elif resolved_base_url:
+                url = f"{resolved_base_url.rstrip('/')}/models"
+            else:
+                url = "https://api.openai.com/v1/models"
+                
             headers = {"Authorization": f"Bearer {req.api_key}"}
             req_obj = urllib.request.Request(url, headers=headers)
             
@@ -63,22 +79,16 @@ async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(re
                 
                 res_data = json.loads(response.read().decode())
                 models = [m["id"] for m in res_data.get("data", [])]
-                if req.model_name not in models:
+                if req.model_name and models and req.model_name not in models:
                     raise HTTPException(
                         status_code=400, 
                         detail=f"Model '{req.model_name}' not found. Valid models include: {', '.join(models[:3])}..."
                     )
-
-        elif provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.model_name}?key={req.api_key}"
-            req_obj = urllib.request.Request(url)
-            with urllib.request.urlopen(req_obj, timeout=5) as response:
-                if response.status != 200:
-                    raise HTTPException(status_code=400, detail="Invalid API Key or Model for Gemini")
         else:
             raise HTTPException(status_code=400, detail="Unknown provider")
             
         return {"status": "ok", "message": "API Key and Model validated successfully."}
+
 
     except urllib.error.HTTPError as e:
         if e.code == 401:
