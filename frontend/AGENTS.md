@@ -10,20 +10,34 @@ Next.js 16 + React 19 frontend utilizing Tailwind CSS v4 and Shadcn UI.
 frontend/
 ├── src/
 │   ├── app/                 # Next.js App Router pages and layouts
+│   │   ├── admin/           # Admin Dashboard (knowledge, users, categories, configuration, etc.)
+│   │   ├── doctor/          # Doctor Portal (chat assistant, patient history)
 │   │   ├── globals.css      # Global Tailwind directives and CSS variables
 │   │   ├── layout.tsx       # Root layout
 │   │   └── page.tsx         # Home page
 │   ├── components/
-│   │   ├── ui/              # shadcn/ui primitives (Button, Input, etc.) - DO NOT edit directly unless modifying base styles
-│   │   └── shared/          # Reusable composite components (e.g., Navigation, Cards)
-│   ├── hooks/               # Custom React hooks
+│   │   ├── ui/              # shadcn/ui primitives - DO NOT edit directly unless modifying base styles
+│   │   └── shared/          # Reusable composite components
+│   ├── hooks/               # Custom React hooks (React Query / TanStack Query hooks)
 │   └── lib/
-│       └── utils.ts         # Utility functions, including cn() for Tailwind classes
-├── components.json          # shadcn/ui configuration (style: base-mira, iconLibrary: remixicon)
+│       ├── axios.ts         # Central Axios client instance (baseURL: http://localhost:8000/api)
+│       └── utils.ts         # Utility functions
+├── components.json          # shadcn/ui configuration
 ├── next.config.ts           # Next.js configuration
 ├── package.json             # Dependencies
-└── tailwind.config.ts       # Tailwind configuration (if applicable, though v4 relies heavily on CSS vars)
+└── tailwind.config.ts       # Tailwind configuration
 ```
+
+## Backend & RAG Integration Workflow
+
+The frontend connects to the unified FastAPI Backend service running on `http://localhost:8000/api`:
+
+| Feature Area | Frontend Route / Component | Backend Endpoint | Integration Details |
+|---|---|---|---|
+| **Doctor AI Chat** | `/doctor/chat` | `POST /api/chats/` & `POST /api/chats/{id}/messages` | Sends user messages; backend RAG engine generates AI answers with citations `[1]`, `[2]` via background tasks. |
+| **Knowledge Base Upload** | `/admin/knowledge` | `POST /api/ai/ingest` & `GET /api/knowledge/` | Uploads files via `POST /api/ai/ingest` (Docling + CustomChunker + PGVector/BM25) and tracks status via `GET /api/knowledge/`. |
+| **Interactive AI Refinement** | `/admin/knowledge` | `POST /api/ai/ingest/pending/{file}/refine` | Allows admins to refine chunk content via natural language prompt instructions. |
+| **Configuration** | `/admin/configuration` | `GET/PUT /api/config/` | Updates active LLM keys, models (`gpt-4o-mini`), and system settings. |
 
 ## Agent Instructions & Rules
 
@@ -34,15 +48,6 @@ frontend/
 - **State/Hooks:** Custom hooks go in `src/hooks/`, utility functions go in `src/lib/`.
 - **Aliases:** Use `@/*` to import from the `src/` directory (e.g., `@/components/ui/button`, `@/lib/utils`).
 
-## Slicing Workflow
-
-When instructed to slice a design from Figma:
-1. **Analyze:** Check `docs/DESIGN.md` for existing design tokens (colors, typography).
-2. **Shadcn First:** If a component can be built using a Shadcn primitive, use it. 
-3. **Icons:** We use `remixicon`. Import them as React components via `@remixicon/react`. **Never** use `lucide-react`, even if a boilerplate tool generates it.
-4. **Accessibility (a11y):** Ensure all interactive elements are accessible. Add `aria-label`s and screen-reader only text (`sr-only`) for icon-only buttons.
-5. **Verify Constraints:** BEFORE finalizing the component or asking for user review, you **MUST** double-check your code against `docs/DESIGN.md` to ensure no explicit design constraints (e.g., border radii, shadows, responsive layout rules) were accidentally overridden by generic templates.
-
 ## Tech Stack Context
 
 | Library | Purpose |
@@ -52,24 +57,13 @@ When instructed to slice a design from Figma:
 | Tailwind CSS v4 | Utility-first styling |
 | shadcn/ui | Headless component primitives (base-mira style) |
 | remixicon | Icon library |
+| TanStack Query | Server state management & API data fetching |
 
 ## Commands
 
 | Action | Command |
 |--------|---------|
-| Dev server | `npm run dev` |
+| Dev server | `pnpm dev` (or `npm run dev`) |
 | Add Shadcn Component | `npx shadcn add <component>` |
-| Build | `npm run build` |
-| Lint | `npm run lint` |
-
-## Best Practices & Guidelines
-
-- **Double-Check Design Rules:** Always perform a final manual review of your component code against `docs/DESIGN.md` before ending your turn. Boilerplate generators (like Shadcn CLI) often output code that violates project-specific constraints.
-
-- **Server vs. Client Components:** Default to Server Components. Only add `"use client"` at the very top of a file when it absolutely requires interactivity (e.g., `useState`, `useEffect`, `onClick`, or browser APIs). Push `"use client"` as far down the component tree as possible.
-- **File Naming Conventions:** Use `kebab-case` for all component and utility files (e.g., `doctor-details-sheet.tsx`, `date-formatter.ts`) for consistency.
-- **Strict Type Safety:** Never use `any`. Always define strict `interface` or `type` aliases for component props and data models.
-- **Colocation Principle:** Keep helper functions, sub-components, and types close to where they are used. If a type is only used in one specific route or feature, keep it in that local directory rather than polluting the global `src/lib/` or `src/components/shared/` folders.
-- **Form Handling:** Always use `@tanstack/react-form` combined with `zod` for all form state management and validations.
-- **Zod Schemas:** Always define Zod schemas in a separate `schema.ts` (or appropriately named) file alongside the component or feature, rather than keeping them inline within the UI component file.
-- **Error Handling:** Use React Error Boundaries for global/page-level rendering errors, and gracefully handle local component errors (e.g., inline error states). See `docs/integration.md` for API error handling.
+| Build | `pnpm build` |
+| Lint | `pnpm lint` |

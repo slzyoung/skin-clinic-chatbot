@@ -1,54 +1,80 @@
 # AGENTS.md — Arya Noble Backend Agent Configuration
 
-> **Core Directive:** This file serves as the source of truth for the FastAPI backend architecture, tech stack, and conventions. Always refer back to this document when generating new APIs or models.
+> **Core Directive:** This file serves as the source of truth for the FastAPI backend architecture, tech stack, conventions, and AI team collaboration workflow. Always refer back to this document when generating new APIs, models, or RAG pipeline features.
 
 ## Project Context
 We are building the backend for the **Arya Noble AI Chatbot (Clinic Information System)**. 
-- **Goal**: Serve as a robust standard API for user authentication, CRUD operations, and syncing data from the CIS.
-- **Scope Split**: The core API, Auth, and DB logic is handled here. The AI/RAG (Langchain) logic will be handled by a partner developer later. The backend must provide clear integration points (e.g., stub services) for the partner to inject Langchain code.
+- **Goal**: Serve as a robust standard API for user authentication, CRUD operations, syncing data from the CIS, and driving an enterprise-grade Retrieval-Augmented Generation (RAG) engine.
+- **Unified Team Workspace**: Both Backend Engineers and AI Engineers work directly in this repository (`backend/`). The AI subsystem lives entirely inside `backend/app/rag/`.
 
 ## Technology Stack
 | Layer | Technology |
 |---|---|
-| Framework | FastAPI |
-| Database | PostgreSQL with `pgvector` |
-| ORM | SQLAlchemy 2.0 (Async) |
-| DB Driver | `asyncpg` |
+| Framework | FastAPI (Python 3.11+) |
+| Database | PostgreSQL 15+ with `pgvector` extension |
+| ORM & Driver | SQLAlchemy 2.0 (AsyncIO) + `asyncpg` (Core DB), `psycopg[binary]` (PGVectorAdapter) |
 | Auth | JWT stored in `HttpOnly` cookies |
-| Background Tasks | `APScheduler` (for CIS syncing) |
+| RAG Engine | LangChain, HuggingFace (`BAAI/bge-m3`), OpenAI (`gpt-4o-mini`), Docling, `rank-bm25`, Cross-Encoder Reranker (`BAAI/bge-reranker-base`) |
+| Background Tasks | FastAPI `BackgroundTasks`, `APScheduler` (for CIS syncing) |
 
-## Project Structure
-We follow a strictly layered architecture to ensure maintainability without over-engineering:
+## Project Structure & AI Subsystem
+
 ```text
 backend/
+├── alembic/                  # Database migration scripts
 ├── app/
-│   ├── api/
-│   │   ├── routers/        # Endpoint definitions grouped by resource
-│   │   └── dependencies.py # Reusable deps (e.g., get_db_session, get_current_user)
-│   ├── core/
-│   │   ├── config.py       # Pydantic BaseSettings
-│   │   └── security.py     # JWT hashing and cookie management
-│   ├── models/             # SQLAlchemy ORM models
-│   ├── schemas/            # Pydantic schemas for requests/responses
-│   ├── services/
-│   │   ├── auth_service.py # Business logic for login
-│   │   ├── cis_sync.py     # Background task fetching CIS data
-│   │   └── rag_service.py  # Interface/stubs for the Langchain partner
-│   └── main.py             # App entrypoint
+│   ├── api/                  # REST Controllers & middleware guards
+│   │   ├── dependencies.py   # Auth guards, DB session injection, role permissions
+│   │   └── routers/          # Feature domain routers (auth, branches, chats, knowledge, etc.)
+│   ├── core/                 # Core infrastructure (config, database, security)
+│   ├── models/               # SQLAlchemy ORM models (User, ChatSession, Knowledge, etc.)
+│   ├── schemas/              # Core Pydantic request/response DTOs
+│   ├── services/             # Business logic (auth_service, cis_sync)
+│   │
+│   ├── rag/                  # 🤖 UNIFIED AI & RAG SUBSYSTEM (AI Team Workspace)
+│   │   ├── config.py         # Isolated RAG configuration settings (settings.py)
+│   │   ├── deps.py           # FastAPI dependency injection for RAG singletons
+│   │   ├── router.py         # RAG endpoints (/api/ai/* - ingest, chat, search, pending, refine, evaluate)
+│   │   ├── schemas.py        # Pydantic schemas for RAG API payloads
+│   │   ├── services/         # Core AI Pipeline Services
+│   │   │   ├── evaluation.py     # Search quality evaluator (Hit Rate, MRR)
+│   │   │   ├── factory.py        # AdapterFactory (OpenAI / Gemini / PGVector adapters)
+│   │   │   ├── interfaces.py     # BaseVectorStoreAdapter & BaseLLMAdapter base classes
+│   │   │   ├── rag_generator.py  # GenerationPipeline & OpenAIAdapter
+│   │   │   ├── rag_pipeline.py   # IngestionPipeline (Docling -> CustomChunker -> Vector DB)
+│   │   │   ├── rag_retriever.py  # HybridRetriever (BM25 + PGVector + Reranker + Intent Boosting)
+│   │   │   └── vector_store.py   # PGVectorAdapter (vector similarity search via pgvector)
+│   │   └── utils/            # RAG Utilities
+│   │       ├── chunker.py        # Heading-based & Semantic CustomChunker strategies
+│   │       ├── logger.py         # Structured logging helpers
+│   │       ├── metadata.py       # Document metadata extraction & language detection
+│   │       └── parser.py         # Docling document text & table extraction engine
+│   └── main.py               # FastAPI app factory, lifespan singletons & router mounts
 ```
 
-## Core Agent Rules & Workflows
-1. **Asynchronous First**: Always use `async`/`await` for DB queries (`AsyncSession`, `execute()`, `scalars()`) and API endpoints.
-2. **Cookie-Based JWT Auth**: 
-   - Never send tokens directly in JSON response bodies. 
-   - Always set tokens via `response.set_cookie(key="access_token", value=..., httponly=True)`.
-3. **Database Models**: 
-   - Ensure SQLAlchemy models perfectly mirror `infra/schema.sql`.
-   - Use `pgvector` library types (e.g., `Vector`) for embedding columns.
-4. **Soft Deletes**: Respect the `deleted_at` column in tables like `users` and `branches`. Do not issue raw `DELETE` statements; update `deleted_at` to `now()` instead.
+## Core Rules & AI/BE Integration Workflow
+
+1. **AI Subsystem Encapsulation (`app/rag/`)**:
+   - All AI/RAG changes must be made within `backend/app/rag/services/`, `backend/app/rag/utils/`, or `backend/app/rag/router.py`.
+   - Never create external standalone RAG repositories; always collaborate directly inside `backend/app/rag/`.
+
+2. **Lifespan Singleton Pattern**:
+   - Pipeline components (`HybridRetriever`, `BM25Index`, `Reranker`, `GenerationPipeline`, `PGVectorAdapter`) are initialized once during startup in `app/main.py` lifespan and attached to `app.state`.
+   - Route handlers access singletons via `request.app.state` via `app/rag/deps.py`.
+
+3. **Frontend Integration & Dual-Syncing**:
+   - **Doctor Chat**: `process_ai_response` in `app/api/routers/chats.py` calls `GenerationPipeline` and writes answers into PostgreSQL `ChatMessage` table.
+   - **Knowledge Base Upload**: `POST /api/ai/ingest` parses and indexes documents into `PGVector` + `BM25` while dual-syncing document records into PostgreSQL `Knowledge` DB table for FE admin dashboard tracking.
+
+4. **Asynchronous Core vs Synchronous RAG Adapters**:
+   - Core API endpoints use `AsyncSession` (`asyncpg`).
+   - RAG `PGVectorAdapter` manages its own synchronous `psycopg` pool for `pgvector` table operations.
 
 ## Commands
+
 | Action | Command (from `backend/` directory) |
 |---|---|
-| Install Deps | `pip install -r requirements.txt` (or via `uv` / `poetry` if configured) |
+| Install Deps | `pip install -r requirements.txt` |
 | Run Server | `uvicorn app.main:app --reload` |
+| Run Migrations | `alembic upgrade head` |
+| Test Swagger Docs | Open `http://localhost:8000/docs` in browser |

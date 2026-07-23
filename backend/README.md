@@ -95,29 +95,24 @@ backend/
 │   ├── services/                 # Core domain business logic
 │   │   └── cis_sync.py           # RSA-signed CIS webhook event processors & key loader
 │   │
-│   ├── rag/                      # RAG Engine Subsystem (Merged & Adapted from eksperimen-rag)
-│   │   ├── core/                 # Core Abstractions & Vector Store Adapters
+│   ├── rag/                      # RAG Engine Subsystem (Unified from arya-noble-rag)
+│   │   ├── config.py             # Isolated RAG configuration settings
+│   │   ├── deps.py               # FastAPI dependency injection for RAG singletons
+│   │   ├── router.py             # RAG Endpoints (/api/ai/* - ingest, chat, search, pending, refine, evaluate)
+│   │   ├── schemas.py            # Pydantic schemas for RAG API payloads
+│   │   ├── services/             # Core AI Pipeline Services (AI Team Workspace)
+│   │   │   ├── evaluation.py     # Retrieval & search quality evaluator (Hit Rate, MRR)
+│   │   │   ├── factory.py        # LLM & Vector Store adapter factories (OpenAI primary)
 │   │   │   ├── interfaces.py     # BaseVectorStoreAdapter & BaseLLMAdapter base classes
-│   │   │   └── vector.py         # PgVectorAdapter (executes cosine distance search via pgvector)
-│   │   ├── embeddings/           # Embedding Model Manager & Schema Sync
-│   │   │   └── embedder.py       # get_dynamic_embeddings(), schema auto-sync & background re-indexer
-│   │   ├── ingestion/            # Document Parsing & Chunking Pipeline
-│   │   │   ├── parser.py         # Docling / PyPDF document text & layout extraction
-│   │   │   ├── chunker.py        # Semantic & Recursive text chunking strategies
-│   │   │   ├── metadata.py       # Document metadata extraction (headers, source, type)
-│   │   │   └── pipeline.py       # IngestionPipeline (orchestrates parsing -> chunking -> vector insertion)
-│   │   ├── retrieval/            # Vector & Hybrid Candidate Retrieval
-│   │   │   ├── retriever.py      # HybridRetriever (combines vector distance + SQL keyword filtering)
-│   │   │   └── reranker.py       # ExternalReranker (LLM / Cross-Encoder relevance scoring)
-│   │   ├── generation/           # Contextual Answer Generation & Summarization
-│   │   │   ├── builder.py        # Prompt templates & context builder
-│   │   │   ├── factory.py        # Dynamic LLM provider factory (OpenAI, Gemini, Local)
-│   │   │   ├── generator.py      # GenerationPipeline (Retrieval + Reranking + LLM answer synthesis)
-│   │   │   └── summarizer.py     # Document AI summary generator for newly uploaded knowledge
-│   │   ├── evaluation/           # RAG Metric Evaluation
-│   │   │   └── evaluator.py      # RAG quality evaluator (Faithfulness, Context Precision)
-│   │   ├── router.py             # FastAPI RAG Controller (/api/ai/ingest, /api/ai/chat, /api/ai/search)
-│   │   └── schemas.py            # Pydantic schemas for RAG API payloads
+│   │   │   ├── rag_generator.py  # GenerationPipeline & OpenAIAdapter/GeminiAdapter
+│   │   │   ├── rag_pipeline.py   # IngestionPipeline (Docling -> CustomChunker -> Vector DB)
+│   │   │   ├── rag_retriever.py  # HybridRetriever (BM25 + PGVector + Reranker + Intent Boosting)
+│   │   │   └── vector_store.py   # PGVectorAdapter (executes vector similarity search via pgvector)
+│   │   └── utils/                # RAG Utilities (AI Team Workspace)
+│   │       ├── chunker.py        # Heading-based & Semantic CustomChunker strategies
+│   │       ├── logger.py         # Structured logging helpers
+│   │       ├── metadata.py       # Document metadata extraction & language detection
+│   │       └── parser.py         # Docling document text & table extraction engine
 │   └── main.py                   # FastAPI app factory, lifespan events & router mounts
 ├── .env                          # Local environment variables (git-ignored)
 ├── .env.example                  # Environment configuration template

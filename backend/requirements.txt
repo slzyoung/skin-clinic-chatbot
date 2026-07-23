@@ -27,3 +27,6 @@ docling                     # Deep document parsing engine for complex PDFs & ta
 sentence-transformers       # Local vector embedding generation (e.g., BAAI/bge-m3)
 unstructured                # Unstructured document parsing fallback
 langdetect                  # Natural language detection for document content
+rank-bm25                   # In-memory BM25 sparse keyword index engine
+psycopg[binary]             # Synchronous PostgreSQL driver for PGVector adapter
+
