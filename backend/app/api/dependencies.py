@@ -44,29 +44,34 @@ async def get_current_user(
         
     return user
 
-async def require_admin_role(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> User:
-    from app.models.user import UserType, Role, UserRole
-    if current_user.type != UserType.STAFF:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff access required")
-    stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
-    result = await db.execute(stmt)
-    if "ADMIN" not in result.scalars().all():
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    return current_user
+class RequireAccess:
+    def __init__(self, required_access: str):
+        self.required_access = required_access
 
-async def require_functional_or_admin(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> User:
-    from app.models.user import UserType, Role, UserRole
-    if current_user.type != UserType.STAFF:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff access required")
-    stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == current_user.id)
-    result = await db.execute(stmt)
-    roles = result.scalars().all()
-    if "ADMIN" not in roles and "FUNCTIONAL" not in roles:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Functional access required")
-    return current_user
+    async def __call__(self, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+        from app.models.user import UserType, Role, UserRole, RoleAccess, Access, UserAccess
+        
+        if current_user.type != UserType.STAFF:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff access required")
+            
+        stmt_acc = (
+            select(Access.name)
+            .join(RoleAccess, RoleAccess.access_id == Access.id)
+            .join(UserRole, UserRole.role_id == RoleAccess.role_id)
+            .where(UserRole.user_id == current_user.id)
+        )
+        
+        stmt_user_acc = (
+            select(Access.name)
+            .join(UserAccess, UserAccess.access_id == Access.id)
+            .where(UserAccess.user_id == current_user.id)
+        )
+        
+        union_stmt = stmt_acc.union(stmt_user_acc)
+        result = await db.execute(union_stmt)
+        user_accesses = result.scalars().all()
+        
+        if self.required_access not in user_accesses:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Required access: {self.required_access}")
+            
+        return current_user

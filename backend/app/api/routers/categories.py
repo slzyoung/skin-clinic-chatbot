@@ -5,7 +5,7 @@ from typing import List
 import uuid
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user, require_admin_role
+from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType
 from app.models.category import Category
 from app.schemas.category import CategoryCreate, CategoryUpdate, CategoryResponse
@@ -16,7 +16,7 @@ router = APIRouter(tags=["Categories"])
 @router.get("/", response_model=List[CategoryResponse])
 async def list_categories(
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("categories:read"))
 ):
     stmt = select(Category).where(Category.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -26,7 +26,7 @@ async def list_categories(
 async def create_category(
     category_in: CategoryCreate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("categories:write"))
 ):
     stmt = select(Category).where(Category.name == category_in.name, Category.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -44,7 +44,7 @@ async def update_category(
     category_id: uuid.UUID,
     category_in: CategoryUpdate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("categories:write"))
 ):
     stmt = select(Category).where(Category.id == category_id, Category.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -65,7 +65,7 @@ async def update_category(
 async def delete_category(
     category_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("categories:write"))
 ):
     stmt = select(Category).where(Category.id == category_id, Category.deleted_at.is_(None))
     result = await db.execute(stmt)

@@ -5,6 +5,7 @@ interface JwtPayload {
   sub?: string;
   type?: "STAFF" | "DOCTOR";
   roles?: string[];
+  accesses?: string[];
   exp?: number;
 }
 
@@ -34,12 +35,7 @@ export function proxy(request: NextRequest) {
     if (payload.type === "DOCTOR") {
       homePath = "/doctor";
     } else if (payload.type === "STAFF") {
-      const roles = payload.roles || [];
-      if (roles.includes("ADMIN")) {
-        homePath = "/admin/knowledge";
-      } else {
-        homePath = "/functional/ingest";
-      }
+      homePath = "/dashboard/knowledge";
     }
   }
 
@@ -51,26 +47,14 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Handle /admin routes
-  if (pathname.startsWith("/admin")) {
-    if (!isAuthenticated) {
-      const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set("from", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
-    if (payload?.type !== "STAFF") {
-      return NextResponse.redirect(new URL("/doctor", request.url));
-    }
-    // If token includes roles array, enforce ADMIN role
-    const roles = payload?.roles;
-    if (roles && Array.isArray(roles) && roles.length > 0 && !roles.includes("ADMIN")) {
-      return NextResponse.redirect(new URL("/functional/ingest", request.url));
-    }
-    return NextResponse.next();
+  // Redirect old /admin and /functional to /dashboard
+  if (pathname.startsWith("/admin") || pathname.startsWith("/functional")) {
+    const newPath = pathname.replace(/^\/(admin|functional)/, "/dashboard");
+    return NextResponse.redirect(new URL(newPath, request.url));
   }
 
-  // Handle /functional routes
-  if (pathname.startsWith("/functional")) {
+  // Handle /dashboard routes
+  if (pathname.startsWith("/dashboard")) {
     if (!isAuthenticated) {
       const loginUrl = new URL("/login", request.url);
       loginUrl.searchParams.set("from", pathname);
@@ -79,6 +63,12 @@ export function proxy(request: NextRequest) {
     if (payload?.type !== "STAFF") {
       return NextResponse.redirect(new URL("/doctor", request.url));
     }
+    
+    // We could do granular route checking here if we want,
+    // e.g., if (pathname.startsWith("/dashboard/users") && !payload.accesses.includes("users:read"))
+    // but the backend API protects the data, and the sidebar won't show the links.
+    // For now, allow navigation to /dashboard/* and rely on backend 403s for protection.
+    
     return NextResponse.next();
   }
 
@@ -99,5 +89,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/functional/:path*", "/doctor/:path*", "/login"],
+  matcher: ["/admin/:path*", "/functional/:path*", "/dashboard/:path*", "/doctor/:path*", "/login"],
 };

@@ -8,7 +8,7 @@ from app.core.config import settings
 from jose import jwt, JWTError
 
 from sqlalchemy import select
-from app.models.user import User, UserType, Role, UserRole
+from app.models.user import User, UserType, Role, UserRole, RoleAccess, Access, UserAccess
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,12 +27,30 @@ async def login(
         )
         
     roles = []
+    accesses = []
     if user.type == UserType.STAFF:
         stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
         result = await db.execute(stmt)
         roles = list(result.scalars().all())
+        
+        stmt_acc = (
+            select(Access.name)
+            .join(RoleAccess, RoleAccess.access_id == Access.id)
+            .join(UserRole, UserRole.role_id == RoleAccess.role_id)
+            .where(UserRole.user_id == user.id)
+        )
+        
+        stmt_user_acc = (
+            select(Access.name)
+            .join(UserAccess, UserAccess.access_id == Access.id)
+            .where(UserAccess.user_id == user.id)
+        )
+        
+        union_stmt = stmt_acc.union(stmt_user_acc)
+        result_acc = await db.execute(union_stmt)
+        accesses = list(result_acc.scalars().all())
 
-    access_token = create_access_token(subject=str(user.id), user_type=user.type, roles=roles)
+    access_token = create_access_token(subject=str(user.id), user_type=user.type, roles=roles, accesses=accesses)
     refresh_token = create_refresh_token(subject=str(user.id))
     
     response.set_cookie(
@@ -84,11 +102,29 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
         roles = []
+        accesses = []
         if user.type == UserType.STAFF:
             stmt_roles = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
             roles = list((await db.execute(stmt_roles)).scalars().all())
+            
+            stmt_acc = (
+                select(Access.name)
+                .join(RoleAccess, RoleAccess.access_id == Access.id)
+                .join(UserRole, UserRole.role_id == RoleAccess.role_id)
+                .where(UserRole.user_id == user.id)
+            )
+            
+            stmt_user_acc = (
+                select(Access.name)
+                .join(UserAccess, UserAccess.access_id == Access.id)
+                .where(UserAccess.user_id == user.id)
+            )
+            
+            union_stmt = stmt_acc.union(stmt_user_acc)
+            result_acc = await db.execute(union_stmt)
+            accesses = list(result_acc.scalars().all())
 
-        new_access_token = create_access_token(subject=str(user.id), user_type=user.type, roles=roles)
+        new_access_token = create_access_token(subject=str(user.id), user_type=user.type, roles=roles, accesses=accesses)
         
         response.set_cookie(
             key="access_token",

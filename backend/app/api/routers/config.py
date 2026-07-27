@@ -4,7 +4,7 @@ from sqlalchemy import select
 from typing import List
 
 from app.core.database import get_db
-from app.api.dependencies import require_admin_role
+from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User
 from app.models.config import AppConfig
 from app.schemas.config import ConfigUpdate, ConfigResponse, LLMValidateRequest
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/config", tags=["config"])
 @router.get("/", response_model=List[ConfigResponse])
 async def list_config(
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("configuration:read"))
 ):
     stmt = select(AppConfig)
     result = await db.execute(stmt)
@@ -29,7 +29,7 @@ async def update_config(
     key: str,
     config_in: ConfigUpdate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("configuration:write"))
 ):
     stmt = select(AppConfig).where(AppConfig.key == key)
     result = await db.execute(stmt)
@@ -47,7 +47,7 @@ async def update_config(
     return config
 
 @router.post("/validate-llm")
-async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(require_admin_role)):
+async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(RequireAccess("configuration:write"))):
     provider = req.provider.lower()
     
     try:

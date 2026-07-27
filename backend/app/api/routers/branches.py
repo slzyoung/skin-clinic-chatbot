@@ -5,7 +5,7 @@ from typing import List
 import uuid
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user, require_admin_role
+from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType, UserTokenUsage
 from app.models.branch import Branch, UserBranch
 from app.models.category import Category, UserCategory
@@ -78,7 +78,7 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
 @router.get("/", response_model=List[BranchResponse])
 async def list_branches(
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("branches:read"))
 ):
     stmt = select(Branch).where(Branch.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -89,7 +89,7 @@ async def list_branches(
 async def create_branch(
     branch_in: BranchCreate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("branches:write"))
 ):
     branch = Branch(**branch_in.model_dump())
     db.add(branch)
@@ -102,7 +102,7 @@ async def update_branch(
     branch_id: uuid.UUID,
     branch_in: BranchUpdate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("branches:write"))
 ):
     stmt = select(Branch).where(Branch.id == branch_id, Branch.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -123,7 +123,7 @@ async def update_branch(
 async def delete_branch(
     branch_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("branches:write"))
 ):
     stmt = select(Branch).where(Branch.id == branch_id, Branch.deleted_at.is_(None))
     result = await db.execute(stmt)

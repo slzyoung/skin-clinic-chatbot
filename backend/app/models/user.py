@@ -45,6 +45,25 @@ class UserRole(Base, TimestampMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     role_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("role.id", ondelete="CASCADE"), primary_key=True)
 
+class Access(Base, TimestampMixin):
+    __tablename__ = "access"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+class RoleAccess(Base, TimestampMixin):
+    __tablename__ = "role_access"
+
+    role_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("role.id", ondelete="CASCADE"), primary_key=True)
+    access_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("access.id", ondelete="CASCADE"), primary_key=True)
+
+class UserAccess(Base, TimestampMixin):
+    __tablename__ = "user_access"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    access_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("access.id", ondelete="CASCADE"), primary_key=True)
+
 class UserTokenUsage(Base, TimestampMixin):
     __tablename__ = "user_token_usage"
 

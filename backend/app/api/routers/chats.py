@@ -77,13 +77,18 @@ async def process_ai_response(session_id: uuid.UUID, user_query: str):
             db.add(fallback)
             await db.commit()
 
-async def is_admin_user(user: User, db: AsyncSession) -> bool:
+async def has_chats_read_access(user: User, db: AsyncSession) -> bool:
     if user.type != UserType.STAFF:
         return False
-    from app.models.user import Role, UserRole
-    stmt = select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
+    from app.models.user import Role, UserRole, RoleAccess, Access
+    stmt = (
+        select(Access.name)
+        .join(RoleAccess, RoleAccess.access_id == Access.id)
+        .join(UserRole, UserRole.role_id == RoleAccess.role_id)
+        .where(UserRole.user_id == user.id)
+    )
     result = await db.execute(stmt)
-    return "ADMIN" in result.scalars().all()
+    return "chats:read" in result.scalars().all()
 
 async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
     session_dict = {
@@ -124,7 +129,7 @@ async def list_chat_sessions(
     current_user: User = Depends(get_current_user)
 ):
     stmt = select(ChatSession)
-    if not await is_admin_user(current_user, db):
+    if not await has_chats_read_access(current_user, db):
         stmt = stmt.where(ChatSession.user_id == current_user.id)
     result = await db.execute(stmt)
     sessions = result.scalars().all()
@@ -160,7 +165,7 @@ async def update_chat_session(
     current_user: User = Depends(get_current_user)
 ):
     stmt = select(ChatSession).where(ChatSession.id == session_id)
-    if not await is_admin_user(current_user, db):
+    if not await has_chats_read_access(current_user, db):
         stmt = stmt.where(ChatSession.user_id == current_user.id)
         
     result = await db.execute(stmt)
@@ -185,7 +190,7 @@ async def list_chat_messages(
 ):
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
-    if not await is_admin_user(current_user, db):
+    if not await has_chats_read_access(current_user, db):
         stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
     
     result_session = await db.execute(stmt_session)
@@ -228,7 +233,7 @@ async def create_chat_message(
         )
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
-    if not await is_admin_user(current_user, db):
+    if not await has_chats_read_access(current_user, db):
         stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
     
     result_session = await db.execute(stmt_session)

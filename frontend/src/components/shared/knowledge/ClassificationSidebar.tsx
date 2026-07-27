@@ -1,9 +1,10 @@
+import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
+import { useUpdateKnowledgeStatus } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { RiMedicineBottleLine, RiFilePdf2Line, RiCheckLine, RiCloseLine } from "@remixicon/react";
-import { KnowledgeResponse } from "@/app/admin/knowledge/api/types";
-import { useUpdateKnowledgeStatus } from "@/app/admin/knowledge/hooks/use-knowledge";
+import { RiCheckLine, RiCloseLine, RiFilePdf2Line, RiMedicineBottleLine } from "@remixicon/react";
+import { useSession } from "@/hooks/use-session";
 
 interface ClassificationSidebarProps {
 	knowledge?: KnowledgeResponse;
@@ -11,6 +12,8 @@ interface ClassificationSidebarProps {
 
 export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps) {
 	const updateStatus = useUpdateKnowledgeStatus();
+	const { user } = useSession();
+	const hasWriteAccess = user?.accesses?.includes("knowledge:write");
 
 	if (!knowledge) return null;
 
@@ -50,7 +53,9 @@ export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps)
 						<label className="text-xs font-medium text-zinc-500 mb-1 block">Source</label>
 						<div className="flex items-center gap-1.5 text-red-500">
 							<RiFilePdf2Line className="size-4" />
-							<span className="text-sm font-medium">{knowledge.file_name?.split('.').pop()?.toUpperCase() || 'FILE'}</span>
+							<span className="text-sm font-medium">
+								{knowledge.file_name?.split(".").pop()?.toUpperCase() || "FILE"}
+							</span>
 						</div>
 					</div>
 
@@ -95,8 +100,8 @@ export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps)
 									{knowledge.ai_confidence !== null && knowledge.ai_confidence !== undefined
 										? `${Number(knowledge.ai_confidence)}%`
 										: knowledge.status === "PROCESSING"
-										? "Calculating..."
-										: "—"}
+											? "Calculating..."
+											: "—"}
 								</span>
 							</div>
 							<Progress
@@ -113,12 +118,13 @@ export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps)
 			</div>
 
 			{/* Manual Approval Action Card when status is PENDING or PROCESSING */}
-			{knowledge.status === "PENDING" && (
+			{knowledge.status === "PENDING" && hasWriteAccess && (
 				<div className="bg-white rounded-md border border-amber-200 shadow-sm p-4 flex flex-col gap-3">
 					<div className="flex flex-col">
 						<h3 className="text-sm font-semibold text-zinc-900">Review & Approval</h3>
 						<p className="text-xs text-zinc-500 mt-1">
-							Review the AI summary and chat with the document. Once verified, click approve to activate this knowledge base.
+							Review the AI summary and chat with the document. Once verified, click approve to
+							activate this knowledge base.
 						</p>
 					</div>
 					<div className="flex flex-col gap-2 pt-1">

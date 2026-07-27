@@ -1,12 +1,12 @@
 "use client";
 
+import { useKnowledgeBaseList } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import {
-	RiRobot2Line,
-	RiMedicineBottleLine,
-	RiSyringeLine,
 	RiDiscountPercentLine,
+	RiMedicineBottleLine,
+	RiRobot2Line,
+	RiSyringeLine,
 } from "@remixicon/react";
-import { useKnowledgeBaseList } from "@/app/admin/knowledge/hooks/use-knowledge";
 
 export function KnowledgeSummary() {
 	const { data: knowledgeList } = useKnowledgeBaseList();

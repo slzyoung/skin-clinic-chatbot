@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,20 +19,22 @@ import {
 	RiMoneyDollarCircleLine,
 	RiSearchLine,
 } from "@remixicon/react";
-import { useKnowledgeBaseList } from "../../../app/admin/knowledge/hooks/use-knowledge";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { useKnowledgeBaseList } from "../../../app/dashboard/knowledge/hooks/use-knowledge";
 
 export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const router = useRouter();
-	const pathname = usePathname();
 	const [searchQuery, setSearchQuery] = useState("");
 	const { data: knowledgeList, isLoading, isError } = useKnowledgeBaseList(type);
 
-	const basePath = pathname?.startsWith("/functional") ? "/functional/knowledge" : "/admin/knowledge";
+	const basePath = "/dashboard/knowledge";
 
 	const filteredList = knowledgeList
-		?.filter((item) =>
-			item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-			item.file_name.toLowerCase().includes(searchQuery.toLowerCase())
+		?.filter(
+			(item) =>
+				item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+				item.file_name.toLowerCase().includes(searchQuery.toLowerCase()),
 		)
 		.sort((a, b) => {
 			const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
@@ -45,13 +45,27 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const getStatusBadge = (status: string) => {
 		switch (status) {
 			case "APPROVED":
-				return <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50">{status}</Badge>;
+				return (
+					<Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+						{status}
+					</Badge>
+				);
 			case "PENDING":
-				return <Badge className="bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-50">{status}</Badge>;
+				return (
+					<Badge className="bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-50">
+						{status}
+					</Badge>
+				);
 			case "PROCESSING":
-				return <Badge className="bg-blue-50 text-blue-700 border-blue-200 animate-pulse hover:bg-blue-50">{status}</Badge>;
+				return (
+					<Badge className="bg-blue-50 text-blue-700 border-blue-200 animate-pulse hover:bg-blue-50">
+						{status}
+					</Badge>
+				);
 			case "REJECTED":
-				return <Badge className="bg-red-50 text-red-700 border-red-200 hover:bg-red-50">{status}</Badge>;
+				return (
+					<Badge className="bg-red-50 text-red-700 border-red-200 hover:bg-red-50">{status}</Badge>
+				);
 			default:
 				return <Badge variant="secondary">{status}</Badge>;
 		}
@@ -124,7 +138,11 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 
 						{!isLoading &&
 							filteredList?.map((row) => (
-								<TableRow key={row.id} className="hover:bg-gray-50/60 cursor-pointer" onClick={() => router.push(`${basePath}/${row.id}`)}>
+								<TableRow
+									key={row.id}
+									className="hover:bg-gray-50/60 cursor-pointer"
+									onClick={() => router.push(`${basePath}/${row.id}`)}
+								>
 									<TableCell>
 										<div className="flex items-center gap-3">
 											<Avatar className="w-10 h-10 rounded-md after:rounded-md">
@@ -156,9 +174,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 											{row.ai_summary || row.content || "No description available."}
 										</p>
 									</TableCell>
-									<TableCell>
-										{getStatusBadge(row.status)}
-									</TableCell>
+									<TableCell>{getStatusBadge(row.status)}</TableCell>
 									<TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
 										<div className="flex justify-end gap-2">
 											<Button

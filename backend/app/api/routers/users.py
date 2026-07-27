@@ -5,13 +5,13 @@ from typing import List, Optional
 import uuid
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user, require_admin_role
+from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType, Role, UserRole, UserTokenUsage
 from app.models.branch import Branch, UserBranch
 from app.models.category import Category, UserCategory
 from app.schemas.user import (
     UserResponse, UserCreateStaff, StaffUpdate, DoctorUpdate,
-    UserUpdateRoles, UserUpdateCategories
+    UserUpdateRoles, UserUpdateCategories, UserUpdateAccesses
 )
 from datetime import datetime, timezone
 from app.core.security import get_password_hash
@@ -37,10 +37,21 @@ async def _hydrate_user(user: User, db: AsyncSession) -> dict:
     }
     
     if user.type == UserType.STAFF:
+        from app.models.user import RoleAccess, Access
+        
         stmt = select(Role).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)
         result = await db.execute(stmt)
         roles = result.scalars().all()
         user_dict["roles"] = [{"id": r.id, "name": r.name} for r in roles]
+        
+        stmt_acc = (
+            select(Access.name)
+            .join(RoleAccess, RoleAccess.access_id == Access.id)
+            .join(UserRole, UserRole.role_id == RoleAccess.role_id)
+            .where(UserRole.user_id == user.id)
+        )
+        result_acc = await db.execute(stmt_acc)
+        user_dict["accesses"] = list(result_acc.scalars().all())
         
     elif user.type == UserType.DOCTOR:
         stmt_branch = select(Branch).join(UserBranch, UserBranch.branch_id == Branch.id).where(UserBranch.user_id == user.id)
@@ -78,7 +89,7 @@ async def read_users_me(
 async def list_users(
     type: Optional[UserType] = None,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("users:read"))
 ):
     stmt = select(User)
     if type:
@@ -92,7 +103,7 @@ async def list_users(
 async def create_staff(
     user_in: UserCreateStaff,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("users:write"))
 ):
     stmt = select(User).where(User.email == user_in.email)
     if (await db.execute(stmt)).scalar_one_or_none():
@@ -127,7 +138,7 @@ async def create_staff(
 async def get_user(
     user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("users:read"))
 ):
     stmt = select(User).where(User.id == user_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
@@ -140,7 +151,7 @@ async def update_user(
     user_id: uuid.UUID,
     user_in: dict, # We take a dict and parse it manually since it can be either Staff or Doctor
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("users:write"))
 ):
     stmt = select(User).where(User.id == user_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
@@ -178,7 +189,7 @@ async def update_user_categories(
     user_id: uuid.UUID,
     categories_in: UserUpdateCategories,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("users:write"))
 ):
     stmt = select(User).where(User.id == user_id, User.type == UserType.DOCTOR)
     user = (await db.execute(stmt)).scalar_one_or_none()
@@ -197,7 +208,7 @@ async def update_user_roles(
     user_id: uuid.UUID,
     roles_in: UserUpdateRoles,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("users:write"))
 ):
     stmt = select(User).where(User.id == user_id, User.type == UserType.STAFF)
     user = (await db.execute(stmt)).scalar_one_or_none()
@@ -214,5 +225,32 @@ async def update_user_roles(
             await db.flush()
         db.add(UserRole(user_id=user.id, role_id=role.id))
         
+    await db.commit()
+    return await _hydrate_user(user, db)
+
+@router.put("/{user_id}/accesses", response_model=UserResponse)
+async def update_user_accesses(
+    user_id: uuid.UUID,
+    accesses_in: UserUpdateAccesses,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(RequireAccess("users:write"))
+):
+    stmt = select(User).where(User.id == user_id, User.type == UserType.STAFF)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Staff not found")
+        
+    from app.models.user import UserAccess, Access
+    
+    # Delete all existing direct user accesses
+    await db.execute(UserAccess.__table__.delete().where(UserAccess.user_id == user_id))
+    
+    # Insert new direct accesses
+    for access_name in accesses_in.accesses:
+        stmt = select(Access).where(Access.name == access_name)
+        acc = (await db.execute(stmt)).scalar_one_or_none()
+        if acc:
+            db.add(UserAccess(user_id=user.id, access_id=acc.id))
+            
     await db.commit()
     return await _hydrate_user(user, db)

@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { PromptInput } from "@/components/shared/prompt-input";
 import {
 	RiFileTextLine,
@@ -8,6 +7,7 @@ import {
 	RiRobot2Line,
 	RiSyringeLine,
 } from "@remixicon/react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useUploadKnowledge } from "../knowledge/hooks/use-knowledge";
 
@@ -36,8 +36,8 @@ export default function IngestPage() {
 
 		uploadMutation.mutate(formData, {
 			onSuccess: (data) => {
-				router.push(`/admin/knowledge/${data.knowledge_id}`);
-			}
+				router.push(`/dashboard/knowledge/${data.knowledge_id}`);
+			},
 		});
 	};
 

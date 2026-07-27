@@ -29,49 +29,57 @@ import { useLogout } from "@/app/login/hooks/use-logout"
 
 import { useCurrentUser } from "@/hooks/use-current-user"
 
-const adminNav = [
+const staffNav = [
   {
     title: "Knowledge Base",
-    url: "/admin/knowledge",
+    url: "/dashboard/knowledge",
     icon: RiDatabase2Line,
+    requiredAccess: "knowledge:read"
   },
   {
     title: "Chat History",
-    url: "/admin/chat-history",
+    url: "/dashboard/chat-history",
     icon: RiHistoryLine,
+    requiredAccess: "chats:read"
   },
   {
     title: "User",
-    url: "/admin/users",
+    url: "/dashboard/users",
     icon: RiUser3Line,
+    requiredAccess: "users:read"
   },
   {
     title: "Category",
-    url: "/admin/category",
+    url: "/dashboard/category",
     icon: RiFunctionLine,
+    requiredAccess: "categories:read"
   },
   {
     title: "Configuration",
-    url: "/admin/configuration",
+    url: "/dashboard/configuration",
     icon: RiSettings4Line,
+    requiredAccess: "branches:read" 
   },
 ]
 
-export function AdminSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function StaffSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname()
   const { mutate: logout, isPending: isLoggingOut } = useLogout()
   const { data: user } = useCurrentUser()
   
-  const userName = user?.name || "Admin";
-  const userRole = user?.roles?.[0]?.name || "ADMIN";
-  const initials = userName.split(" ").map((n) => n[0]).join("").toUpperCase().substring(0, 2);
+  const userName = user?.name || "Staff";
+  const userRole = user?.roles?.[0]?.name || "STAFF";
+  const initials = userName.split(" ").map((n) => n[0]).join("").toUpperCase().substring(0, 2) || "ST";
+  const userAccesses = user?.accesses || [];
   
+  const visibleNav = staffNav.filter(item => userAccesses.includes(item.requiredAccess));
+
   return (
     <Sidebar collapsible="icon" {...props} className="border-r border-border">
       <SidebarHeader className="px-4 pt-4 pb-0 group-data-[collapsible=icon]:p-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/admin/ingest" />} className="hover:bg-transparent hover:text-inherit active:bg-transparent cursor-default p-0 group-data-[collapsible=icon]:justify-center">
+            <SidebarMenuButton size="lg" render={<Link href="/dashboard/knowledge" />} className="hover:bg-transparent hover:text-inherit active:bg-transparent cursor-default p-0 group-data-[collapsible=icon]:justify-center">
               <div className="flex aspect-square size-10 group-data-[collapsible=icon]:size-8 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-500">
                 <RiRobot2Line className="size-5 group-data-[collapsible=icon]:size-4" />
               </div>
@@ -85,14 +93,16 @@ export function AdminSidebar({ ...props }: React.ComponentProps<typeof Sidebar>)
       </SidebarHeader>
       
       <SidebarContent>
-        <div className="px-4 pt-12 pb-2 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pt-8">
-          <Button render={<Link href="/admin/ingest" />} nativeButton={false} className="w-full justify-center bg-blue-500 hover:bg-blue-600 text-white shadow-none h-10 px-3 rounded-md group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 shrink-0">
-            <RiFileAddLine className="mr-2 size-5 group-data-[collapsible=icon]:mr-0 group-data-[collapsible=icon]:size-4 shrink-0" />
-            <span className="font-medium text-sm group-data-[collapsible=icon]:hidden">Ingest Document</span>
-          </Button>
-        </div>
+        {userAccesses.includes("knowledge:write") && (
+          <div className="px-4 pt-12 pb-2 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:pt-8">
+            <Button render={<Link href="/dashboard/ingest" />} nativeButton={false} className="w-full justify-center bg-blue-500 hover:bg-blue-600 text-white shadow-none h-10 px-3 rounded-md group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 shrink-0">
+              <RiFileAddLine className="mr-2 size-5 group-data-[collapsible=icon]:mr-0 group-data-[collapsible=icon]:size-4 shrink-0" />
+              <span className="font-medium text-sm group-data-[collapsible=icon]:hidden">Ingest Document</span>
+            </Button>
+          </div>
+        )}
         <SidebarMenu className="px-3 mt-2 space-y-1 group-data-[collapsible=icon]:px-2">
-          {adminNav.map((item) => {
+          {visibleNav.map((item) => {
             const isActive = pathname === item.url || pathname.startsWith(item.url + '/');
             return (
               <SidebarMenuItem key={item.title}>

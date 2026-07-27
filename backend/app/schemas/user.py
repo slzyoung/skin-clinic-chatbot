@@ -39,6 +39,9 @@ class UserUpdateBranches(BaseModel):
 class UserUpdateCategories(BaseModel):
     categories: List[UUID]
 
+class UserUpdateAccesses(BaseModel):
+    accesses: List[str]
+
 class UserResponse(UserBase):
     id: UUID
     type: UserType
@@ -50,6 +53,7 @@ class UserResponse(UserBase):
     status: Optional[str] = None
     tokens_used: Optional[int] = None
     roles: Optional[List[RoleResponse]] = None
+    accesses: Optional[List[str]] = None
     branches: Optional[List[BranchResponse]] = None
     categories: Optional[List[CategoryResponse]] = None
 

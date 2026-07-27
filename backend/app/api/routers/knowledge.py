@@ -5,7 +5,7 @@ from typing import List
 import uuid
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user, require_admin_role, require_functional_or_admin
+from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType
 from app.models.knowledge import Knowledge, KnowledgeStatus
 from app.schemas.knowledge import KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse
@@ -16,7 +16,7 @@ router = APIRouter(tags=["Knowledge"])
 @router.get("/", response_model=List[KnowledgeResponse])
 async def list_knowledge(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_functional_or_admin)
+    current_user: User = Depends(RequireAccess("knowledge:read"))
 ):
     stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None)).order_by(Knowledge.created_at.desc())
     result = await db.execute(stmt)
@@ -26,7 +26,7 @@ async def list_knowledge(
 async def get_knowledge(
     knowledge_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_functional_or_admin)
+    current_user: User = Depends(RequireAccess("knowledge:read"))
 ):
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -41,7 +41,7 @@ async def get_knowledge(
 async def create_knowledge(
     knowledge_in: KnowledgeCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_functional_or_admin)
+    current_user: User = Depends(RequireAccess("knowledge:write"))
 ):
     knowledge = Knowledge(**knowledge_in.model_dump(), uploaded_by=current_user.id)
     db.add(knowledge)
@@ -64,7 +64,7 @@ ALLOWED_MIME_TYPES = {
 async def upload_knowledge_file(
     files: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_functional_or_admin)
+    current_user: User = Depends(RequireAccess("knowledge:write"))
 ):
     results = []
     for file in files:
@@ -81,7 +81,7 @@ async def update_knowledge_status(
     knowledge_id: uuid.UUID,
     status_in: KnowledgeUpdateStatus,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_functional_or_admin)
+    current_user: User = Depends(RequireAccess("knowledge:write"))
 ):
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
     result = await db.execute(stmt)
@@ -102,7 +102,7 @@ async def update_knowledge_status(
 async def delete_knowledge(
     knowledge_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_admin_role)
+    current_admin: User = Depends(RequireAccess("knowledge:delete"))
 ):
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
     result = await db.execute(stmt)
