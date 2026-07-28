@@ -8,6 +8,7 @@ import uuid
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
+from app.services.cis_sync import get_cis_public_key
 
 # Used for Swagger UI only, actual auth happens via cookies
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
@@ -27,15 +28,27 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
         
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id_str: str = payload.get("sub")
-        if user_id_str is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-        user_id = uuid.UUID(user_id_str)
-    except (JWTError, ValueError):
+        header = jwt.get_unverified_header(token)
+        if header.get("alg") == "RS256":
+            # This is a CIS-signed token
+            public_key = get_cis_public_key()
+            payload = jwt.decode(token, public_key, algorithms=["RS256"])
+            user_cis_id = payload.get("sub")
+            if not user_cis_id:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            stmt = select(User).where(User.cis_id == user_cis_id, User.deleted_at.is_(None))
+        else:
+            # This is a backend-signed token
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id_str: str = payload.get("sub")
+            if user_id_str is None:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            user_id = uuid.UUID(user_id_str)
+            stmt = select(User).where(User.id == user_id, User.deleted_at.is_(None))
+            
+    except (JWTError, ValueError) as e:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
         
-    stmt = select(User).where(User.id == user_id, User.deleted_at.is_(None))
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     
