@@ -33,6 +33,7 @@ frontend/
 - **Component Creation:** Place reusable components in `src/components/shared/`. If it's a Shadcn component, the CLI will place it in `src/components/ui/`.
 - **Use the Shadcn Skill:** When adding new Shadcn UI components, you **MUST** use the Shadcn CLI: `npx shadcn add <component_name>`.
 - **Task Tracking (`TODO.md`):** After completing a slicing task and receiving confirmation from the user, you **MUST** update `TODO.md` by marking the relevant checkbox as `[x]`.
+- **Frontend Revisions Logging:** Always update `docs/rev.md` after making frontend interface changes that add or adjust features affecting the flow. This ensures the backend team is aware of necessary API or configuration changes.
 - **Pages:** Follow the Next.js App Router conventions inside `src/app/`.
 - **State/Hooks:** Custom hooks go in `src/hooks/`, utility functions go in `src/lib/`.
 - **Aliases:** Use `@/*` to import from the `src/` directory (e.g., `@/components/ui/button`, `@/lib/utils`).
