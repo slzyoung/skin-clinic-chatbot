@@ -30,6 +30,7 @@ class ChatHistoryResponse(ChatSessionResponse):
     query: str
     messages: int
     doctor: str
+    branch: str
     
     model_config = ConfigDict(from_attributes=True)
 

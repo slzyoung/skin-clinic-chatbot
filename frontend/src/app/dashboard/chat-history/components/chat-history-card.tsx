@@ -1,4 +1,4 @@
-import { RiCalendarLine, RiMessageAi3Line } from "@remixicon/react"
+import { RiCalendarLine, RiMessageAi3Line, RiHospitalLine, RiUser3Line } from "@remixicon/react"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import type { ChatHistoryResponse } from "../api/types"
@@ -25,15 +25,15 @@ export function ChatHistoryCard({ item }: { item: ChatHistoryResponse }) {
         </div>
         <div className="flex items-center gap-1.5">
           <Avatar className="size-4">
-            <AvatarFallback className="text-[8px] bg-primary/10 text-primary">
-              {item.doctor
-                .replace("Dr. ", "")
-                .split(" ")
-                .map((n) => n[0])
-                .join("")}
+            <AvatarFallback className="bg-primary/10 text-primary">
+              <RiUser3Line className="size-2.5" />
             </AvatarFallback>
           </Avatar>
           <span>{item.doctor}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <RiHospitalLine className="size-3.5" />
+          <span>{item.branch}</span>
         </div>
       </div>
     </Card>

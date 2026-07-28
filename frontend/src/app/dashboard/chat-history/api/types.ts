@@ -21,4 +21,5 @@ export interface ChatHistoryResponse extends ChatSessionResponse {
   query: string;
   messages: number;
   doctor: string;
+  branch: string;
 }

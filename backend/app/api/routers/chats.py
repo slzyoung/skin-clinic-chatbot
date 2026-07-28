@@ -9,6 +9,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 from app.core.database import AsyncSessionLocal
+from app.models.branch import Branch
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -103,7 +104,8 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
         "updated_at": session.updated_at,
         "query": "",
         "messages": 0,
-        "doctor": "Unknown"
+        "doctor": "Unknown",
+        "branch": "Unknown Branch"
     }
     
     # Get total message count
@@ -120,6 +122,11 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
     stmt_user = select(User.name).where(User.id == session.user_id)
     result_user = await db.execute(stmt_user)
     session_dict["doctor"] = result_user.scalar() or "Unknown"
+    
+    # Get the branch name
+    stmt_branch = select(Branch.name).where(Branch.id == session.branch_id)
+    result_branch = await db.execute(stmt_branch)
+    session_dict["branch"] = result_branch.scalar() or "Unknown Branch"
     
     return session_dict
 
