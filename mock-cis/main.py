@@ -3,8 +3,13 @@ import json
 import base64
 import asyncio
 import httpx
+import jwt
+import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from cryptography.hazmat.primitives import hashes
@@ -184,6 +189,41 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="CIS Dashboard Mock API & Webhook Pusher", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/doctors")
+async def get_doctors():
+    return MOCK_DOCTORS
+
+class LoginRequest(BaseModel):
+    cis_id: str
+
+@app.post("/api/login")
+async def login(req: LoginRequest):
+    doctor = next((d for d in MOCK_DOCTORS if d["cis_id"] == req.cis_id), None)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+        
+    private_key = load_private_key()
+    payload = {
+        "sub": doctor["cis_id"],
+        "iat": datetime.datetime.now(datetime.timezone.utc),
+        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=12)
+    }
+    token = jwt.encode(payload, private_key, algorithm="RS256")
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "doctor": doctor
+    }
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "mock-cis"}
@@ -220,3 +260,19 @@ async def trigger_push_all(webhook_url: Optional[str] = None):
         }
     }
     return await send_signed_webhook(payload, webhook_url)
+
+# Serve static files from React build (dist folder)
+frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+
+if os.path.exists(frontend_dist):
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
+    
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        if full_path.startswith("api/") or full_path.startswith("trigger/") or full_path == "health":
+            raise HTTPException(status_code=404, detail="Endpoint not found")
+            
+        index_file = os.path.join(frontend_dist, "index.html")
+        if os.path.exists(index_file):
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Frontend build not found")
