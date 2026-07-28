@@ -9,7 +9,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { RiCheckLine, RiEdit2Line, RiLoader4Line, RiEyeLine, RiEyeOffLine } from "@remixicon/react";
+import { RiCheckLine, RiEdit2Line, RiLoader4Line, RiEyeLine, RiEyeOffLine, RiInformationFill } from "@remixicon/react";
 import * as React from "react";
 import { useConfigs, useUpdateConfig, useValidateLLM } from "../hooks/use-config";
 import { toast } from "sonner";
@@ -86,7 +86,7 @@ export function GlobalModelConfig() {
 	}
 
 	return (
-		<div className="flex flex-col gap-4 w-full">
+		<div className="flex flex-col w-full">
 			<div className="flex flex-col gap-6 border border-black-50 rounded-lg p-4 bg-white">
 				{/* Top Part: Title and Edit Button */}
 				<div className="flex justify-between items-start">
@@ -245,6 +245,19 @@ export function GlobalModelConfig() {
 						Validation failed. Ensure your API Key matches the active provider and model.
 					</p>
 				)}
+			</div>
+
+			<div
+				className={`transition-all duration-300 ease-in-out overflow-hidden ${
+					isEditing ? "opacity-100 max-h-40 mt-4" : "opacity-0 max-h-0 mt-0"
+				}`}
+			>
+				<div className="flex items-start gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
+					<RiInformationFill className="size-5 text-amber-500 mt-0.5 shrink-0" />
+					<p className="text-sm text-amber-700 mt-0.5">
+						<strong className="font-semibold text-amber-900">Note: </strong> Changes apply instantly to <strong className="font-semibold text-amber-900">new sessions</strong>. Any existing, active sessions will retain their original settings until they expire or are closed.
+					</p>
+				</div>
 			</div>
 		</div>
 	);
