@@ -117,38 +117,44 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             session.commit()
             logger.info(f"Successfully inserted {len(chunks)} chunks into PGVector.")
 
+    from functools import lru_cache
+
+    @lru_cache(maxsize=2048)
+    def _get_cached_embedding(self, query: str) -> List[float]:
+        return self.embeddings.embed_query(query)
+
     def search(self, query: str, top_k: int = 5, filter_metadata: Any = None) -> List[Dict]:
         """
         Embeds the query and searches PGVector for the closest points using cosine distance.
+        Calculates exact cosine similarity (1.0 - distance).
         """
         try:
-            query_vector = self.embeddings.embed_query(query)
+            query_vector = self._get_cached_embedding(query)
             
             with self.Session() as session:
-                # Cosine distance: embedding.cosine_distance(query_vector)
-                # We want to order by distance ASC (closest first)
-                q = session.query(DocumentChunk)
+                dist_col = DocumentChunk.embedding.cosine_distance(query_vector).label("dist")
+                q = session.query(DocumentChunk, dist_col).filter(DocumentChunk.deleted_at.is_(None))
                 
                 if filter_metadata:
                     for k, v in filter_metadata.items():
-                        # filter on JSONB metadata
-                        q = q.filter(DocumentChunk.metadata_[k].astext == str(v))
+                        if isinstance(v, list):
+                            from sqlalchemy import or_
+                            or_clauses = [DocumentChunk.metadata_[k].astext.ilike(f"%{item}%") for item in v if item]
+                            if or_clauses:
+                                q = q.filter(or_(*or_clauses))
+                        elif v:
+                            q = q.filter(DocumentChunk.metadata_[k].astext.ilike(f"%{v}%"))
                         
-                results = q.order_by(DocumentChunk.embedding.cosine_distance(query_vector)).limit(top_k).all()
+                results = q.order_by(dist_col).limit(top_k).all()
                 
                 hits = []
-                for hit in results:
-                    # cosine_distance returns (1 - cosine_similarity), so score is (1 - dist)
-                    # wait, pgvector cosine_distance operator `<=>` gives distance. 
-                    # For RAG logic expecting higher is better (similarity), we can roughly invert it if needed,
-                    # but typically hybrid search code in `rag_retriever` sorts correctly or uses it as abstract score.
-                    # Qdrant gave similarity [0, 1]. Let's invert pgvector's distance to get similarity.
-                    # Just setting score=1.0 as a placeholder since we can't easily get the raw distance without extra query columns,
-                    # actually we can just return a dummy score or we can query the distance explicitly.
+                for hit_chunk, dist in results:
+                    dist_val = float(dist) if dist is not None else 1.0
+                    similarity = float(max(0.0, 1.0 - dist_val))
                     hits.append({
-                        "text": hit.text,
-                        "score": 1.0, # Dummy score, reranker will handle actual scoring
-                        "metadata": hit.metadata_
+                        "text": hit_chunk.text,
+                        "score": similarity,
+                        "metadata": hit_chunk.metadata_
                     })
                 return hits
         except Exception as e:

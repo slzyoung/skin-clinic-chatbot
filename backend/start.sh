@@ -14,7 +14,7 @@ python -c "from sentence_transformers import SentenceTransformer; SentenceTransf
 
 echo "Starting application in $ENV mode..."
 if [ "$ENV" = "dev" ]; then
-    exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 else
     exec uvicorn app.main:app --host 0.0.0.0 --port 8000
 fi

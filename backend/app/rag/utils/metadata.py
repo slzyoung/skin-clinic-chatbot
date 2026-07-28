@@ -19,14 +19,26 @@ class MetadataEnricher:
         return int(len(words) * 1.3)
 
     def detect_document_language(self, doc) -> str:
-        """Detects the language of the document based on the first few paragraphs."""
+        """Detects the language of the document based on the first few paragraphs.
+        Supports both ParseResult and DoclingDocument objects."""
         if not doc:
             return "en"
-            
-        # Gather text elements to detect language
+        
         sample_text = []
         char_count = 0
-        if hasattr(doc, "texts"):
+        
+        # Handle ParseResult (fast path)
+        from app.rag.utils.parser import ParseResult
+        if isinstance(doc, ParseResult):
+            for page_data in doc.pages:
+                text = page_data.get("text", "").strip()
+                if text:
+                    sample_text.append(text[:2000])
+                    char_count += min(len(text), 2000)
+                    if char_count > 2000:
+                        break
+        # Handle DoclingDocument (docling path)
+        elif hasattr(doc, "texts"):
             for element in doc.texts:
                 if hasattr(element, "text") and element.text.strip():
                     text = element.text.strip()

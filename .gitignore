@@ -1,7 +1,15 @@
 /.hf_cache
 /eksperimen-rag
-.md
 .venv
 .env
 .env.*
 !.env.example
+
+# Temporary RAG data
+backend/data/temp/*
+backend/data/pending/*
+backend/data/output/*
+backend/data/bm25_index.pkl
+!backend/data/temp/.gitkeep
+!backend/data/pending/.gitkeep
+!backend/data/output/.gitkeep

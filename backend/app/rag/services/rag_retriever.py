@@ -219,7 +219,7 @@ class Reranker:
                 enriched_text = f"Product: {product_name} | Section: {section} | Content: {text}"
                 pairs.append([query, enriched_text])
             
-            scores = self.model.predict(pairs)
+            scores = self.model.predict(pairs, batch_size=32, show_progress_bar=False)
             
             reranked_hits = []
             for hit, score in zip(hits, scores):
@@ -385,11 +385,16 @@ class HybridRetriever:
                             fused_hits.append(hit)
             logger.info(f"Interleaved sub-queries completed. Combined into {len(fused_hits)} candidates.")
         else:
-            dense_hits = self.vector_store.search(query, top_k=candidate_k, filter_metadata=filter_metadata) if self.vector_store else []
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_dense = executor.submit(self.vector_store.search, query, candidate_k, filter_metadata) if self.vector_store else None
+                future_sparse = executor.submit(self.bm25_index.search, query, candidate_k, filter_metadata) if self.bm25_index else None
+                
+                dense_hits = future_dense.result() if future_dense else []
+                sparse_hits = future_sparse.result() if future_sparse else []
+
             if self.vector_store:
                 logger.debug(f"Dense retrieval returned {len(dense_hits)} candidates.")
-            
-            sparse_hits = self.bm25_index.search(query, top_k=candidate_k, filter_metadata=filter_metadata) if self.bm25_index else []
             if self.bm25_index:
                 logger.debug(f"Sparse retrieval returned {len(sparse_hits)} candidates.")
             

@@ -107,7 +107,7 @@ app.include_router(config.router, prefix="/api")
 # --- RAG Integration Router ---
 try:
     from app.rag.router import router as rag_router
-    app.include_router(rag_router, prefix="/api/ai", tags=["AI / RAG"])
+    app.include_router(rag_router, prefix="/api/ai")
     print("AI Module loaded successfully!")
 except Exception as e:
     print(f"AI module skipped due to error: {e}")

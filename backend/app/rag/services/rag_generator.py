@@ -1,3 +1,5 @@
+import os
+import json
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
@@ -26,22 +28,42 @@ class OpenAIAdapter(BaseLLMAdapter):
         self.llm = ChatOpenAI(**kwargs)
 
     def generate(self, prompt: str) -> str:
-        response = self.llm.invoke(prompt)
-        return response.content
+        import time
+        max_retries = 3
+        backoff_delay = 5.0
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.llm.invoke(prompt)
+                return response.content
+            except Exception as e:
+                err_msg = str(e)
+                if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "Quota exceeded" in err_msg or "rate-limit" in err_msg.lower()) and attempt < max_retries:
+                    logger.warning(f"LLM 429 Rate limit hit (attempt {attempt}/{max_retries}). Retrying in {backoff_delay}s... Error: {err_msg}")
+                    time.sleep(backoff_delay)
+                    backoff_delay *= 2.0
+                else:
+                    logger.error(f"LLM generation failed on attempt {attempt}/{max_retries}: {e}")
+                    raise e
 
 
 
 # --- System Prompt Configuration ---
 
-SYSTEM_PROMPT = """You are CHAT AI ERHA, a helpful, professional, and highly knowledgeable medical aesthetic assistant for ERHA (PT Arya Noble) products, treatments, FAQs, promotions, and clinical SOPs.
-Your tone should be professional, polite, and empathetic.
+SYSTEM_PROMPT = """You are CHAT AI ERHA, an expert Clinical Decision Support System & Medical Copilot designed specifically for ERHA (PT Arya Noble) Dermatologists, Medical Officers, and General Practitioners.
+Your primary role is to assist doctors in selecting, prescribing, and recommending the most appropriate ERHA skin care products, active formulations, and clinical aesthetic treatments for their patients based on diagnosis, skin conditions, and clinical guidelines.
 
-GROUND RULES:
-1. Answer the user's question ONLY using the facts from the Context block provided below.
-2. If the context is empty, or if it does not contain enough information to answer the question, you MUST answer exactly: "Maaf, saya tidak menemukan informasi."
-3. Do not make up or assume any clinical protocols, active ingredients, indications, side effects, or promotional offers.
-4. Cite the source files of the facts by adding their numbered references (e.g., [1], [2]) at the end of the sentences that use those facts. Always map the citation correctly to the matching source in the Context.
-5. Provide responses in Indonesian unless asked otherwise. Format the answer using clear Markdown (e.g. bold titles, bullet points) for readability.
+DOCTOR-FOCUSED CLINICAL COMMUNICATION GUIDELINES:
+1. **Professional Clinical Tone**: Speak collegially as a peer medical aesthetic AI expert (Doctor-to-Doctor tone). Use precise dermatological terminology (e.g., *acne vulgaris*, *papulopustular*, *post-inflammatory hyperpigmentation*, *keratolytic*, *sebum control*, *skin barrier restoration*).
+2. **Patient Recommendation & Prescription Focus**: When a doctor asks for product or treatment recommendations for a specific patient condition (e.g., oily skin with inflammatory acne, hyperpigmentation, sensitive skin), structure your response clearly:
+   - 📌 **Rekomendasi Produk Topikal (Homecare)**: Product name, key active ingredients & concentration (e.g. 2% Salicylic Acid, 4% Niacinamide), primary clinical mechanism.
+   - 💆 **Rekomendasi Tindakan Klinis (Clinical Treatments)**: In-clinic procedures if applicable.
+   - 📋 **Petunjuk Penggunaan & Dosis**: Frequency (e.g. 2x sehari pagi & malam), sunscreen integration.
+   - ⚠️ **Kontraindikasi & Perhatian Khusus**: Pregnancy/lactation safety (e.g., Salicylic Acid precautions), potential side effects (transient erythema, dryness).
+3. **Greetings & Catalog Inquiries**: For greetings (e.g., "halo", "selamat pagi") or general catalog questions ("ada produk apa saja?"), greet the doctor warmly and provide a clean, structured overview of available ERHA products and treatments from the context.
+4. **Markdown Formatting**: Output must be beautifully structured in clean Markdown with clear titles (`#`), section headers (`##`), bold highlights (`**`), bullet points (`-`), and clean tables where relevant.
+5. **Contextual & Citation Grounding**: Ground all clinical facts strictly on the provided Context block. Cite source references using `[1]`, `[2]` when context passages are cited.
+6. **Helpful Fallback**: If specific clinical details for an unlisted condition/product are missing from context, inform the doctor collegially in professional medical Indonesian.
 """
 
 
@@ -51,6 +73,26 @@ class GenerationPipeline:
     def __init__(self, retriever: HybridRetriever, llm_adapter: BaseLLMAdapter):
         self.retriever = retriever
         self.llm_adapter = llm_adapter
+
+    def _get_approved_docs_summary(self) -> str:
+        """Fetches list of approved documents for conversational context fallback."""
+        approved_dir = "data/output"
+        docs_list = []
+        if os.path.exists(approved_dir):
+            for f in os.listdir(approved_dir):
+                if f.endswith(".json"):
+                    try:
+                        with open(os.path.join(approved_dir, f), "r", encoding="utf-8") as fp:
+                            data = json.load(fp)
+                            if isinstance(data, dict):
+                                fn = data.get("file_name", f.replace(".json", ""))
+                                summary_head = data.get("summary", "")[:200].replace("\n", " ")
+                                docs_list.append(f"- **{fn}**: {summary_head}...")
+                    except Exception:
+                        pass
+        if docs_list:
+            return "Daftar Dokumen Terdaftar di Knowledge Base:\n" + "\n".join(docs_list)
+        return "Basis data saat ini sedang diperbarui."
 
     def build_prompt(self, query: str, context: str, history: List[Dict[str, str]]) -> str:
         """
@@ -67,7 +109,7 @@ class GenerationPipeline:
             history_str = "No previous conversation.\n"
 
         prompt = (
-            f"{SYSTEM_PROMPT}\n"
+            f"{SYSTEM_PROMPT}\n\n"
             f"--- CONTEXT ---\n"
             f"{context}\n\n"
             f"--- CONVERSATION HISTORY ---\n"
@@ -105,15 +147,10 @@ class GenerationPipeline:
         results = retrieval_response.get("results", [])
         context = retrieval_response.get("context", "")
 
-        # 2. Check if context is fallback/empty
-        if not results or context == "Maaf, saya tidak menemukan informasi.":
-            logger.info("Retrieval returned empty or fallback context. Bypassing LLM call.")
-            return {
-                "query": query,
-                "answer": "Maaf, saya tidak menemukan informasi.",
-                "context": "Maaf, saya tidak menemukan informasi.",
-                "results": []
-            }
+        # 2. If context is empty, supply fallback catalog context for conversational queries
+        if not results or context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found."):
+            logger.info("Retrieval context empty. Using approved knowledge base catalog for fallback AI response.")
+            context = self._get_approved_docs_summary()
 
         # 3. Build Prompt with Context & History
         full_prompt = self.build_prompt(query, context, history)
@@ -125,7 +162,7 @@ class GenerationPipeline:
             answer = answer.strip()
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
-            answer = "Maaf, terjadi kesalahan pada pemrosesan LLM."
+            answer = "Maaf, terjadi kesalahan teknis pada pemrosesan LLM. Silakan coba beberapa saat lagi."
 
         return {
             "query": query,

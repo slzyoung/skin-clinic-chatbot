@@ -23,25 +23,25 @@ class IngestionPipeline:
 
     def ingest_file(self, file_path: str) -> str:
         """
-        Processes a single file using Docling, chunks it by headings + semantics, 
-        saves the output to JSON, and optionally indexes it into the vector database.
+        Processes a single file: parse → chunk → enrich metadata → save JSON.
+        Uses smart parser with fast extraction for digital docs and Docling OCR fallback for scanned docs.
         """
         logger.info(f"Starting ingestion for {file_path}")
         
-        # 1. Parse (Docling)
-        doc = self.parser.parse_file(file_path)
-        if not doc:
+        # 1. Smart Parse (Fast or Docling OCR)
+        parse_result = self.parser.parse_file(file_path)
+        if not parse_result:
             logger.error("Parsing failed. Aborting ingestion for this file.")
             return ""
             
-        # 2. Custom Chunking (Heading-Based + Semantic)
-        chunks = self.chunker.chunk_document(doc)
+        # 2. Custom Chunking (Section-Aware + Semantic)
+        chunks = self.chunker.chunk_document(parse_result)
         if not chunks:
             logger.error("Chunking failed or produced no chunks.")
             return ""
             
         # 3. Metadata Extraction & Formatting
-        language = self.metadata_enricher.detect_document_language(doc)
+        language = self.metadata_enricher.detect_document_language(parse_result)
         logger.info(f"Detected document language: {language}")
         enriched_data = self.metadata_enricher.enrich_chunks(chunks, file_path, language=language)
         
