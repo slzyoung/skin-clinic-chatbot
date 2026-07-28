@@ -3,6 +3,8 @@
 import { BranchTokenTable } from "./components/branch-token-table";
 import { GlobalTokenConfig } from "./components/global-token-config";
 import { GlobalModelConfig } from "./components/global-model-config";
+import { GlobalTimeLimitConfig } from "./components/global-time-limit-config";
+import * as React from "react";
 
 export default function ConfigPage() {
 	return (
@@ -15,8 +17,9 @@ export default function ConfigPage() {
 				</div>
 
 				{/* Content */}
-				<div className="flex flex-col gap-6">
+				<div className="flex flex-col gap-4">
 					<GlobalModelConfig />
+					<GlobalTimeLimitConfig />
 
 					<GlobalTokenConfig />
 					<BranchTokenTable />
