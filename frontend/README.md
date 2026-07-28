@@ -19,9 +19,9 @@ Next.js 16 (App Router) user interface powering the Skin Clinic AI Chatbot syste
 
 ## Overview & Architecture
 
-The frontend is built using **Next.js (App Router)** and **React 19**, organized into clean role-scoped portal layouts (`/admin`, `/doctor`, `/functional`):
+The frontend is built using **Next.js (App Router)** and **React 19**, featuring a unified dashboard interface and role-scoped portal layouts (`/dashboard`, `/doctor`):
 
-- **Role-Based Access Control (RBAC)**: Dedicated layouts and navigation sidebars tailored to Administrator, Doctor, and Functional Staff roles.
+- **Role-Based Access Control (RBAC)**: Granular access control based on user roles and specific permissions, rendering navigation elements and routes dynamically within the unified `/dashboard`.
 - **API Client Layer (`src/lib/axios.ts`)**: Pre-configured Axios instance using `withCredentials: true` to handle HTTP-only JWT authentication cookies issued by the FastAPI backend.
 - **State Management & Data Fetching**: [TanStack Query (React Query v5)](https://tanstack.com/query/latest) for server state caching, optimistic updates, and background refetching.
 - **Form Management**: [TanStack Form](https://tanstack.com/form/latest) with [Zod](https://zod.dev/) schema validation.
@@ -32,14 +32,14 @@ The frontend is built using **Next.js (App Router)** and **React 19**, organized
                       │  (Port 3000 / React 19)│
                       └───────────┬────────────┘
                                   │
-      ┌───────────────────────────┼───────────────────────────┐
-      ▼                           ▼                           ▼
-┌──────────────┐           ┌──────────────┐           ┌──────────────┐
-│ Admin Portal │           │ Doctor Portal│           │ Staff Portal │
-│  (/admin)    │           │  (/doctor)   │           │ (/functional)│
-└──────┬───────┘           └──────┬───────┘           └──────┬───────┘
-       │                          │                          │
-       └──────────────────────────┼──────────────────────────┘
+             ┌────────────────────┴────────────────────┐
+             ▼                                         ▼
+┌─────────────────────────┐               ┌─────────────────────────┐
+│     Unified Portal      │               │      Doctor Portal      │
+│      (/dashboard)       │               │        (/doctor)        │
+└────────────┬────────────┘               └────────────┬────────────┘
+             │                                         │
+             └────────────────────┬────────────────────┘
                                   │ Axios (withCredentials: true)
                                   ▼
                       ┌────────────────────────┐
@@ -69,22 +69,18 @@ frontend/
 ├── public/                       # Static public assets, icons, & images
 ├── src/
 │   ├── app/                      # Next.js App Router pages & layouts
-│   │   ├── admin/                # Administrator Portal Routes
+│   │   ├── dashboard/            # Unified Portal Routes (Admin & Functional)
 │   │   │   ├── category/         # Treatment & product category management
 │   │   │   ├── chat-history/     # Session logs & RAG chat history analytics
-│   │   │   ├── configuration/    # Global AI model & provider configuration (LLM, embeddings, API keys)
-│   │   │   ├── ingest/           # Admin document uploader interface
-│   │   │   ├── knowledge/        # Knowledge base document review & approval workflow (PENDING -> APPROVED)
+│   │   │   ├── configuration/    # Global AI model & provider configuration
+│   │   │   ├── ingest/           # Document uploader interface
+│   │   │   ├── knowledge/        # Knowledge base document review & status workflow
 │   │   │   ├── users/            # User account management & RBAC role assignment
-│   │   │   └── layout.tsx        # Admin portal shell with sidebar navigation
+│   │   │   └── layout.tsx        # Unified dashboard shell with dynamic RBAC sidebars
 │   │   ├── doctor/               # Doctor Clinical Assistant Routes
 │   │   │   ├── chat/             # Doctor-facing RAG clinical assistant interface
 │   │   │   ├── search/           # Hybrid vector & keyword search interface
 │   │   │   └── layout.tsx        # Doctor portal navigation shell
-│   │   ├── functional/           # Functional Staff Routes
-│   │   │   ├── ingest/           # Staff document submission interface
-│   │   │   ├── knowledge/        # View uploaded document status
-│   │   │   └── layout.tsx        # Staff portal shell
 │   │   ├── login/                # Authentication login page
 │   │   ├── widget-demo/          # Embeddable AI chatbot widget preview
 │   │   ├── globals.css           # Tailwind CSS directives & custom design tokens
@@ -118,13 +114,13 @@ frontend/
 | Portal / Route | Accessible Roles | Key Capabilities & Features |
 | :--- | :--- | :--- |
 | **`/login`** | Public | User authentication endpoint issuing HTTP-only JWT cookies. |
-| **`/admin`** | Administrator | Full system administration dashboard. |
-| **`/admin/configuration`** | Administrator | Dynamic AI model selector (OpenAI, Gemini, HuggingFace) and API key manager. |
-| **`/admin/knowledge`** | Administrator | Admin review queue for uploaded knowledge docs (`PENDING` -> `APPROVED`). |
-| **`/admin/users`** | Administrator | Create, edit, and assign roles to system users. |
+| **`/dashboard`** | Admin / Staff | Unified dashboard landing page based on RBAC. |
+| **`/dashboard/configuration`** | Admin | Dynamic AI model selector and API key manager. |
+| **`/dashboard/knowledge`** | Admin / Staff | Admin review queue and status view for uploaded knowledge docs. |
+| **`/dashboard/users`** | Admin | Create, edit, and assign roles to system users. |
+| **`/dashboard/ingest`** | Admin / Staff | Upload clinic documents for RAG ingestion. |
 | **`/doctor/chat`** | Doctor | Clinical AI assistant interface for medical knowledge & treatment guidelines. |
 | **`/doctor/search`** | Doctor | Direct hybrid vector & keyword search engine across clinic knowledge base. |
-| **`/functional/ingest`** | Functional Staff | Upload clinic documents (PDF, Markdown, TXT) for RAG ingestion. |
 | **`/widget-demo`** | Public / Demo | Preview of the embeddable customer-facing chat widget. |
 
 ---

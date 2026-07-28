@@ -70,7 +70,7 @@ backend/
 │   └── versions/                 # Revision scripts tracking schema changes
 ├── app/
 │   ├── api/                      # REST Controllers & middleware guards
-│   │   ├── dependencies.py       # Auth guards, DB session injection, role permissions
+│   │   ├── dependencies.py       # Auth guards, DB session injection, RequireAccess RBAC permissions
 │   │   └── routers/              # Feature domain routers
 │   │       ├── auth.py           # Login, JWT token generation & user profile
 │   │       ├── branches.py       # Clinic location & branch management
@@ -78,7 +78,7 @@ backend/
 │   │       ├── chats.py          # Chat session history & user message persistence
 │   │       ├── config.py         # Dynamic AppConfig (active LLM keys, embedding models)
 │   │       ├── knowledge.py      # Knowledge base admin review & CRUD
-│   │       ├── users.py          # User management & RBAC profile administration
+│   │       ├── users.py          # User management & granular RBAC access administration
 │   │       └── webhooks.py       # External service webhooks & RSA-signed CIS triggers
 │   ├── core/                     # Core application infrastructure
 │   │   ├── config.py             # Base Pydantic settings & environment validation
@@ -95,7 +95,7 @@ backend/
 │   ├── services/                 # Core domain business logic
 │   │   └── cis_sync.py           # RSA-signed CIS webhook event processors & key loader
 │   │
-│   ├── rag/                      # RAG Engine Subsystem (Unified from arya-noble-rag)
+│   ├── rag/                      # RAG Engine Subsystem
 │   │   ├── config.py             # Isolated RAG configuration settings
 │   │   ├── deps.py               # FastAPI dependency injection for RAG singletons
 │   │   ├── router.py             # RAG Endpoints (/api/ai/* - ingest, chat, search, pending, refine, evaluate)
@@ -125,8 +125,6 @@ backend/
 ---
 
 ## RAG Subsystem (`app/rag`) Detailed Breakdown
-
-_For AI migrating from `eksperimen-rag`_:
 
 | Component / File       | File Path                                                                                                                                         | Detailed Description & Implementation                                                                                                                                                                                                                                                                                                                                |
 | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

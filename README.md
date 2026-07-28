@@ -28,7 +28,7 @@ Enterprise Skin Clinic AI Chatbot Monorepo powering intelligent clinical assista
 ┌───────────────────────────────────────────────────────────────┐                  ┌─────────────────────────┐
 │                    FastAPI Backend Core                       │ <── Webhooks ─── │  Mock CIS Microservice  │
 │  ┌────────────────────┬────────────────────────────────────┐  │  RSA Signed      │ (Automated Startup &    │
-│  │ Authentication     │  Branch & User Administration      │  │ (X-Signature)    │  Hourly Push Worker)    │
+│  │ Authentication     │  RBAC, Branch, & Admin Services    │  │ (X-Signature)    │  Hourly Push Worker)    │
 │  ├────────────────────┴────────────────────────────────────┤  │                  └─────────────────────────┘
 │  │  RAG Engine Subsystem (app/rag)                         │  │
 │  │  Docling Parser -> Chunker -> pgvector -> Hybrid Search │  │
@@ -49,9 +49,8 @@ Enterprise Skin Clinic AI Chatbot Monorepo powering intelligent clinical assista
 | Directory / Scope | Description | Primary Tech Stack | Documentation |
 | :--- | :--- | :--- | :--- |
 | [**`backend/`**](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/backend/README.md) | FastAPI Modular Monolith REST API backend powering core services & enterprise RAG pipeline. | Python 3.11, FastAPI, SQLAlchemy, PostgreSQL (`pgvector`), Docling | [Backend README](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/backend/README.md) |
-| [**`frontend/`**](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/frontend/README.md) | Next.js App Router frontend for Admin, Doctor, and Staff role-based portals + Chatbot Widget. | Next.js 16, React 19, TypeScript, Tailwind CSS, TanStack Query | [Frontend README](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/frontend/README.md) |
+| [**`frontend/`**](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/frontend/README.md) | Next.js App Router frontend featuring a unified `/dashboard` interface with granular Role-Based Access Control (RBAC), plus a Chatbot Widget. | Next.js 16, React 19, TypeScript, Tailwind CSS, TanStack Query | [Frontend README](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/frontend/README.md) |
 | [**`mock-cis/`**](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/mock-cis/README.md) | Mock Clinic Information System (CIS) pushing RSA-signed branch and doctor master data to backend. | Python 3.11, FastAPI, Cryptography (RSA), HTTPX | [Mock CIS README](file:///d:/Work/Company/widya-robotics/projects/arya-noble/project/mock-cis/README.md) |
-| **`eksperimen-rag/`** | Research sandbox and standalone benchmark environment for RAG retrieval evaluation. | Python, ChromaDB, Sentence-Transformers | Sandbox / RAG Evaluation |
 
 ---
 
@@ -93,7 +92,7 @@ Once containers boot up:
 
 | Service | Local URL | Key Documentation / Interfaces |
 | :--- | :--- | :--- |
-| **Frontend Web App** | `http://localhost:3000` | Admin, Doctor, and Staff Portals |
+| **Frontend Web App** | `http://localhost:3000` | Unified `/dashboard` with granular Role-Based Access Control |
 | **Backend OpenAPI Docs** | `http://localhost:8000/docs` | Interactive Swagger UI |
 | **Backend ReDoc** | `http://localhost:8000/redoc` | API Specification Reference |
 | **Backend Health Check** | `http://localhost:8000/health` | Service status JSON |
@@ -118,7 +117,6 @@ The system uses a **Push-Only, RSA-Signed Webhook Architecture** for integrating
 ├── backend/                  # FastAPI Backend Core & RAG Subsystem
 ├── frontend/                 # Next.js App Router Web Client
 ├── mock-cis/                 # Mock Clinic Information System & RSA Webhook Pusher
-├── eksperimen-rag/           # Standalone RAG evaluation & experimentation workspace
 ├── docker-compose.yaml       # Development container orchestration manifest
 ├── docker-compose.prod.yaml  # Production container orchestration manifest
 └── README.md                 # Project root documentation
