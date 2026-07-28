@@ -1,9 +1,11 @@
 /.hf_cache
-/eksperimen-rag
+/.agents
 .venv
 .env
 .env.*
 !.env.example
+/docs
+/backend/docs
 
 # Temporary RAG data
 backend/data/temp/*
