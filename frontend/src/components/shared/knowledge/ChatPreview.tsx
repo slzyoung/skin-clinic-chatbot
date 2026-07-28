@@ -9,6 +9,7 @@ import {
 	MessageScrollerProvider,
 	MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
+import { api } from "@/lib/axios";
 import {
 	RiAttachment2,
 	RiCheckLine,
@@ -25,7 +26,6 @@ import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
-import { knowledgeKeys } from "@/app/dashboard/knowledge/api/keys";
 
 interface ChatPreviewProps {
 	knowledgeId?: string;
@@ -147,7 +147,6 @@ export function ChatPreview({
 								</div>
 							)}
 
-<<<<<<< HEAD
 							{!isDetailLoading && knowledgeStatus === "PROCESSING" && messages.length === 0 && (
 								<MessageScrollerItem>
 									<div className="flex flex-col w-full items-start">
@@ -163,23 +162,6 @@ export function ChatPreview({
 												</span>
 											</div>
 										)}
-=======
-                    <div className={`flex items-start gap-3 w-full ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                      <div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-                        {msg.role === 'user' ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
-                      </div>
-                      <div className={`${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-zinc-950'} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100`}>
-                        {msg.role === 'assistant' ? (
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                        ) : (
-                          msg.content
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </MessageScrollerItem>
-              ))}
->>>>>>> 5af22ec (feat(rag): RAG pipeline optimizations)
 
 										<div className="flex items-start gap-3 w-full">
 											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
@@ -265,7 +247,7 @@ export function ChatPreview({
 												className={`${msg.role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100`}
 											>
 												{msg.role === "assistant" ? (
-													<ReactMarkdown>{msg.content}</ReactMarkdown>
+													<ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
 												) : (
 													msg.content
 												)}
