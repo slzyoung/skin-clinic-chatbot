@@ -109,6 +109,7 @@ export default function UsersPage() {
 															? staff.name
 																	.split(" ")
 																	.map((n: string) => n[0])
+																	.slice(0, 2)
 																	.join("")
 															: "S"}
 													</AvatarFallback>
@@ -147,11 +148,13 @@ export default function UsersPage() {
 						<Table className="[&_tr]:border-gray-100">
 							<TableHeader className="bg-gray-50/50">
 								<TableRow>
-									<TableHead className="w-[30%]">Name</TableHead>
-									<TableHead className="w-[15%]">Role</TableHead>
+									<TableHead className="w-[20%]">Name</TableHead>
+									<TableHead className="w-[15%]">Employee ID</TableHead>
+									<TableHead className="w-[15%]">Dr Type</TableHead>
+									<TableHead className="w-[15%]">Branch</TableHead>
+									<TableHead className="w-[10%]">Ecosystem</TableHead>
 									<TableHead className="w-[20%]">Email</TableHead>
-									<TableHead className="w-[15%]">Tokens</TableHead>
-									<TableHead className="w-20 text-right">Actions</TableHead>
+									<TableHead className="w-10 text-right">Actions</TableHead>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -166,6 +169,7 @@ export default function UsersPage() {
 																	.replace("Dr. ", "")
 																	.split(" ")
 																	.map((n: string) => n[0])
+																	.slice(0, 2)
 																	.join("")
 															: "D"}
 													</AvatarFallback>
@@ -175,23 +179,18 @@ export default function UsersPage() {
 												</div>
 											</div>
 										</TableCell>
-										<TableCell className="text-gray-900">Doctor</TableCell>
-										<TableCell className="text-gray-900">{doc.email}</TableCell>
-										<TableCell>
-											<div className="flex flex-col gap-1">
-												<span className="text-sm font-medium text-gray-900">
-													{doc.tokens_used ?? 0} / {doc.token_limit ?? 0}
-												</span>
-												<div className="w-full bg-gray-200 rounded-full h-1.5">
-													<div
-														className="bg-blue-600 h-1.5 rounded-full"
-														style={{
-															width: `${Math.min(((doc.tokens_used ?? 0) / (doc.token_limit ?? 1)) * 100, 100)}%`,
-														}}
-													></div>
-												</div>
-											</div>
+										<TableCell className="text-gray-900">{doc.employee_id || "-"}</TableCell>
+										<TableCell className="text-gray-900">{doc.dr_type || "-"}</TableCell>
+										<TableCell
+											className="text-gray-900 text-sm truncate max-w-75"
+											title={doc.branches?.map((b) => b.name).join(", ")}
+										>
+											{doc.branches && doc.branches.length > 0
+												? doc.branches.map((b) => b.name).join(", ")
+												: "No Branch"}
 										</TableCell>
+										<TableCell className="text-gray-900">{doc.ecosystem || "ERHA"}</TableCell>
+										<TableCell className="text-gray-900">{doc.email}</TableCell>
 										<TableCell className="text-right">
 											<div className="flex justify-end gap-2">
 												<Button

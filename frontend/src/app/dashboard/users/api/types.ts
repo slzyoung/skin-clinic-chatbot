@@ -38,6 +38,9 @@ export interface UserCreateStaff extends UserBase {
 export interface UserCreateDoctor extends UserBase {
   cis_id: string;
   token_limit?: number;
+  employee_id?: string;
+  dr_type?: string;
+  ecosystem?: string;
   branches?: string[]; // UUID strings
   categories?: string[]; // UUID strings
 }
@@ -53,6 +56,9 @@ export interface DoctorUpdate {
   token_limit?: number;
   status?: string;
   has_ai_access?: boolean;
+  employee_id?: string;
+  dr_type?: string;
+  ecosystem?: string;
 }
 
 export interface UserUpdateRoles {
@@ -72,6 +78,9 @@ export interface UserResponse extends UserBase {
   type: UserType;
   cis_id?: string;
   token_limit?: number;
+  employee_id?: string;
+  dr_type?: string;
+  ecosystem?: string;
   created_at: string;
   
   status?: string;

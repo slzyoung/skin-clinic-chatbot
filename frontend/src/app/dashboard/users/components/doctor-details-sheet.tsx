@@ -61,29 +61,28 @@ export function DoctorDetailsSheet({
 								<div className="flex flex-col gap-4 px-6 py-4">
 									<div className="flex flex-col gap-2">
 										<div className="flex items-center justify-between">
-											<div className="flex flex-col gap-2">
-												<span className="text-sm text-gray-500">Name</span>
-												<span className="text-sm text-gray-900">{doctor.name}</span>
-											</div>
-											<div className="flex items-center gap-2">
-												<span className="text-sm text-gray-500">AI Chatbot Access</span>
-												<Switch
-													checked={isAiAccess}
-													className="cursor-pointer"
-													onCheckedChange={(checked: boolean) => {
-														setEditedAiAccess(checked);
-														if (doctor?.id) {
-															updateDoctorAccess.mutate(
-																{ userId: doctor.id, data: { has_ai_access: checked } },
-																{
-																	onError: () => setEditedAiAccess(!checked), // rollback on error
-																},
-															);
-														}
-													}}
-												/>
-											</div>
+											<span className="text-sm text-gray-500">AI Chatbot Access</span>
+											<Switch
+												checked={isAiAccess}
+												className="cursor-pointer"
+												onCheckedChange={(checked: boolean) => {
+													setEditedAiAccess(checked);
+													if (doctor?.id) {
+														updateDoctorAccess.mutate(
+															{ userId: doctor.id, data: { has_ai_access: checked } },
+															{
+																onError: () => setEditedAiAccess(!checked), // rollback on error
+															},
+														);
+													}
+												}}
+											/>
 										</div>
+									</div>
+
+									<div className="flex flex-col gap-2">
+										<span className="text-sm text-gray-500">Name</span>
+										<span className="text-sm text-gray-900">{doctor.name}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
@@ -94,6 +93,21 @@ export function DoctorDetailsSheet({
 									<div className="flex flex-col gap-2">
 										<span className="text-sm text-gray-500">Email</span>
 										<span className="text-sm text-gray-900">{doctor.email}</span>
+									</div>
+
+									<div className="flex flex-col gap-2">
+										<span className="text-sm text-gray-500">Employee ID</span>
+										<span className="text-sm text-gray-900">{doctor.employee_id || "-"}</span>
+									</div>
+
+									<div className="flex flex-col gap-2">
+										<span className="text-sm text-gray-500">Dr Type</span>
+										<span className="text-sm text-gray-900">{doctor.dr_type || "-"}</span>
+									</div>
+
+									<div className="flex flex-col gap-2">
+										<span className="text-sm text-gray-500">Ecosystem</span>
+										<span className="text-sm text-gray-900">{doctor.ecosystem || "ERHA"}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
@@ -119,30 +133,36 @@ export function DoctorDetailsSheet({
 									</div>
 
 									<div className="flex flex-col gap-2 pt-2">
-										<span className="text-sm text-gray-500">Branch</span>
-										<div className="border border-gray-200 rounded-md p-3 flex flex-col gap-3">
-											<div className="flex items-center gap-3">
-												<Avatar className="h-10 w-10 rounded-md after:rounded-md shrink-0">
-													<AvatarImage
-														src="/mini-placeholder.svg"
-														className="object-cover rounded-md"
-													/>
-													<AvatarFallback className="rounded-md"></AvatarFallback>
-												</Avatar>
-												<div className="flex flex-col">
-													<span className="text-sm font-medium text-gray-900">
-														{doctor.branches && doctor.branches.length > 0
-															? doctor.branches[0].name
-															: "No Branch"}
-													</span>
-													<span className="text-xs text-gray-500">
-														{doctor.branches && doctor.branches.length > 0
-															? doctor.branches[0].address || "No address"
-															: "-"}
-													</span>
-												</div>
+										<span className="text-sm text-gray-500">Branches</span>
+										{doctor.branches && doctor.branches.length > 0 ? (
+											<div className="flex flex-col gap-3">
+												{doctor.branches.map((branch) => (
+													<div key={branch.id} className="border border-gray-200 rounded-md p-3 flex flex-col gap-3">
+														<div className="flex items-center gap-3">
+															<Avatar className="h-10 w-10 rounded-md after:rounded-md shrink-0">
+																<AvatarImage
+																	src="/mini-placeholder.svg"
+																	className="object-cover rounded-md"
+																/>
+																<AvatarFallback className="rounded-md"></AvatarFallback>
+															</Avatar>
+															<div className="flex flex-col">
+																<span className="text-sm font-medium text-gray-900">
+																	{branch.name}
+																</span>
+																<span className="text-xs text-gray-500">
+																	{branch.address || "No address"}
+																</span>
+															</div>
+														</div>
+													</div>
+												))}
 											</div>
-										</div>
+										) : (
+											<div className="border border-gray-200 rounded-md p-3">
+												<span className="text-sm text-gray-500">No Branch</span>
+											</div>
+										)}
 										{/* 
                       <Button variant="outline" className="w-full mt-2 rounded-md" onClick={() => setIsManageBranchOpen(true)}>
                         <RiSettings3Line className="mr-2 h-4 w-4" />
