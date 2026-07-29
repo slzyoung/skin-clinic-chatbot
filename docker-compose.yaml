@@ -65,6 +65,9 @@ services:
       - "8001:8001"
     environment:
       - BACKEND_WEBHOOK_URL=http://backend:8000/api/webhooks/cis
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app"]
+    volumes:
+      - ./mock-cis/main.py:/app/main.py
     depends_on:
       backend:
         condition: service_healthy
