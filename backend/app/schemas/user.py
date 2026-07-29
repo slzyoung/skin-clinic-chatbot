@@ -17,6 +17,7 @@ class UserBase(BaseModel):
 
 class UserCreateStaff(UserBase):
     password: str
+    employee_id: Optional[str] = None
     roles: Optional[List[str]] = ["Staff"]
 
 class StaffUpdate(BaseModel):
@@ -29,6 +30,9 @@ class DoctorUpdate(BaseModel):
     token_limit: Optional[int] = None
     status: Optional[str] = None
     has_ai_access: Optional[bool] = None
+    employee_id: Optional[str] = None
+    dr_type: Optional[str] = None
+    ecosystem: Optional[str] = None
 
 class UserUpdateRoles(BaseModel):
     roles: List[str]
@@ -48,6 +52,9 @@ class UserResponse(UserBase):
     cis_id: Optional[str] = None
     token_limit: Optional[int] = None
     has_ai_access: bool
+    employee_id: Optional[str] = None
+    dr_type: Optional[str] = None
+    ecosystem: str
     created_at: datetime
     
     status: Optional[str] = None

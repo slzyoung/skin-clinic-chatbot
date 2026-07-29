@@ -21,6 +21,10 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     cis_id: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True)
     token_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     has_ai_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false', nullable=False)
+    
+    employee_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    dr_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    ecosystem: Mapped[str] = mapped_column(String, default="ERHA", server_default="ERHA", nullable=False)
 
     __table_args__ = (
         CheckConstraint(

@@ -85,6 +85,9 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
         
     name = data.get("name")
     email = data.get("email")
+    employee_id = data.get("employee_id")
+    dr_type = data.get("dr_type")
+    ecosystem = data.get("ecosystem", "ERHA")
     branch_ids = data.get("branch_ids", [])
     
     stmt = select(User).where(User.cis_id == cis_id)
@@ -95,6 +98,9 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
             email=email,
             name=name,
             cis_id=cis_id,
+            employee_id=employee_id,
+            dr_type=dr_type,
+            ecosystem=ecosystem,
             type=UserType.DOCTOR,
             token_limit=0
         )
@@ -102,6 +108,9 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
     else:
         user.name = name
         user.email = email
+        user.employee_id = employee_id
+        user.dr_type = dr_type
+        user.ecosystem = ecosystem
         user.deleted_at = None
         
     await db.flush()
