@@ -6,6 +6,7 @@
 !.env.example
 /docs
 /backend/docs
+/demo-chatbot
 
 # Temporary RAG data
 backend/data/temp/*
