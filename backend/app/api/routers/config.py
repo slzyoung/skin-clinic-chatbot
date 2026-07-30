@@ -8,9 +8,24 @@ from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User
 from app.models.config import AppConfig
 from app.schemas.config import ConfigUpdate, ConfigResponse, LLMValidateRequest, FetchModelsRequest, ModelInfo
+from app.core.security import encrypt_api_key, decrypt_api_key
 import urllib.request
 import urllib.error
 import json
+
+def mask_api_key(key_value: str) -> str:
+    if not key_value or len(key_value) < 10:
+        return "***"
+    return f"{key_value[:7]}...{key_value[-4:]}"
+
+async def _resolve_api_key(api_key: str, db: AsyncSession) -> str:
+    if "***" in api_key or "..." in api_key:
+        stmt = select(AppConfig).where(AppConfig.key == "LLM_API_KEY")
+        result = await db.execute(stmt)
+        config = result.scalar_one_or_none()
+        if config:
+            return decrypt_api_key(config.value)
+    return api_key
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -22,6 +37,13 @@ async def list_config(
     stmt = select(AppConfig)
     result = await db.execute(stmt)
     configs = result.scalars().all()
+    
+    # Mask API key in response
+    for config in configs:
+        if config.key == "LLM_API_KEY":
+            decrypted = decrypt_api_key(config.value)
+            config.value = mask_api_key(decrypted)
+            
     return configs
 
 @router.put("/{key}", response_model=ConfigResponse)
@@ -35,6 +57,16 @@ async def update_config(
     result = await db.execute(stmt)
     config = result.scalar_one_or_none()
     
+    if key == "LLM_API_KEY":
+        if "***" in config_in.value or "..." in config_in.value:
+            # Ignore masked key updates to prevent accidental overrides
+            # We still return the masked version
+            if config:
+                decrypted = decrypt_api_key(config.value)
+                config.value = mask_api_key(decrypted)
+            return config
+        config_in.value = encrypt_api_key(config_in.value)
+
     if not config:
         # Create it if it doesn't exist
         config = AppConfig(key=key, value=config_in.value)
@@ -44,15 +76,26 @@ async def update_config(
         
     await db.commit()
     await db.refresh(config)
+    
+    # Mask API key in response
+    if key == "LLM_API_KEY":
+        decrypted = decrypt_api_key(config.value)
+        config.value = mask_api_key(decrypted)
+        
     return config
 
 @router.post("/validate-llm")
-async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(RequireAccess("configuration:write"))):
+async def validate_llm(
+    req: LLMValidateRequest, 
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(RequireAccess("configuration:write"))
+):
     provider = req.provider.lower()
+    actual_api_key = await _resolve_api_key(req.api_key, db)
     
     try:
         if provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.model_name}?key={req.api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{req.model_name}?key={actual_api_key}"
             req_obj = urllib.request.Request(url)
             with urllib.request.urlopen(req_obj, timeout=5) as response:
                 if response.status != 200:
@@ -70,7 +113,7 @@ async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(Re
             else:
                 url = "https://api.openai.com/v1/models"
                 
-            headers = {"Authorization": f"Bearer {req.api_key}"}
+            headers = {"Authorization": f"Bearer {actual_api_key}"}
             req_obj = urllib.request.Request(url, headers=headers)
             
             with urllib.request.urlopen(req_obj, timeout=5) as response:
@@ -104,13 +147,18 @@ async def validate_llm(req: LLMValidateRequest, current_admin: User = Depends(Re
         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
 
 @router.post("/fetch-models", response_model=List[ModelInfo])
-async def fetch_models(req: FetchModelsRequest, current_admin: User = Depends(RequireAccess("configuration:write"))):
+async def fetch_models(
+    req: FetchModelsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(RequireAccess("configuration:write"))
+):
     provider = req.provider.lower()
+    actual_api_key = await _resolve_api_key(req.api_key, db)
     
     try:
         models = []
         if provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={req.api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={actual_api_key}"
             req_obj = urllib.request.Request(url)
             with urllib.request.urlopen(req_obj, timeout=5) as response:
                 if response.status != 200:
@@ -151,7 +199,7 @@ async def fetch_models(req: FetchModelsRequest, current_admin: User = Depends(Re
             else:
                 url = "https://api.openai.com/v1/models"
                 
-            headers = {"Authorization": f"Bearer {req.api_key}"}
+            headers = {"Authorization": f"Bearer {actual_api_key}"}
             req_obj = urllib.request.Request(url, headers=headers)
             
             with urllib.request.urlopen(req_obj, timeout=5) as response:

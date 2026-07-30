@@ -165,6 +165,7 @@ export function GlobalModelConfig() {
 								setActiveProvider(val ?? "");
 								setAvailableModels([]);
 								setModelName("");
+								setApiKey("");
 							}}
 							disabled={!isEditing}
 						>
@@ -199,7 +200,7 @@ export function GlobalModelConfig() {
 									setModelName("");
 								}}
 								onBlur={() => {
-									if (apiKey.length > 20 && availableModels.length === 0) {
+									if (apiKey.length > 5 && availableModels.length === 0) {
 										handleFetchModels();
 									}
 								}}

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     CIS_RSA_PUBLIC_KEY: Optional[str] = None
     CIS_RSA_PUBLIC_KEY_PATH: Optional[str] = None
     UPLOAD_DIR: str = "data/uploads"
+    SECRET_ENCRYPTION_KEY: str = "HD77PDBToZJLKpGJlUKP1HKLH3LcwUe1TUl1ZrTl6MU="
 
     # RAG & LLM Settings
     EMBEDDING_PROVIDER: str = "huggingface"
