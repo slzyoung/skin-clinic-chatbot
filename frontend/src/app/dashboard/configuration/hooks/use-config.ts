@@ -40,3 +40,12 @@ export const useValidateLLM = () => {
     }
   });
 };
+
+export const useFetchModels = () => {
+  return useMutation({
+    mutationFn: async (data: { provider: string; api_key: string }) => {
+      const response = await api.post<{ id: string; input_limit?: number; output_limit?: number }[]>(`/config/fetch-models`, data);
+      return response.data;
+    }
+  });
+};

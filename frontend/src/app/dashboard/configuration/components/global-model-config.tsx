@@ -9,25 +9,26 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { RiCheckLine, RiEdit2Line, RiLoader4Line, RiEyeLine, RiEyeOffLine, RiInformationFill } from "@remixicon/react";
+import { RiCheckLine, RiEdit2Line, RiLoader4Line, RiEyeLine, RiEyeOffLine, RiInformationFill, RiRefreshLine } from "@remixicon/react";
 import * as React from "react";
-import { useConfigs, useUpdateConfig, useValidateLLM } from "../hooks/use-config";
+import { useConfigs, useUpdateConfig, useFetchModels } from "../hooks/use-config";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/lib/utils";
 
 export function GlobalModelConfig() {
 	const { data: configs, isLoading } = useConfigs();
 	const updateConfig = useUpdateConfig();
-	const validateLLM = useValidateLLM();
+	const fetchModels = useFetchModels();
 
 	const [isEditing, setIsEditing] = React.useState(false);
 	const [showKeys, setShowKeys] = React.useState(false);
-	const [isValidated, setIsValidated] = React.useState<boolean | null>(null);
 
 	// Form state
 	const [activeProvider, setActiveProvider] = React.useState("openai");
 	const [modelName, setModelName] = React.useState("");
 	const [apiKey, setApiKey] = React.useState("");
+	
+	const [availableModels, setAvailableModels] = React.useState<{ id: string; input_limit?: number; output_limit?: number }[]>([]);
 
 	React.useEffect(() => {
 		if (configs) {
@@ -43,28 +44,31 @@ export function GlobalModelConfig() {
 		}
 	}, [configs]);
 
-	const inputClass =
-		isValidated === false
-			? "bg-black-50 border-red-300 text-black-500 focus-visible:ring-red-300"
-			: "bg-black-50 border-black-50 text-black-500";
 
-	const handleVerify = async () => {
-		if (!apiKey || !modelName) return;
+
+	const inputClass = "bg-black-50 border-black-50 text-black-500";
+
+	const handleFetchModels = async () => {
+		if (!apiKey) return;
 		try {
-			await validateLLM.mutateAsync({
+			const models = await fetchModels.mutateAsync({
 				provider: activeProvider,
-				model_name: modelName,
 				api_key: apiKey,
 			});
-			setIsValidated(true);
-			toast.success("Connection successful!");
+			setAvailableModels(models);
+			toast.success("Models fetched successfully!");
 		} catch (error) {
-			setIsValidated(false);
-			toast.error(getErrorMessage(error, "Failed to validate AI configuration."));
+			setAvailableModels([]);
+			toast.error(getErrorMessage(error, "Failed to fetch models."));
 		}
 	};
 
 	const handleSave = async () => {
+		if (!modelName) {
+			toast.error("Please select a model.");
+			return;
+		}
+		
 		try {
 			await updateConfig.mutateAsync({
 				key: "LLM_ACTIVE_PROVIDER",
@@ -85,6 +89,7 @@ export function GlobalModelConfig() {
 		return <div className="p-4 text-center text-sm text-gray-500">Loading AI configuration...</div>;
 	}
 
+
 	return (
 		<div className="flex flex-col w-full">
 			<div className="flex flex-col gap-6 border border-black-50 rounded-lg p-4 bg-white">
@@ -104,7 +109,7 @@ export function GlobalModelConfig() {
 									className="text-black-500 hover:text-black-600 hover:bg-zinc-100 px-5 rounded-lg font-medium"
 									onClick={() => {
 										setIsEditing(false);
-										setIsValidated(null);
+										setAvailableModels([]);
 										// Reset state
 										if (configs) {
 											setActiveProvider(
@@ -120,38 +125,23 @@ export function GlobalModelConfig() {
 											);
 										}
 									}}
-									disabled={updateConfig.isPending || validateLLM.isPending}
+									disabled={updateConfig.isPending || fetchModels.isPending}
 								>
 									Cancel
 								</Button>
-								{isValidated === true ? (
-									<Button
-										className="bg-blue-600 hover:bg-blue-700 text-white shadow-none px-5 rounded-lg font-medium"
-										onClick={handleSave}
-										disabled={updateConfig.isPending}
-									>
-										{updateConfig.isPending ? (
-											<RiLoader4Line className="size-4.5 mr-2 animate-spin" />
-										) : (
-											<RiCheckLine className="size-4.5 mr-2" />
-										)}
-										Save
-									</Button>
-								) : (
-									<Button
-										variant="outline"
-										className="border-blue-500 text-blue-500 hover:text-blue-600 hover:bg-blue-50 bg-transparent shadow-none px-5 rounded-lg font-medium"
-										onClick={handleVerify}
-										disabled={validateLLM.isPending || !apiKey || !modelName}
-									>
-										{validateLLM.isPending ? (
-											<RiLoader4Line className="size-4.5 mr-2 animate-spin" />
-										) : (
-											<RiCheckLine className="size-4.5 mr-2" />
-										)}
-										Test Connection
-									</Button>
-								)}
+								
+								<Button
+									className="bg-blue-600 hover:bg-blue-700 text-white shadow-none px-5 rounded-lg font-medium"
+									onClick={handleSave}
+									disabled={updateConfig.isPending || !modelName || !apiKey}
+								>
+									{updateConfig.isPending ? (
+										<RiLoader4Line className="size-4.5 mr-2 animate-spin" />
+									) : (
+										<RiCheckLine className="size-4.5 mr-2" />
+									)}
+									Save
+								</Button>
 							</>
 						) : (
 							<Button
@@ -173,7 +163,8 @@ export function GlobalModelConfig() {
 							value={activeProvider}
 							onValueChange={(val) => {
 								setActiveProvider(val ?? "");
-								setIsValidated(null);
+								setAvailableModels([]);
+								setModelName("");
 							}}
 							disabled={!isEditing}
 						>
@@ -187,27 +178,7 @@ export function GlobalModelConfig() {
 							</SelectContent>
 						</Select>
 					</div>
-					<div className="flex flex-col gap-2">
-						<span className="text-sm font-medium text-black-500">Active Model Name</span>
-						<Input
-							type="text"
-							disabled={!isEditing}
-							value={modelName}
-							placeholder={
-								activeProvider === "gemini"
-									? "e.g. gemini-2.5-flash, gemini-1.5-pro"
-									: activeProvider === "deepseek"
-										? "e.g. deepseek-chat, deepseek-coder"
-										: "e.g. gpt-4o-mini, gpt-4o"
-							}
-							onChange={(e) => {
-								setModelName(e.target.value);
-								setIsValidated(null);
-							}}
-							className={`w-full h-10 rounded-lg disabled:opacity-75 ${inputClass}`}
-						/>
-					</div>
-
+					
 					<div className="flex flex-col gap-2">
 						<span className="text-sm font-medium text-black-500">API Key</span>
 						<div className="relative">
@@ -224,7 +195,13 @@ export function GlobalModelConfig() {
 								}
 								onChange={(e) => {
 									setApiKey(e.target.value);
-									setIsValidated(null);
+									setAvailableModels([]);
+									setModelName("");
+								}}
+								onBlur={() => {
+									if (apiKey.length > 20 && availableModels.length === 0) {
+										handleFetchModels();
+									}
 								}}
 								className={`w-full h-10 rounded-lg disabled:opacity-75 pr-10 ${inputClass}`}
 							/>
@@ -238,13 +215,51 @@ export function GlobalModelConfig() {
 							</button>
 						</div>
 					</div>
-				</div>
 
-				{isValidated === false && (
-					<p className="text-xs text-red-400 mt-1">
-						Validation failed. Ensure your API Key matches the active provider and model.
-					</p>
-				)}
+					<div className="flex flex-col gap-2">
+						<div className="flex justify-between items-center">
+							<span className="text-sm font-medium text-black-500">Active Model</span>
+							{isEditing && (
+								<button 
+									type="button" 
+									onClick={handleFetchModels}
+									disabled={!apiKey || fetchModels.isPending}
+									className="text-xs text-blue-600 font-medium hover:text-blue-700 disabled:opacity-50 flex items-center"
+								>
+									{fetchModels.isPending ? <RiLoader4Line className="size-3 mr-1 animate-spin" /> : <RiRefreshLine className="size-3 mr-1" />}
+									Fetch
+								</button>
+							)}
+						</div>
+						
+						{isEditing ? (
+							<div className="flex flex-col gap-1">
+								<Select
+									value={modelName}
+									onValueChange={(val) => setModelName(val ?? "")}
+									disabled={availableModels.length === 0}
+								>
+									<SelectTrigger className={`w-full h-10 rounded-lg ${inputClass}`}>
+										<SelectValue placeholder={availableModels.length > 0 ? "Select a model" : "Fetch models first"} />
+									</SelectTrigger>
+									<SelectContent alignItemWithTrigger={false}>
+										{availableModels.map(m => (
+											<SelectItem key={m.id} value={m.id}>{m.id}</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+
+							</div>
+						) : (
+							<Input
+								type="text"
+								disabled={true}
+								value={modelName}
+								className={`w-full h-10 rounded-lg disabled:opacity-75 ${inputClass}`}
+							/>
+						)}
+					</div>
+				</div>
 			</div>
 
 			<div

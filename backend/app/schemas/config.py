@@ -14,6 +14,15 @@ class LLMValidateRequest(BaseModel):
     model_name: str
     api_key: str
 
+class FetchModelsRequest(BaseModel):
+    provider: str
+    api_key: str
+
+class ModelInfo(BaseModel):
+    id: str
+    input_limit: int | None = None
+    output_limit: int | None = None
+
 class ConfigResponse(ConfigBase):
     id: uuid.UUID
     created_at: datetime
