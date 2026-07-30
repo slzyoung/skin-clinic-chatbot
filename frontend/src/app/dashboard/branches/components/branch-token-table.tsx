@@ -1,6 +1,6 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
+import { SearchBar } from "@/components/shared/search-bar";
 import {
 	Table,
 	TableBody,
@@ -9,7 +9,6 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
-import { RiSearchLine } from "@remixicon/react";
 import { useBranches } from "../hooks/use-branches";
 import { ViewBranchSheet } from "./view-branch-sheet";
 
@@ -20,13 +19,12 @@ export function BranchTokenTable() {
 		<div className="flex flex-col gap-4 w-full">
 			<div className="flex items-center justify-between gap-4">
 				{/* Search */}
-				<div className="relative flex-1 max-w-100">
-					<RiSearchLine className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-black-200" />
-					<Input
-						placeholder="Search for branch"
-						className="pl-9 bg-white border-black-50 text-sm h-10 rounded-lg"
-					/>
-				</div>
+				<SearchBar
+					containerClassName="max-w-md flex-1"
+					iconClassName="left-3 top-1/2 -translate-y-1/2 size-4 text-black-200"
+					placeholder="Search for branch..."
+					className="pl-9 border-black-50 text-sm h-10 rounded-lg"
+				/>
 
 				{/* Actions */}
 				<div className="flex items-center gap-3">

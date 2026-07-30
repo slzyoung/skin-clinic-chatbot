@@ -1,6 +1,6 @@
 "use client";
-import { Input } from "@/components/ui/input";
-import { RiLoader4Line, RiSearchLine } from "@remixicon/react";
+import { SearchBar } from "@/components/shared/search-bar";
+import { RiLoader4Line } from "@remixicon/react";
 import { ChatFilter } from "./components/chat-filter";
 import { ChatHistoryCard } from "./components/chat-history-card";
 import { useChatHistories } from "./hooks/use-chat-history";
@@ -18,14 +18,15 @@ export default function ChatHistoryPage() {
 				<p className="text-sm text-muted-foreground">View past chats with the AI chatbot easily.</p>
 			</div>
 
-			{/* Toolbar */}
-			<div className="flex items-center justify-between mb-4">
-				<div className="relative flex items-center w-full max-w-100">
-					<RiSearchLine className="absolute left-2.5 w-4 h-4 text-gray-400" />
-					<Input placeholder="Search chat sessions" className="pl-8 bg-white" />
+			<div className="flex flex-col gap-4">
+				{/* Toolbar */}
+				<div className="flex items-center justify-between">
+					<SearchBar
+						containerClassName="max-w-md"
+						placeholder="Search for chat sessions..."
+					/>
+					<ChatFilter doctors={doctors} />
 				</div>
-				<ChatFilter doctors={doctors} />
-			</div>
 
 			{/* List */}
 			<div className="flex flex-col gap-4">
@@ -49,6 +50,7 @@ export default function ChatHistoryPage() {
 				{!isLoading &&
 					!isError &&
 					chatHistories?.map((item) => <ChatHistoryCard key={item.id} item={item} />)}
+			</div>
 			</div>
 		</div>
 	);

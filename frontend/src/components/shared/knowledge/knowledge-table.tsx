@@ -3,7 +3,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SearchBar } from "@/components/shared/search-bar";
 import {
 	Table,
 	TableBody,
@@ -17,7 +17,6 @@ import {
 	RiEyeLine,
 	RiLoader4Line,
 	RiMoneyDollarCircleLine,
-	RiSearchLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -75,15 +74,12 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 		<div className="w-full mt-6">
 			{/* Filters */}
 			<div className="flex items-center justify-between mb-4">
-				<div className="relative flex items-center w-full max-w-sm">
-					<RiSearchLine className="absolute left-2.5 w-4 h-4 text-gray-400" />
-					<Input
-						value={searchQuery}
-						onChange={(e) => setSearchQuery(e.target.value)}
-						placeholder="Search by knowledge title or filename..."
-						className="pl-8 bg-white"
-					/>
-				</div>
+				<SearchBar
+					containerClassName="max-w-md"
+					value={searchQuery}
+					onChange={(e) => setSearchQuery(e.target.value)}
+					placeholder="Search for knowledge title or filename..."
+				/>
 				<div className="flex items-center gap-3">
 					<Button variant="outline" className="gap-2 bg-white hover:bg-gray-50 text-gray-700">
 						<RiDatabase2Line className="w-4 h-4" />

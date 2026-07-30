@@ -2,7 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SearchBar } from "@/components/shared/search-bar";
 import {
 	Table,
 	TableBody,
@@ -11,7 +11,7 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
-import { RiAddLine, RiDeleteBinLine, RiEdit2Line, RiSearchLine } from "@remixicon/react";
+import { RiAddLine, RiDeleteBinLine, RiEdit2Line } from "@remixicon/react";
 import { useState } from "react";
 import { CategoryResponse } from "./api/types";
 import { CategoryDialog } from "./components/category-dialog";
@@ -54,10 +54,10 @@ export default function CategoriesPage() {
 			<div className="flex flex-col">
 				{/* Actions */}
 				<div className="flex items-center justify-between mb-4">
-					<div className="relative flex items-center w-80">
-						<RiSearchLine className="absolute left-2.5 w-4 h-4 text-gray-400" />
-						<Input placeholder="Search for category" className="pl-8 bg-white" />
-					</div>
+					<SearchBar
+						containerClassName="max-w-md"
+						placeholder="Search for category..."
+					/>
 					<Button className="bg-blue-500 hover:bg-blue-600" onClick={handleAddCategory}>
 						<RiAddLine className="mr-2 h-4 w-4" />
 						Add Category

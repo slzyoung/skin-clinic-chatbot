@@ -1,11 +1,11 @@
 "use client";
 
-import { RiEyeLine, RiSearchLine, RiAddLine } from "@remixicon/react";
+import { RiEyeLine, RiAddLine } from "@remixicon/react";
 import { useState } from "react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SearchBar } from "@/components/shared/search-bar";
 import {
 	Table,
 	TableBody,
@@ -72,10 +72,10 @@ export default function UsersPage() {
 				</TabsList>
 
 				<div className="flex items-center justify-between mb-4">
-					<div className="relative flex items-center w-full max-w-100">
-						<RiSearchLine className="absolute left-2.5 w-4 h-4 text-gray-400" />
-						<Input placeholder="Search for user, staff, or doctor" className="pl-8 bg-white" />
-					</div>
+					<SearchBar
+						containerClassName="max-w-md"
+						placeholder="Search for user, staff, or doctor..."
+					/>
 					<div className="flex items-center gap-2">
 						<Button
 							className="bg-blue-600 hover:bg-blue-700"

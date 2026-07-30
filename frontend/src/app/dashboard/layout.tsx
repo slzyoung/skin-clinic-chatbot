@@ -15,7 +15,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 							<RiSearchLine className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground size-4" />
 							<Input
 								type="search"
-								placeholder="Search for clinical history, product, or treatment"
+								placeholder="Search for clinical history, product, or treatment..."
 								className="pl-9 bg-white"
 							/>
 						</div>
