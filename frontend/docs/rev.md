@@ -18,3 +18,8 @@ This document tracks frontend adjustments and new features that require backend 
 - Removed deprecated branch fields (`address`, `latitude`, `longitude`, `image_url`) from the frontend UI and types.
 - The frontend now strictly relies on viewing branch information and updating the `token_limit`.
 - Backend should ensure that branch creation/deletion is handled via CIS sync, and frontend branch APIs should align with these removed fields.
+
+## 2026-07-30 - Doctor Feedback Notifications (Staff Dashboard)
+- Added a new Notifications page (`/dashboard/notifications`) to the Staff Dashboard.
+- This page is intended to display feedback and reports submitted by doctors during their chat sessions.
+- **Backend Action Required:** An API endpoint will be needed in the future to fetch and manage (e.g., mark as read) these doctor feedback notifications.
