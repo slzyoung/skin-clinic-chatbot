@@ -1,6 +1,5 @@
 "use client";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import {
 	Table,
@@ -18,7 +17,7 @@ export function BranchTokenTable() {
 	const { data: branches, isLoading } = useBranches();
 
 	return (
-		<div className="flex flex-col gap-4 w-full mt-6">
+		<div className="flex flex-col gap-4 w-full">
 			<div className="flex items-center justify-between gap-4">
 				{/* Search */}
 				<div className="relative flex-1 max-w-100">
@@ -64,23 +63,15 @@ export function BranchTokenTable() {
 								<TableRow key={branch.id} className="border-b-black-50">
 									<TableCell className="max-w-50">
 										<div className="flex items-center gap-3">
-											<Avatar className="w-10 h-10 rounded-md after:rounded-md">
-												<AvatarImage
-													src={branch.image_url || "/mini-placeholder.svg"}
-													alt={branch.name}
-													className="object-cover rounded-md"
-												/>
-												<AvatarFallback className="rounded-md">BR</AvatarFallback>
-											</Avatar>
-											<div className="flex flex-col overflow-hidden">
+
+											<div className="flex flex-col justify-center overflow-hidden">
 												<span className="font-medium text-black-500 truncate">{branch.name}</span>
-												<span className="text-xs text-black-300 truncate">{branch.address}</span>
 											</div>
 										</div>
 									</TableCell>
-									<TableCell className="text-black-500">{branch.tokensMonth}</TableCell>
-									<TableCell className="text-black-500">{branch.used}</TableCell>
-									<TableCell className="text-black-500">{branch.remaining}</TableCell>
+									<TableCell className="text-blue-600 font-medium">{branch.tokensMonth}</TableCell>
+									<TableCell className="text-blue-600 font-medium">{branch.used}</TableCell>
+									<TableCell className="text-blue-600 font-medium">{branch.remaining}</TableCell>
 									<TableCell className="text-right">
 										<div className="flex justify-end">
 											<ViewBranchSheet branch={branch} />

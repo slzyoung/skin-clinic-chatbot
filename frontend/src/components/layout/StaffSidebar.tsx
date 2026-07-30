@@ -20,7 +20,8 @@ import {
   RiRobot2Line,
   RiFileAddLine,
   RiFunctionLine,
-  RiLogoutBoxRLine
+  RiLogoutBoxRLine,
+  RiBuilding4Line
 } from "@remixicon/react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
@@ -53,6 +54,12 @@ const staffNav = [
     url: "/dashboard/category",
     icon: RiFunctionLine,
     requiredAccess: "categories:read"
+  },
+  {
+    title: "Branch",
+    url: "/dashboard/branches",
+    icon: RiBuilding4Line,
+    requiredAccess: "branches:read"
   },
   {
     title: "Configuration",

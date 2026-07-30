@@ -9,7 +9,7 @@ import { useUpdateBranch } from "../hooks/use-branches";
 import { useForm } from "@tanstack/react-form";
 import { Field, FieldLabel, FieldError } from "@/components/ui/field";
 import { z } from "zod";
-import { BranchResponse } from "../api/types";
+import { BranchResponse } from "../../configuration/api/types";
 import { editTokenSchema } from "./branch-schema";
 
 
@@ -62,7 +62,7 @@ export function EditBranchTokenDialog({ branch }: EditBranchTokenDialogProps) {
 				render={
 					<Button
 						variant="outline"
-						className="bg-white/80 backdrop-blur-sm border-black-50 text-black-500 hover:bg-white hover:text-black-600 px-3 py-0 rounded-lg shadow-none absolute top-4 right-4 z-10"
+						className="bg-white border-black-50 text-black-500 hover:bg-zinc-50 hover:text-black-600 h-9 px-4 py-2 rounded-lg shadow-none text-sm font-medium"
 					/>
 				}
 			>

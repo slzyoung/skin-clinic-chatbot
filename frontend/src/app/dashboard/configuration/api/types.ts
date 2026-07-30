@@ -9,14 +9,8 @@ export interface ConfigUpdate {
 
 export interface BranchBase {
   name: string;
-  address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  image_url?: string | null;
   token_limit: number;
 }
-
-export type BranchCreate = BranchBase;
 
 export interface BranchUpdate {
   token_limit: number;

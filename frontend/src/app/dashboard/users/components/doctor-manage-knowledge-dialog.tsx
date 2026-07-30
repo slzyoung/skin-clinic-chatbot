@@ -29,6 +29,7 @@ export function DoctorManageKnowledgeDialog({
 
   useEffect(() => {
     if (isOpen && doctor) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedIds(doctor.categories?.map((c) => c.id) || []);
     }
   }, [isOpen, doctor]);

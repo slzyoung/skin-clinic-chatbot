@@ -3,11 +3,10 @@
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { RiDeleteBinLine, RiEyeLine } from "@remixicon/react";
 import Image from "next/image";
+import { RiEyeLine } from "@remixicon/react";
 import * as React from "react";
-
-import { BranchResponse } from "../api/types";
+import { BranchResponse } from "../../configuration/api/types";
 import { EditBranchTokenDialog } from "./edit-branch-token-dialog";
 
 interface ViewBranchSheetProps {
@@ -36,21 +35,9 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 					</SheetHeader>
 
 					<div className="flex-1 overflow-y-auto pb-6">
-						{/* Header Image */}
-						<div className="relative h-65 bg-zinc-200 overflow-hidden">
-							<Image
-								src={branch.image_url || "/placeholder.svg"}
-								alt={branch.name}
-								fill
-								className="object-cover"
-							/>
-							<div className="absolute top-4 right-4 z-10">
-								<EditBranchTokenDialog branch={branch} />
-							</div>
-						</div>
 
 						<Tabs defaultValue="information" className="w-full">
-							<div className="px-6 pt-4 border-b border-black-50">
+							<div className="px-6 pt-4">
 								<TabsList
 									variant="line"
 									className="w-full justify-start h-auto p-0 bg-transparent gap-6"
@@ -77,39 +64,24 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 									<span className="text-sm font-medium text-black-500">{branch.name}</span>
 								</div>
 
-								<div className="flex flex-col gap-1">
-									<span className="text-sm text-black-300">Address</span>
-									<span className="text-sm font-medium text-black-500 leading-relaxed">
-										{branch.address || "-"}
-									</span>
-								</div>
-
-								<div className="flex items-center gap-4">
-									<div className="flex flex-col gap-1 flex-1">
-										<span className="text-sm text-black-300">Latitude</span>
-										<span className="text-sm font-medium text-black-500">{branch.latitude}</span>
+								<div className="flex items-center justify-between gap-4">
+									<div className="flex flex-col gap-1">
+										<span className="text-sm text-black-300">Tokens</span>
+										<span className="text-sm font-medium text-blue-600">
+											{branch.tokensMonth} <span className="text-black-500 font-normal">/month</span>
+										</span>
 									</div>
-									<div className="flex flex-col gap-1 flex-1">
-										<span className="text-sm text-black-300">Longitude</span>
-										<span className="text-sm font-medium text-black-500">{branch.longitude}</span>
-									</div>
-								</div>
-
-								<div className="flex flex-col gap-1">
-									<span className="text-sm text-black-300">Tokens</span>
-									<span className="text-sm font-medium text-black-500">
-										{branch.tokensMonth} /month
-									</span>
+									<EditBranchTokenDialog branch={branch} />
 								</div>
 
 								<div className="flex items-center gap-4">
 									<div className="flex flex-col gap-1 flex-1">
 										<span className="text-sm text-black-300">Used</span>
-										<span className="text-sm font-medium text-black-500">{branch.used}</span>
+										<span className="text-sm font-medium text-blue-600">{branch.used}</span>
 									</div>
 									<div className="flex flex-col gap-1 flex-1">
 										<span className="text-sm text-black-300">Remaining</span>
-										<span className="text-sm font-medium text-black-500">{branch.remaining}</span>
+										<span className="text-sm font-medium text-blue-600">{branch.remaining}</span>
 									</div>
 								</div>
 							</TabsContent>
@@ -121,7 +93,7 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 									<div className="flex flex-col gap-2">
 										<div className="flex justify-between items-center text-sm font-medium">
 											<span className="text-black-500">
-												{branch.remaining}/{branch.tokensMonth} tokens left
+												<span className="text-blue-600">{branch.remaining}/{branch.tokensMonth}</span> tokens left
 											</span>
 										</div>
 										<div className="h-2 w-full bg-black-50 rounded-full overflow-hidden">
@@ -135,10 +107,12 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 
 								{/* Doctor List */}
 								<div className="flex flex-col gap-3">
-									<span className="text-sm text-black-300">Doctor ({branch.doctors?.length || 0})</span>
-									<div className="flex flex-col border border-black-50 rounded-lg divide-y divide-black-50">
+									<span className="text-sm text-black-300">
+										Doctor ({branch.doctors?.length || 0})
+									</span>
+									<div className="flex flex-col divide-y divide-black-50">
 										{branch.doctors?.map((doc) => (
-											<div key={doc.id} className="flex items-center gap-3 p-3">
+											<div key={doc.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
 												<div className="size-10 rounded-md bg-zinc-200 shrink-0 overflow-hidden">
 													<Image
 														src="/mini-placeholder.svg"
@@ -151,7 +125,7 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 												<div className="flex flex-col gap-1 flex-1">
 													<span className="text-sm font-medium text-black-500">{doc.name}</span>
 													<span className="text-xs text-black-300">
-														{doc.tokensLeft}/{doc.maxTokens} tokens left
+														<span className="text-blue-600 font-medium">{doc.tokensLeft}/{doc.maxTokens}</span> tokens left
 													</span>
 												</div>
 											</div>
@@ -160,16 +134,6 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 								</div>
 							</TabsContent>
 						</Tabs>
-					</div>
-
-					<div className="p-4 border-t border-black-50 flex justify-start bg-white">
-						<Button
-							variant="outline"
-							className="border-red-500 text-red-500 hover:bg-red-50 hover:text-red-600 w-auto px-5 rounded-lg shadow-none font-medium"
-						>
-							<RiDeleteBinLine className="size-4 mr-2" />
-							Delete Branch
-						</Button>
 					</div>
 				</SheetContent>
 			</Sheet>

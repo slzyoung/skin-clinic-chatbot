@@ -1,6 +1,6 @@
 "use client";
 
-import { BranchTokenTable } from "./components/branch-token-table";
+
 import { GlobalTokenConfig } from "./components/global-token-config";
 import { GlobalModelConfig } from "./components/global-model-config";
 import { GlobalTimeLimitConfig } from "./components/global-time-limit-config";
@@ -22,7 +22,6 @@ export default function ConfigPage() {
 					<GlobalTokenConfig />
 					<GlobalTimeLimitConfig />
 					<GlobalFileAttachmentConfig />
-					<BranchTokenTable />
 				</div>
 			</div>
 		</div>

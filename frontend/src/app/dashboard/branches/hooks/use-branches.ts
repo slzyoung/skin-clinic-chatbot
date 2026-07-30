@@ -1,8 +1,8 @@
 import { api } from "@/lib/axios";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { branchKeys } from "../api/keys";
-import { BranchCreate, BranchResponse, BranchUpdate } from "../api/types";
+import { branchKeys } from "../../configuration/api/keys";
+import { BranchResponse, BranchUpdate } from "../../configuration/api/types";
 
 export function useBranches() {
 	return useQuery<BranchResponse[]>({
@@ -22,25 +22,6 @@ export function useBranch(id: string) {
 			return response.data;
 		},
 		enabled: !!id,
-	});
-}
-
-export function useCreateBranch() {
-	const queryClient = useQueryClient();
-
-	return useMutation({
-		mutationFn: async (data: BranchCreate) => {
-			const response = await api.post("/branches/", data);
-			return response.data;
-		},
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: branchKeys.lists() });
-			toast.success("Branch created successfully");
-		},
-		onError: (error) => {
-			toast.error("Failed to create branch");
-			console.error(error);
-		},
 	});
 }
 
@@ -64,21 +45,3 @@ export function useUpdateBranch() {
 	});
 }
 
-export function useDeleteBranch() {
-	const queryClient = useQueryClient();
-
-	return useMutation({
-		mutationFn: async (id: string) => {
-			const response = await api.delete(`/branches/${id}`);
-			return response.data;
-		},
-		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: branchKeys.lists() });
-			toast.success("Branch deleted successfully");
-		},
-		onError: (error) => {
-			toast.error("Failed to delete branch");
-			console.error(error);
-		},
-	});
-}

@@ -1,6 +1,5 @@
 "use client";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -44,17 +43,7 @@ export function DoctorDetailsSheet({
 								{/* Profile Cover Image */}
 								<div className="relative h-65 w-full bg-gray-100 overflow-hidden shrink-0">
 									<Image src="/placeholder.svg" alt={doctor.name} fill className="object-cover" />
-									<div className="absolute top-4 right-4 z-10">
-										{/* 
-                      <Button 
-                        variant="outline" 
-                        className="bg-white/80 backdrop-blur-sm border-gray-200 text-gray-700 hover:bg-white hover:text-gray-900 px-3 py-0 rounded-lg shadow-none"
-                      >
-                        <RiEdit2Line className="size-4 mr-2" />
-                        Edit Profile
-                      </Button>
-                      */}
-									</div>
+									<div className="absolute top-4 right-4 z-10"></div>
 								</div>
 
 								{/* Details Section */}
@@ -137,23 +126,14 @@ export function DoctorDetailsSheet({
 										{doctor.branches && doctor.branches.length > 0 ? (
 											<div className="flex flex-col gap-3">
 												{doctor.branches.map((branch) => (
-													<div key={branch.id} className="border border-gray-200 rounded-md p-3 flex flex-col gap-3">
-														<div className="flex items-center gap-3">
-															<Avatar className="h-10 w-10 rounded-md after:rounded-md shrink-0">
-																<AvatarImage
-																	src="/mini-placeholder.svg"
-																	className="object-cover rounded-md"
-																/>
-																<AvatarFallback className="rounded-md"></AvatarFallback>
-															</Avatar>
-															<div className="flex flex-col">
-																<span className="text-sm font-medium text-gray-900">
-																	{branch.name}
-																</span>
-																<span className="text-xs text-gray-500">
-																	{branch.address || "No address"}
-																</span>
-															</div>
+													<div
+														key={branch.id}
+														className="border border-gray-200 rounded-md p-3 flex flex-col gap-3"
+													>
+														<div className="flex flex-col">
+															<span className="text-sm font-medium text-gray-900">
+																{branch.name}
+															</span>
 														</div>
 													</div>
 												))}
@@ -163,12 +143,6 @@ export function DoctorDetailsSheet({
 												<span className="text-sm text-gray-500">No Branch</span>
 											</div>
 										)}
-										{/* 
-                      <Button variant="outline" className="w-full mt-2 rounded-md" onClick={() => setIsManageBranchOpen(true)}>
-                        <RiSettings3Line className="mr-2 h-4 w-4" />
-                        Manage Branch
-                      </Button>
-                      */}
 									</div>
 
 									<div className="flex flex-col gap-2 pt-2">
