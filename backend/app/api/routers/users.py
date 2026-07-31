@@ -27,7 +27,6 @@ async def _hydrate_user(user: User, db: AsyncSession) -> dict:
         "name": user.name,
         "cis_id": user.cis_id,
         "token_limit": user.token_limit,
-        "has_ai_access": user.has_ai_access,
         "employee_id": user.employee_id,
         "dr_type": user.dr_type,
         "ecosystem": user.ecosystem,
@@ -94,7 +93,7 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(RequireAccess("users:read"))
 ):
-    stmt = select(User)
+    stmt = select(User).where(User.deleted_at.is_(None))
     if type:
         stmt = stmt.where(User.type == type)
     result = await db.execute(stmt)

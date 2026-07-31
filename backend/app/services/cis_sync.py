@@ -89,9 +89,12 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
     dr_type = data.get("dr_type")
     ecosystem = data.get("ecosystem", "ERHA")
     branch_ids = data.get("branch_ids", [])
+    status = data.get("status")
     
     stmt = select(User).where(User.cis_id == cis_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
+    
+    is_inactive = (status and status.lower() == "inactive")
     
     if not user:
         user = User(
@@ -104,6 +107,8 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
             type=UserType.DOCTOR,
             token_limit=0
         )
+        if is_inactive:
+            user.deleted_at = datetime.now(timezone.utc)
         db.add(user)
     else:
         user.name = name
@@ -111,7 +116,10 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
         user.employee_id = employee_id
         user.dr_type = dr_type
         user.ecosystem = ecosystem
-        user.deleted_at = None
+        if is_inactive:
+            user.deleted_at = datetime.now(timezone.utc)
+        else:
+            user.deleted_at = None
         
     await db.flush()
     

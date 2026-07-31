@@ -29,7 +29,6 @@ class StaffUpdate(BaseModel):
 class DoctorUpdate(BaseModel):
     token_limit: Optional[int] = None
     status: Optional[str] = None
-    has_ai_access: Optional[bool] = None
     employee_id: Optional[str] = None
     dr_type: Optional[str] = None
     ecosystem: Optional[str] = None
@@ -51,7 +50,6 @@ class UserResponse(UserBase):
     type: UserType
     cis_id: Optional[str] = None
     token_limit: Optional[int] = None
-    has_ai_access: bool
     employee_id: Optional[str] = None
     dr_type: Optional[str] = None
     ecosystem: str

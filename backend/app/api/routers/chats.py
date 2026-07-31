@@ -149,12 +149,6 @@ async def create_chat_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type == UserType.DOCTOR and not current_user.has_ai_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="AI Assistant access is disabled for your account. Please contact an administrator."
-        )
-
     session = ChatSession(
         user_id=current_user.id,
         branch_id=session_in.branch_id
@@ -233,11 +227,6 @@ async def create_chat_message(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.type == UserType.DOCTOR and not current_user.has_ai_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="AI Assistant access is disabled for your account. Please contact an administrator."
-        )
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
     if not await has_chats_read_access(current_user, db):

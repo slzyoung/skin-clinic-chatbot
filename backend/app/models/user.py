@@ -20,7 +20,6 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     password_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     cis_id: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True)
     token_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    has_ai_access: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false', nullable=False)
     
     employee_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     dr_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
