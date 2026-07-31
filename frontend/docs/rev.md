@@ -31,3 +31,10 @@ This document tracks frontend adjustments and new features that require backend 
 ## 2026-07-30 - Shared SearchBar Component
 
 - Consolidated multiple inline search inputs across the Dashboard into a single, reusable `SearchBar` component (`src/components/shared/search-bar.tsx`).
+
+## 2026-07-31 - Doctor AI Access & CIS Sync Updates
+
+- Removed the "AI Chatbot Access" toggle from the Doctor Details sheet.
+- All doctors synced from CIS that are "Active" now automatically have AI access.
+- Removed the AI access warning banner and restriction logic from the Doctor Chat Interface (`/doctor`).
+- Backend `has_ai_access` column was dropped. API endpoints now allow all active doctors to use the AI chat and exclude soft-deleted (inactive) doctors.
