@@ -257,3 +257,19 @@ async def update_user_accesses(
             
     await db.commit()
     return await _hydrate_user(user, db)
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(RequireAccess("users:write"))
+):
+    stmt = select(User).where(User.id == user_id, User.deleted_at.is_(None))
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+

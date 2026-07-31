@@ -110,3 +110,21 @@ export const useUpdateDoctorCategories = () => {
 		},
 	});
 };
+
+export const useDeleteUser = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (userId: string) => {
+			const response = await api.delete(`/users/${userId}`);
+			return response.data;
+		},
+		onSuccess: () => {
+			toast.success("User deleted successfully!");
+			queryClient.invalidateQueries({ queryKey: userKeys.lists() });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to delete user."));
+		},
+	});
+};

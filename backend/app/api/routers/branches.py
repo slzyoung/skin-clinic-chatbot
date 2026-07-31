@@ -85,6 +85,21 @@ async def list_branches(
     branches = result.scalars().all()
     return [await _hydrate_branch(b, db) for b in branches]
 
+@router.get("/{branch_id}", response_model=BranchResponse)
+async def get_branch(
+    branch_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(RequireAccess("branches:read"))
+):
+    stmt = select(Branch).where(Branch.id == branch_id, Branch.deleted_at.is_(None))
+    result = await db.execute(stmt)
+    branch = result.scalar_one_or_none()
+    
+    if not branch:
+        raise HTTPException(status_code=404, detail="Branch not found")
+        
+    return await _hydrate_branch(branch, db)
+
 @router.post("/", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
 async def create_branch(
     branch_in: BranchCreate,
