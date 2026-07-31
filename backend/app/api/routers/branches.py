@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType, UserTokenUsage
 from app.models.branch import Branch, UserBranch
-from app.models.category import Category, UserCategory
+from app.models.category import Category, UserCategoryExclusion
 from app.schemas.branch import BranchCreate, BranchUpdate, BranchResponse
 from datetime import datetime, timezone
 
@@ -49,7 +49,12 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
         branch_used += tokens_used
         
         # Get speciality
-        stmt_cat = select(Category).join(UserCategory, UserCategory.category_id == Category.id).where(UserCategory.user_id == doc.id)
+        stmt_cat = select(Category).where(
+            Category.deleted_at.is_(None),
+            ~Category.id.in_(
+                select(UserCategoryExclusion.category_id).where(UserCategoryExclusion.user_id == doc.id)
+            )
+        )
         result_cat = await db.execute(stmt_cat)
         cat = result_cat.scalar() # just get first category
         speciality = cat.name if cat else ""

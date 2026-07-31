@@ -12,8 +12,8 @@ class Category(Base, TimestampMixin, SoftDeleteMixin):
     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-class UserCategory(Base, TimestampMixin):
-    __tablename__ = "user_category"
+class UserCategoryExclusion(Base, TimestampMixin):
+    __tablename__ = "user_category_exclusion"
 
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="CASCADE"), primary_key=True)

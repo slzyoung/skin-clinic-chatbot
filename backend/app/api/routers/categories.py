@@ -28,11 +28,22 @@ async def create_category(
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(RequireAccess("categories:write"))
 ):
-    stmt = select(Category).where(Category.name == category_in.name, Category.deleted_at.is_(None))
+    stmt = select(Category).where(Category.name == category_in.name)
     result = await db.execute(stmt)
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Category with this name already exists")
+    existing_category = result.scalar_one_or_none()
     
+    if existing_category:
+        if existing_category.deleted_at is None:
+            raise HTTPException(status_code=400, detail="Category with this name already exists")
+        else:
+            # Reactivate soft-deleted category
+            existing_category.deleted_at = None
+            if category_in.description is not None:
+                existing_category.description = category_in.description
+            await db.commit()
+            await db.refresh(existing_category)
+            return existing_category
+            
     category = Category(**category_in.model_dump())
     db.add(category)
     await db.commit()
@@ -54,6 +65,13 @@ async def update_category(
         raise HTTPException(status_code=404, detail="Category not found")
         
     update_data = category_in.model_dump(exclude_unset=True)
+    
+    if "name" in update_data and update_data["name"] != category.name:
+        check_stmt = select(Category).where(Category.name == update_data["name"])
+        check_result = await db.execute(check_stmt)
+        if check_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Category with this name already exists")
+            
     for field, value in update_data.items():
         setattr(category, field, value)
         

@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType, Role, UserRole, UserTokenUsage
 from app.models.branch import Branch, UserBranch
-from app.models.category import Category, UserCategory
+from app.models.category import Category, UserCategoryExclusion
 from app.schemas.user import (
     UserResponse, UserCreateStaff, StaffUpdate, DoctorUpdate,
     UserUpdateRoles, UserUpdateCategories, UserUpdateAccesses
@@ -61,7 +61,12 @@ async def _hydrate_user(user: User, db: AsyncSession) -> dict:
         branches = result_branch.scalars().all()
         user_dict["branches"] = [{"id": b.id, "name": b.name, "address": b.address, "latitude": b.latitude, "longitude": b.longitude, "image_url": b.image_url, "token_limit": b.token_limit, "created_at": b.created_at, "updated_at": b.updated_at} for b in branches]
         
-        stmt_cat = select(Category).join(UserCategory, UserCategory.category_id == Category.id).where(UserCategory.user_id == user.id)
+        stmt_cat = select(Category).where(
+            Category.deleted_at.is_(None),
+            ~Category.id.in_(
+                select(UserCategoryExclusion.category_id).where(UserCategoryExclusion.user_id == user.id)
+            )
+        )
         result_cat = await db.execute(stmt_cat)
         categories = result_cat.scalars().all()
         user_dict["categories"] = [{"id": c.id, "name": c.name, "description": c.description, "created_at": c.created_at, "updated_at": c.updated_at} for c in categories]
@@ -198,9 +203,14 @@ async def update_user_categories(
     if not user:
         raise HTTPException(status_code=404, detail="Doctor not found")
         
-    await db.execute(UserCategory.__table__.delete().where(UserCategory.user_id == user_id))
-    for cat_id in categories_in.categories:
-        db.add(UserCategory(user_id=user.id, category_id=cat_id))
+    await db.execute(UserCategoryExclusion.__table__.delete().where(UserCategoryExclusion.user_id == user_id))
+    
+    stmt_all = select(Category.id).where(Category.deleted_at.is_(None))
+    all_cat_ids = set((await db.execute(stmt_all)).scalars().all())
+    
+    excluded_ids = all_cat_ids - set(categories_in.categories)
+    for cat_id in excluded_ids:
+        db.add(UserCategoryExclusion(user_id=user.id, category_id=cat_id))
         
     await db.commit()
     return await _hydrate_user(user, db)
