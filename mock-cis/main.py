@@ -74,6 +74,7 @@ MOCK_DOCTORS = [
         "employee_id": "EMP-001",
         "dr_type": "SpDVE",
         "ecosystem": "ERHA",
+        "status": "active",
         "name": "Dr. Jane Doe, Sp.D.V.E.",
         "email": "doctor@mail.com",
         "branch_ids": [
@@ -85,6 +86,7 @@ MOCK_DOCTORS = [
         "employee_id": "EMP-002",
         "dr_type": "SpDVE",
         "ecosystem": "ERHA",
+        "status": "active",
         "name": "Dr. John Smith, Sp.D.V.E.",
         "email": "john.smith@example.com",
         "branch_ids": [
@@ -97,6 +99,7 @@ MOCK_DOCTORS = [
         "employee_id": "EMP-003",
         "dr_type": "GP Plus",
         "ecosystem": "ERHA",
+        "status": "active",
         "name": "Dr. Amanda Prasetya",
         "email": "amanda.prasetya@example.com",
         "branch_ids": [
@@ -109,6 +112,7 @@ MOCK_DOCTORS = [
         "employee_id": "EMP-004",
         "dr_type": "GP Plus",
         "ecosystem": "ERHA",
+        "status": "active",
         "name": "Dr. Budi Santoso, Sp.B.P.R.E.",
         "email": "budi.santoso@example.com",
         "branch_ids": [
@@ -120,6 +124,7 @@ MOCK_DOCTORS = [
         "employee_id": "EMP-005",
         "dr_type": "SpDVE",
         "ecosystem": "ERHA",
+        "status": "active",
         "name": "Dr. Citra Dewi",
         "email": "citra.dewi@example.com",
         "branch_ids": [
@@ -132,6 +137,7 @@ MOCK_DOCTORS = [
         "employee_id": "EMP-006",
         "dr_type": "GP Plus",
         "ecosystem": "ERHA",
+        "status": "inactive",
         "name": "Dr. Edward Wijaya",
         "email": "edward.wijaya@example.com",
         "branch_ids": [
