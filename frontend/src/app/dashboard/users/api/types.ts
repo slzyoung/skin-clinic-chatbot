@@ -55,7 +55,6 @@ export interface StaffUpdate {
 export interface DoctorUpdate {
   token_limit?: number;
   status?: string;
-  has_ai_access?: boolean;
   employee_id?: string;
   dr_type?: string;
   ecosystem?: string;
@@ -84,7 +83,6 @@ export interface UserResponse extends UserBase {
   created_at: string;
   
   status?: string;
-  has_ai_access?: boolean;
   tokens_used?: number;
   roles?: RoleResponse[];
   branches?: BranchResponse[];

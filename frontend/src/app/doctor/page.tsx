@@ -1,23 +1,17 @@
 "use client";
 
-import { useSession } from "@/hooks/use-session";
 import { PromptInput } from "@/components/shared/prompt-input";
 import {
 	RiFileTextLine,
 	RiMedicineBottleLine,
 	RiRobot2Line,
 	RiSyringeLine,
-	RiAlertLine,
 } from "@remixicon/react";
 import { useCreateChatSession } from "./hooks/use-doctor-chat";
 
 export default function DoctorChatPage() {
-	const { user } = useSession();
 	const createChat = useCreateChatSession();
-	const isAiDisabled = user?.has_ai_access === false;
-
 	const handleSend = (text: string, category: string | undefined, files: File[]) => {
-		if (isAiDisabled) return;
 		if (!text.trim() && files.length === 0) return;
 
 		const formData = new FormData();
@@ -29,7 +23,6 @@ export default function DoctorChatPage() {
 	};
 
 	const handleShortcut = (shortcut: string) => {
-		if (isAiDisabled) return;
 		const formData = new FormData();
 		formData.append("role", "USER");
 		formData.append("content", shortcut);
@@ -47,19 +40,6 @@ export default function DoctorChatPage() {
 		<div className="flex flex-col max-w-2xl mx-auto min-h-full w-full pt-10 pb-10 px-4">
 			{/* Date */}
 			<div className="text-[13px] font-medium text-zinc-500 mb-6 text-center">{formattedDate}</div>
-
-			{/* AI Access Warning Banner */}
-			{isAiDisabled && (
-				<div className="flex items-start gap-3 p-4 mb-6 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 shadow-xs">
-					<RiAlertLine className="size-5 text-amber-600 shrink-0 mt-0.5" />
-					<div className="text-xs space-y-1">
-						<p className="font-semibold text-amber-900">AI Assistant Access Disabled</p>
-						<p className="text-amber-700 leading-relaxed">
-							AI Assistant features are currently disabled for your account. Please contact your system administrator to enable AI access.
-						</p>
-					</div>
-				</div>
-			)}
 
 			{/* Header */}
 			<div className="flex flex-col items-center text-center space-y-2 mb-8">
@@ -80,7 +60,7 @@ export default function DoctorChatPage() {
 			{/* Shortcuts */}
 			<div className="grid grid-cols-2 gap-3 w-full mb-4 shrink-0">
 				<button
-					disabled={isAiDisabled || createChat.isPending}
+					disabled={createChat.isPending}
 					onClick={() => handleShortcut("Can you suggest a product for this condition...")}
 					className="flex flex-col items-start p-2.5 text-left rounded-md border border-border hover:border-zinc-300 hover:bg-zinc-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 				>
@@ -91,7 +71,7 @@ export default function DoctorChatPage() {
 					</p>
 				</button>
 				<button
-					disabled={isAiDisabled || createChat.isPending}
+					disabled={createChat.isPending}
 					onClick={() => handleShortcut("Could you recommend a treatment for this condition...")}
 					className="flex flex-col items-start p-2.5 text-left rounded-md border border-border hover:border-zinc-300 hover:bg-zinc-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 				>
@@ -112,7 +92,6 @@ export default function DoctorChatPage() {
 					)}
 					<PromptInput
 						minRows={3}
-						disabled={isAiDisabled}
 						hideCategories
 						showAttachText
 						placeholder="Can you suggest a product for this condition..."

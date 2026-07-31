@@ -13,7 +13,6 @@ export interface UserResponse {
   status: "Active" | "Inactive" | "Warning";
   roles: Array<{ id: string; name: string }>;
   accesses: string[];
-  has_ai_access?: boolean;
   branches: Array<Record<string, unknown>>;
   categories: Array<Record<string, unknown>>;
   tokens_used: number;

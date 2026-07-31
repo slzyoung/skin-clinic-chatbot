@@ -3,12 +3,10 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import { RiEdit2Line, RiSettings3Line } from "@remixicon/react";
 import Image from "next/image";
 import { useState } from "react";
 import { UserResponse } from "../api/types";
-import { useUpdateDoctorAccess } from "../hooks/use-users";
 import { DoctorAdjustLimitDialog } from "./doctor-adjust-limit-dialog";
 import { DoctorManageKnowledgeDialog } from "./doctor-manage-knowledge-dialog";
 
@@ -23,12 +21,6 @@ export function DoctorDetailsSheet({
 }) {
 	const [isManageKnowledgeOpen, setIsManageKnowledgeOpen] = useState(false);
 	const [isAdjustLimitOpen, setIsAdjustLimitOpen] = useState(false);
-	const updateDoctorAccess = useUpdateDoctorAccess();
-
-	const initialAiAccess = doctor?.has_ai_access ?? false;
-	const [editedAiAccess, setEditedAiAccess] = useState<boolean | null>(null);
-	const isAiAccess = editedAiAccess !== null ? editedAiAccess : initialAiAccess;
-
 	return (
 		<Sheet open={isOpen} onOpenChange={onOpenChange}>
 			<SheetContent className="sm:max-w-100 p-0 flex flex-col h-full bg-white gap-0">
@@ -48,27 +40,6 @@ export function DoctorDetailsSheet({
 
 								{/* Details Section */}
 								<div className="flex flex-col gap-4 px-6 py-4">
-									<div className="flex flex-col gap-2">
-										<div className="flex items-center justify-between">
-											<span className="text-sm text-gray-500">AI Chatbot Access</span>
-											<Switch
-												checked={isAiAccess}
-												className="cursor-pointer"
-												onCheckedChange={(checked: boolean) => {
-													setEditedAiAccess(checked);
-													if (doctor?.id) {
-														updateDoctorAccess.mutate(
-															{ userId: doctor.id, data: { has_ai_access: checked } },
-															{
-																onError: () => setEditedAiAccess(!checked), // rollback on error
-															},
-														);
-													}
-												}}
-											/>
-										</div>
-									</div>
-
 									<div className="flex flex-col gap-2">
 										<span className="text-sm text-gray-500">Name</span>
 										<span className="text-sm text-gray-900">{doctor.name}</span>
