@@ -10,7 +10,8 @@ import {
   RiMedicineBottleLine,
   RiSyringeLine,
   RiMegaphoneLine,
-  RiCornerDownLeftLine
+  RiCornerDownLeftLine,
+  RiArchiveLine
 } from "@remixicon/react"
 import {
   Attachment,
@@ -23,7 +24,7 @@ import {
 } from "@/components/ui/attachment"
 
 export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
-  onSend?: (value: string, category: string | undefined, files: File[]) => void
+  onSend?: (value: string, category: string | undefined, files: File[]) => boolean | void
   hideCategories?: boolean
   showAttachText?: boolean
   placeholder?: string
@@ -32,7 +33,8 @@ export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 export function PromptInput({ className, onSend, hideCategories, showAttachText, placeholder, minRows = 1, disabled, ...props }: PromptInputProps) {
-  const [activeCategory, setActiveCategory] = React.useState<"Product" | "Treatment" | "Promotional" | undefined>()
+  const [activeCategory, setActiveCategory] = React.useState<"Product" | "Treatment" | "Promotional" | "Other" | undefined>()
+  const [categoryError, setCategoryError] = React.useState(false)
   const [inputValue, setInputValue] = React.useState("")
   const [attachedFiles, setAttachedFiles] = React.useState<File[]>([])
 
@@ -48,9 +50,17 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
   }
 
   const handleSend = () => {
-    onSend?.(inputValue, activeCategory, attachedFiles)
-    setInputValue("")
-    setAttachedFiles([])
+    const success = onSend?.(inputValue, activeCategory, attachedFiles)
+    if (success === false) {
+      if (!activeCategory && !hideCategories) {
+        setCategoryError(true)
+      }
+    } else {
+      setInputValue("")
+      setAttachedFiles([])
+      setActiveCategory(undefined)
+      setCategoryError(false)
+    }
   }
 
   return (
@@ -131,12 +141,14 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => setActiveCategory("Product")}
+                onClick={() => { setActiveCategory("Product"); setCategoryError(false); }}
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   activeCategory === "Product" 
                     ? "border-blue-500 bg-blue-50 text-blue-700" 
-                    : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
+                    : categoryError
+                      ? "border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
                 )}
               >
                 <RiMedicineBottleLine className="size-3.5" />
@@ -145,12 +157,14 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => setActiveCategory("Treatment")}
+                onClick={() => { setActiveCategory("Treatment"); setCategoryError(false); }}
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   activeCategory === "Treatment" 
                     ? "border-blue-500 bg-blue-50 text-blue-700" 
-                    : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
+                    : categoryError
+                      ? "border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
                 )}
               >
                 <RiSyringeLine className="size-3.5" />
@@ -159,16 +173,34 @@ export function PromptInput({ className, onSend, hideCategories, showAttachText,
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => setActiveCategory("Promotional")}
+                onClick={() => { setActiveCategory("Promotional"); setCategoryError(false); }}
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                   activeCategory === "Promotional" 
                     ? "border-blue-500 bg-blue-50 text-blue-700" 
-                    : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
+                    : categoryError
+                      ? "border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
                 )}
               >
                 <RiMegaphoneLine className="size-3.5" />
                 <span>Promotional</span>
+              </button>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => { setActiveCategory("Other"); setCategoryError(false); }}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                  activeCategory === "Other" 
+                    ? "border-blue-500 bg-blue-50 text-blue-700" 
+                    : categoryError
+                      ? "border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      : "border-border bg-white text-zinc-700 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700"
+                )}
+              >
+                <RiArchiveLine className="size-3.5" />
+                <span>Other</span>
               </button>
             </>
           )}

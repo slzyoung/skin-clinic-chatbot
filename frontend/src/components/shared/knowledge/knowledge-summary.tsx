@@ -6,6 +6,7 @@ import {
 	RiMedicineBottleLine,
 	RiRobot2Line,
 	RiSyringeLine,
+	RiArchiveLine,
 } from "@remixicon/react";
 
 export function KnowledgeSummary() {
@@ -44,6 +45,13 @@ export function KnowledgeSummary() {
 			icon: RiDiscountPercentLine,
 			iconColor: "text-amber-500",
 			iconBg: "bg-amber-50",
+		},
+		{
+			title: "Other",
+			count: (totalCount - productCount - treatmentCount - promotionalCount).toString(),
+			icon: RiArchiveLine,
+			iconColor: "text-purple-600",
+			iconBg: "bg-purple-50",
 		},
 	];
 

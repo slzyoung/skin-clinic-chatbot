@@ -13,6 +13,13 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import {
+	DropdownMenu,
+	DropdownMenuTrigger,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+} from "@/components/ui/dropdown-menu";
+import {
 	RiDatabase2Line,
 	RiEyeLine,
 	RiLoader4Line,
@@ -25,11 +32,16 @@ import { useKnowledgeBaseList } from "../../../app/dashboard/knowledge/hooks/use
 export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
-	const { data: knowledgeList, isLoading, isError } = useKnowledgeBaseList(type);
+	const [statusFilter, setStatusFilter] = useState("ALL");
+	const [categoryFilter, setCategoryFilter] = useState("ALL");
+	const { data: knowledgeList, isLoading, isError } = useKnowledgeBaseList();
 
 	const basePath = "/dashboard/knowledge";
 
 	const filteredList = knowledgeList
+		?.filter((item) => (type ? item.type === type : true))
+		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
+		// We'll leave categoryFilter as a visual stub for now until dynamic categories are fully wired
 		?.filter(
 			(item) =>
 				item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -81,14 +93,71 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 					placeholder="Search for knowledge title or filename..."
 				/>
 				<div className="flex items-center gap-3">
-					<Button variant="outline" className="gap-2 bg-white hover:bg-gray-50 text-gray-700">
-						<RiDatabase2Line className="w-4 h-4" />
-						Filter by category
-					</Button>
-					<Button variant="outline" className="gap-2 bg-white hover:bg-gray-50 text-gray-700">
-						<RiMoneyDollarCircleLine className="w-4 h-4" />
-						Filter by status
-					</Button>
+					<DropdownMenu>
+						<DropdownMenuTrigger
+							render={
+								<Button
+									variant="outline"
+									className="w-50 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200"
+								/>
+							}
+						>
+							<RiDatabase2Line className="size-4 shrink-0 text-gray-500" />
+							<span className="truncate">
+								{categoryFilter === "ALL" ? "Filter by category" : categoryFilter}
+							</span>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent className="w-50">
+							<DropdownMenuRadioGroup value={categoryFilter} onValueChange={setCategoryFilter}>
+								<DropdownMenuRadioItem closeOnClick value="ALL">
+									All Categories
+								</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem closeOnClick value="Acne" disabled>
+									Acne (Coming Soon)
+								</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem closeOnClick value="Skin Whitening" disabled>
+									Skin Whitening (Coming Soon)
+								</DropdownMenuRadioItem>
+							</DropdownMenuRadioGroup>
+						</DropdownMenuContent>
+					</DropdownMenu>
+
+					<DropdownMenu>
+						<DropdownMenuTrigger
+							render={
+								<Button
+									variant="outline"
+									className="w-45 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200"
+								/>
+							}
+						>
+							<RiMoneyDollarCircleLine className="size-4 shrink-0 text-gray-500" />
+							<span className="truncate">
+								{statusFilter === "ALL"
+									? "Filter by status"
+									: statusFilter.charAt(0) + statusFilter.slice(1).toLowerCase()}
+							</span>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent className="w-45">
+							<DropdownMenuRadioGroup value={statusFilter} onValueChange={setStatusFilter}>
+								<DropdownMenuRadioItem closeOnClick value="ALL">
+									All Status
+								</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem closeOnClick value="APPROVED">
+									Approved
+								</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem closeOnClick value="PENDING">
+									Pending
+								</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem closeOnClick value="PROCESSING">
+									Processing
+								</DropdownMenuRadioItem>
+								<DropdownMenuRadioItem closeOnClick value="REJECTED">
+									Rejected
+								</DropdownMenuRadioItem>
+							</DropdownMenuRadioGroup>
+						</DropdownMenuContent>
+					</DropdownMenu>
 				</div>
 			</div>
 

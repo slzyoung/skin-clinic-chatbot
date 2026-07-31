@@ -33,10 +33,17 @@ export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps)
 				</div>
 
 				<div className="p-3.5 flex flex-col gap-4">
-					{/* File Name */}
+					{/* Title */}
 					<div>
-						<label className="text-xs font-medium text-zinc-500 mb-1 block">File Name</label>
-						<p className="text-sm text-zinc-950">{knowledge.title}</p>
+						<label className="text-xs font-medium text-zinc-500 mb-1 block">Title</label>
+						<p className="text-sm text-zinc-950">
+							{knowledge.title
+								? knowledge.title
+										.replace(/\.[^/.]+$/, "")
+										.replace(/[_-]/g, " ")
+										.replace(/\b\w/g, (c) => c.toUpperCase())
+								: ""}
+						</p>
 					</div>
 
 					{/* Type */}

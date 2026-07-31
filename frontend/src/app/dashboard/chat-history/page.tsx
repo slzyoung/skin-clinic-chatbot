@@ -1,14 +1,24 @@
 "use client";
+import { useState } from "react";
 import { SearchBar } from "@/components/shared/search-bar";
 import { RiLoader4Line } from "@remixicon/react";
 import { ChatFilter } from "./components/chat-filter";
 import { ChatHistoryCard } from "./components/chat-history-card";
 import { useChatHistories } from "./hooks/use-chat-history";
+import { useUsers } from "@/app/dashboard/users/hooks/use-users";
 
 export default function ChatHistoryPage() {
 	const { data: chatHistories, isLoading, isError } = useChatHistories();
+	const { data: allDoctors } = useUsers("DOCTOR");
+	const [doctorFilter, setDoctorFilter] = useState("ALL");
 
-	const doctors = Array.from(new Set(chatHistories?.map(item => item.doctor) || []));
+	// Get names of all registered doctors
+	const doctors = allDoctors?.map((user) => user.name) || [];
+
+	const filteredData = chatHistories?.filter((item) => {
+		if (doctorFilter !== "ALL" && item.doctor !== doctorFilter) return false;
+		return true;
+	});
 
 	return (
 		<div className="flex flex-col h-full gap-6 p-6">
@@ -25,7 +35,11 @@ export default function ChatHistoryPage() {
 						containerClassName="max-w-md"
 						placeholder="Search for chat sessions..."
 					/>
-					<ChatFilter doctors={doctors} />
+					<ChatFilter 
+						doctors={doctors} 
+						value={doctorFilter} 
+						onChange={setDoctorFilter} 
+					/>
 				</div>
 
 			{/* List */}
@@ -43,13 +57,13 @@ export default function ChatHistoryPage() {
 					</div>
 				)}
 
-				{!isLoading && !isError && chatHistories?.length === 0 && (
+				{!isLoading && !isError && filteredData?.length === 0 && (
 					<div className="p-8 text-center text-muted-foreground">No chat history found.</div>
 				)}
 
 				{!isLoading &&
 					!isError &&
-					chatHistories?.map((item) => <ChatHistoryCard key={item.id} item={item} />)}
+					filteredData?.map((item) => <ChatHistoryCard key={item.id} item={item} />)}
 			</div>
 			</div>
 		</div>

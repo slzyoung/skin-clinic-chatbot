@@ -8,23 +8,28 @@ import {
 	RiSyringeLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { useState } from "react";
+import { RiAlertLine } from "@remixicon/react";
 import { useUploadKnowledge } from "../knowledge/hooks/use-knowledge";
 
 export default function IngestPage() {
 	const router = useRouter();
 	const uploadMutation = useUploadKnowledge();
 
+	const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
 	const handleSend = (value: string, category: string | undefined, files: File[]) => {
 		if (files.length === 0) {
-			toast.error("Please attach at least one file to ingest.");
-			return;
+			setErrorMsg("Please attach at least one file to ingest.");
+			return false;
 		}
 
 		if (!category) {
-			toast.error("Please select a category (Product, Treatment, or Promotional).");
-			return;
+			setErrorMsg("Please select a category (Product, Treatment, Promotional, or Other).");
+			return false;
 		}
+
+		setErrorMsg(null);
 
 		const formData = new FormData();
 		formData.append("title", value || "Untitled Knowledge Base Document");
@@ -81,6 +86,13 @@ export default function IngestPage() {
 				<div className="w-full">
 					<PromptInput minRows={3} onSend={handleSend} />
 				</div>
+
+				{errorMsg && (
+					<div className="w-full mt-2 flex items-center text-[13px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-2.5">
+						<RiAlertLine className="size-4 mr-1.5 shrink-0" />
+						{errorMsg}
+					</div>
+				)}
 
 				{uploadMutation.isPending && (
 					<div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-md z-10 backdrop-blur-sm">

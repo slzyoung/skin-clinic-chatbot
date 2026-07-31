@@ -9,6 +9,13 @@ import {
 	MessageScrollerProvider,
 	MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
+import {
+	Attachment,
+	AttachmentMedia,
+	AttachmentContent,
+	AttachmentTitle,
+	AttachmentDescription,
+} from "@/components/ui/attachment";
 import { api } from "@/lib/axios";
 import {
 	RiAttachment2,
@@ -152,15 +159,19 @@ export function ChatPreview({
 									<div className="flex flex-col w-full items-start">
 										{/* Attached Document Badge OUTSIDE & ABOVE bubble */}
 										{fileName && (
-											<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
-												<RiFilePdf2Line className="size-4 text-red-500 shrink-0" />
-												<span className="font-semibold text-zinc-900 truncate max-w-md">
-													{fileName}
-												</span>
-												<span className="text-[10px] text-zinc-600 font-mono uppercase bg-zinc-200/70 px-1.5 py-0.5 rounded">
-													{fileName.split(".").pop() || "Document"}
-												</span>
-											</div>
+											<Attachment className="bg-white border-border shadow-sm p-1.5 w-fit min-w-40 max-w-sm mb-2">
+												<AttachmentMedia className="bg-blue-50 text-blue-600 shrink-0">
+													<RiFilePdf2Line className="size-5" />
+												</AttachmentMedia>
+												<AttachmentContent className="overflow-hidden">
+													<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate">
+														{fileName}
+													</AttachmentTitle>
+													<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+														DOCUMENT
+													</AttachmentDescription>
+												</AttachmentContent>
+											</Attachment>
 										)}
 
 										<div className="flex items-start gap-3 w-full">
@@ -214,15 +225,19 @@ export function ChatPreview({
 									>
 										{/* Attached Knowledge Document Badge OUTSIDE & ABOVE initial AI summary bubble */}
 										{fileName && index === 0 && msg.role === "assistant" && (
-											<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
-												<RiFilePdf2Line className="size-4 text-red-500 shrink-0" />
-												<span className="font-semibold text-zinc-900 truncate max-w-md">
-													{fileName}
-												</span>
-												<span className="text-[10px] text-zinc-600 font-mono uppercase bg-zinc-200/70 px-1.5 py-0.5 rounded">
-													{fileName.split(".").pop() || "Document"}
-												</span>
-											</div>
+											<Attachment className="bg-white border-border shadow-sm p-1.5 w-fit min-w-40 max-w-sm mb-2">
+												<AttachmentMedia className="bg-blue-50 text-blue-600 shrink-0">
+													<RiFilePdf2Line className="size-5" />
+												</AttachmentMedia>
+												<AttachmentContent className="overflow-hidden">
+													<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate">
+														{fileName}
+													</AttachmentTitle>
+													<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+														DOCUMENT
+													</AttachmentDescription>
+												</AttachmentContent>
+											</Attachment>
 										)}
 
 										{/* User File Attachment Chip OUTSIDE & ABOVE user bubble */}

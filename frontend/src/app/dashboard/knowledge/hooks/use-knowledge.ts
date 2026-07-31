@@ -5,11 +5,11 @@ import { toast } from "sonner";
 import { knowledgeKeys } from "../api/keys";
 import type { KnowledgeResponse, KnowledgeStatus } from "../api/types";
 
-export const useKnowledgeBaseList = (type?: string) => {
+export const useKnowledgeBaseList = () => {
 	return useQuery({
-		queryKey: knowledgeKeys.list({ type }),
+		queryKey: knowledgeKeys.all,
 		queryFn: async (): Promise<KnowledgeResponse[]> => {
-			const response = await api.get("/knowledge/", { params: { type } });
+			const response = await api.get("/knowledge/");
 			return response.data;
 		},
 		refetchInterval: (query) => {

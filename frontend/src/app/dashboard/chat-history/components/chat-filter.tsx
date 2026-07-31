@@ -1,33 +1,47 @@
-import { RiUserLine, RiArrowDownSLine } from "@remixicon/react"
-import { buttonVariants } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { RiUserLine } from "@remixicon/react"
+import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-export function ChatFilter({ doctors = [] }: { doctors?: string[] }) {
+interface ChatFilterProps {
+  doctors?: string[];
+  value: string;
+  onChange: (value: string) => void;
+}
+
+export function ChatFilter({ doctors = [], value, onChange }: ChatFilterProps) {
   return (
     <div className="flex items-center gap-3">
       <DropdownMenu>
-        <DropdownMenuTrigger className={cn(buttonVariants({ variant: "outline" }), "flex items-center justify-between w-55 font-normal")}>
-          <div className="flex items-center gap-2">
-            <RiUserLine className="w-4 h-4 text-gray-700" />
-            <span>Filtered by Doctor</span>
-          </div>
-          <RiArrowDownSLine className="w-4 h-4 text-gray-400" />
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              className="w-72 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200"
+            />
+          }
+        >
+          <RiUserLine className="w-4 h-4 shrink-0 text-gray-500" />
+          <span className="truncate">
+            {value === "ALL" ? "Filter by doctor" : value}
+          </span>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-55">
-          <DropdownMenuItem>All Doctors</DropdownMenuItem>
-          {doctors.map(
-            (doctor) => (
-              <DropdownMenuItem key={doctor}>
+        <DropdownMenuContent align="end" className="w-72">
+          <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+            <DropdownMenuRadioItem closeOnClick value="ALL">
+              All Doctors
+            </DropdownMenuRadioItem>
+            {doctors.map((doctor) => (
+              <DropdownMenuRadioItem closeOnClick key={doctor} value={doctor}>
                 {doctor}
-              </DropdownMenuItem>
-            )
-          )}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

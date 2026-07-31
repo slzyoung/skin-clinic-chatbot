@@ -4,7 +4,7 @@ import { ChatPreview } from "@/components/shared/knowledge/ChatPreview";
 import { ClassificationSidebar } from "@/components/shared/knowledge/ClassificationSidebar";
 import { Button } from "@/components/ui/button";
 import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line } from "@remixicon/react";
-import Link from "next/link";
+
 import { useRouter } from "next/navigation";
 import { use } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail } from "../hooks/use-knowledge";
@@ -38,20 +38,30 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 		);
 	}
 
+	const formatDisplayTitle = (raw: string | undefined) => {
+		if (!raw) return "Knowledge Document";
+		return raw
+			.replace(/\.[^/.]+$/, "") // strip extension
+			.replace(/[_-]/g, " ") // replace underscores/dashes with spaces
+			.replace(/\b\w/g, (c) => c.toUpperCase()); // title case
+	};
+
 	return (
 		<div className="flex flex-col absolute inset-0">
 			{/* Title Header with Actions */}
-			<div className="px-6 py-3 border-b border-black/10 bg-white shrink-0 flex items-center justify-between">
-				<Link
-					href="/dashboard/knowledge"
-					className="flex items-center gap-2 text-zinc-950 hover:text-zinc-700 transition-colors"
-				>
-					<RiArrowLeftLine className="size-4" />
-					<span className="text-sm font-semibold">{data?.title || "Knowledge Document"}</span>
-				</Link>
+			<div className="flex items-center gap-4 p-4 border-b border-gray-200 shrink-0 bg-white justify-between">
+				<div className="flex items-center gap-4">
+					<Button variant="ghost" size="icon" onClick={() => router.back()} className="text-gray-500 hover:text-gray-900">
+						<RiArrowLeftLine className="size-5" />
+					</Button>
+					<div>
+						<h1 className="text-lg font-semibold text-gray-900">{formatDisplayTitle(data?.title)}</h1>
+						<p className="text-sm text-gray-500">Knowledge Document Details</p>
+					</div>
+				</div>
 
 				<div className="flex items-center gap-2">
-					{hasDeleteAccess && (
+					{hasDeleteAccess && data?.status === "APPROVED" && (
 						<Button
 							onClick={handleDelete}
 							disabled={deleteMutation.isPending || isLoading}
@@ -62,7 +72,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 							Delete Knowledge
 						</Button>
 					)}
-					{hasWriteAccess && (
+					{hasWriteAccess && data?.status === "APPROVED" && (
 						<Button variant="outline" className="gap-2 text-zinc-950" disabled={isLoading}>
 							<RiEdit2Line className="size-4" />
 							Edit Knowledge
@@ -78,7 +88,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					knowledgeId={data?.id}
 					knowledgeStatus={data?.status}
 					aiSummary={data?.ai_summary}
-					fileName={data?.file_name || data?.title}
+					fileName={formatDisplayTitle(data?.title || data?.file_name)}
 					isDetailLoading={isLoading}
 				/>
 

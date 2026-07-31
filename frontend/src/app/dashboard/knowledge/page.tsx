@@ -29,6 +29,12 @@ export default function KnowledgePage() {
 							>
 								Promotional
 							</TabsTrigger>
+							<TabsTrigger
+								value="other"
+								className="font-medium text-sm text-gray-500 hover:text-blue-500 data-active:text-blue-500 data-active:after:bg-blue-500"
+							>
+								Other
+							</TabsTrigger>
 						</TabsList>
 					</div>
 
@@ -42,6 +48,10 @@ export default function KnowledgePage() {
 
 					<TabsContent value="promotional" className="mt-0 outline-none">
 						<KnowledgeTable type="PROMOTIONAL" />
+					</TabsContent>
+
+					<TabsContent value="other" className="mt-0 outline-none">
+						<KnowledgeTable type="OTHER" />
 					</TabsContent>
 				</Tabs>
 			</div>
