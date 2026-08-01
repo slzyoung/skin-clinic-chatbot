@@ -17,12 +17,15 @@ from app.rag.schemas import (
     PendingDocumentResponse,
     RefineRequest,
     EditApprovedDocumentRequest,
-    ApprovedDocumentResponse
+    ApprovedDocumentResponse,
+    RAGEvaluationItem,
+    RAGEvaluationResponse
 )
 from app.rag.services.rag_pipeline import IngestionPipeline
 from app.rag.services.rag_retriever import HybridRetriever, BM25Index
 from app.rag.services.rag_generator import GenerationPipeline
-from app.rag.services.evaluation import RetrievalEvaluator
+from app.rag.services.evaluation import RetrievalEvaluator, RAGEvaluator
+from app.rag.services.guardrails import GuardrailsPipeline
 from app.rag.config import settings
 from app.rag.deps import (
     get_ingestion_pipeline,
@@ -30,7 +33,8 @@ from app.rag.deps import (
     get_generation_pipeline,
     get_bm25_index,
     get_llm,
-    get_vector_store
+    get_vector_store,
+    get_medical_agent
 )
 from app.rag.services.interfaces import BaseLLMAdapter, BaseVectorStoreAdapter
 
@@ -1193,11 +1197,44 @@ async def search_hybrid(
 @router.post("/chat", response_model=ChatResponse, tags=["Generation"])
 async def chat_endpoint(
     request: ChatRequest,
-    pipeline: GenerationPipeline = Depends(get_generation_pipeline)
+    pipeline: GenerationPipeline = Depends(get_generation_pipeline),
+    agent = Depends(get_medical_agent)
 ):
     """
-    Production RAG Chat Endpoint. Synthesizes a doctor-aligned response using context-enriched retrieval and Gemini LLM.
+    Production RAG Chat Endpoint. Synthesizes a doctor-aligned response using context-enriched retrieval,
+    optional ReAct AI Agent multi-step reasoning, and Guardrails safety checks.
     """
+    # 1. Guardrails: Pre-retrieval Input Check (prompt injection & topicality filter)
+    is_valid_input, rejection_msg = GuardrailsPipeline.validate_input(request.query)
+    if not is_valid_input:
+        return ChatResponse(
+            query=request.query,
+            answer=rejection_msg,
+            context="",
+            results=[],
+            agent_used=False
+        )
+
+    raw_history = [{"role": msg.role, "content": msg.content} for msg in request.history]
+
+    # 2. Try ReAct AI Agent (if enabled via RAG_AGENT_ENABLED=true)
+    if agent:
+        try:
+            logger.info("RAG_AGENT_ENABLED is True. Executing MedicalAgent...")
+            agent_res = agent.run(request.query, history=raw_history)
+            if agent_res and agent_res.get("answer"):
+                sanitized_answer = GuardrailsPipeline.process_output(agent_res["answer"])
+                return ChatResponse(
+                    query=request.query,
+                    answer=sanitized_answer,
+                    context="[Retrieved via MedicalAgent Multi-step Tool Reasoning]",
+                    results=agent_res.get("sources", []),
+                    agent_used=True
+                )
+        except Exception as agent_err:
+            logger.warning(f"MedicalAgent execution failed, falling back to standard pipeline: {agent_err}")
+
+    # 3. Standard Single-pass RAG Generation Pipeline Fallback
     if not pipeline:
         raise HTTPException(status_code=500, detail="Generation pipeline is not initialized. Please ensure your LLM API keys are configured correctly.")
         
@@ -1210,7 +1247,6 @@ async def chat_endpoint(
             filter_metadata["categories"] = valid_cats
         
     parsed_filter = filter_metadata if filter_metadata else None
-    raw_history = [{"role": msg.role, "content": msg.content} for msg in request.history]
     
     try:
         response = pipeline.generate_answer(
@@ -1220,7 +1256,19 @@ async def chat_endpoint(
             rerank=request.rerank,
             history=raw_history
         )
+        
+        # 4. Guardrails: Post-generation Output Check (PII Redaction & Medical Disclaimer)
+        if isinstance(response, ChatResponse):
+            response.answer = GuardrailsPipeline.process_output(response.answer)
+            response.agent_used = False
+            return response
+        elif isinstance(response, dict):
+            raw_answer = response.get("answer", "")
+            response["answer"] = GuardrailsPipeline.process_output(raw_answer)
+            response["agent_used"] = False
+            return response
         return response
+
     except Exception as e:
         logger.error(f"Chat generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1247,6 +1295,44 @@ async def evaluate_retrieval_endpoint(
         return metrics
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/search/evaluate-full", response_model=RAGEvaluationResponse, tags=["Retrieval"])
+async def evaluate_full_rag_endpoint(
+    dataset: List[RAGEvaluationItem],
+    retriever: HybridRetriever = Depends(get_hybrid_retriever),
+    pipeline: GenerationPipeline = Depends(get_generation_pipeline),
+    llm: BaseLLMAdapter = Depends(get_llm)
+):
+    """
+    RAGAS-style Full Evaluation Endpoint.
+    Evaluates both Retrieval Quality (Hit Rate@K, MRR@K) and Generation Quality (Faithfulness, Answer Relevance).
+    """
+    if not retriever:
+        raise HTTPException(status_code=500, detail="Hybrid retriever is not initialized.")
+    try:
+        raw_dataset = [
+            {
+                "query": item.query,
+                "ground_truth": {"source_file": item.expected_file},
+                "expected_answer": item.expected_answer
+            }
+            for item in dataset
+        ]
+        metrics = RAGEvaluator.evaluate_full(
+            retriever=retriever,
+            generation_pipeline=pipeline,
+            llm_adapter=llm,
+            dataset=raw_dataset,
+            top_k=5,
+            rerank=True,
+            rerank_top_n=3,
+            evaluate_generation=True
+        )
+        return metrics
+    except Exception as e:
+        logger.error(f"Full RAG evaluation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

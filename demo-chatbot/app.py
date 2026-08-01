@@ -29,7 +29,7 @@ if st.sidebar.button("🔌 Test Health Backend"):
 st.sidebar.markdown("---")
 doc_type = st.sidebar.selectbox("Filter Document Type", ["All", "Product", "Treatment", "Promotional"])
 top_k = st.sidebar.slider("Top K Passages", min_value=1, max_value=15, value=5)
-rerank = st.sidebar.checkbox("Gunakan Reranker (Cross-Encoder)", value=True)
+rerank = st.sidebar.checkbox("Gunakan Reranker (Cross-Encoder)", value=False)
 
 if st.sidebar.button("🗑️ Reset Chat"):
     st.session_state.messages = []

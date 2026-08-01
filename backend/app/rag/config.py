@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     openai_model_name: str = "gpt-4o-mini"
 
     # Vector DB (PGVector) Settings
-    pg_host: str = "localhost"
+    pg_host: str = "db"
     pg_port: int = 5432
     pg_db: str = "arya_noble"
     pg_user: str = "postgres"
@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     
     @property
     def pg_conn_str(self) -> str:
-        return f"postgresql+psycopg://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_db}"
+        host = os.getenv("POSTGRES_HOST") or os.getenv("PG_HOST") or self.pg_host
+        return f"postgresql+psycopg://{self.pg_user}:{self.pg_password}@{host}:{self.pg_port}/{self.pg_db}"
+
+
     
     # Chunking Settings
     chunk_size: int = 500
@@ -33,6 +36,18 @@ class Settings(BaseSettings):
     
     # BM25 Settings
     bm25_index_path: str = "./data/output/bm25_index.pkl"
+
+    # AI Agent Settings (ReAct Agent with Tool Calling)
+    rag_agent_enabled: bool = False
+    rag_agent_max_iterations: int = 5
+
+    # Guardrails Settings
+    guardrails_enabled: bool = True
+    guardrails_block_offtopic: bool = True
+    guardrails_redact_pii: bool = True
+
+    # Vector Store Provider (factory pattern)
+    vector_store_provider: str = "pgvector"  # "pgvector" | "qdrant"
 
     model_config = SettingsConfigDict(
         env_file=(".env", "backend/.env", "../.env", "../../.env"),

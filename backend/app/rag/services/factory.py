@@ -8,6 +8,14 @@ from app.rag.services.interfaces import BaseLLMAdapter, BaseVectorStoreAdapter
 class AdapterFactory:
     _vector_store_instance = None
 
+    # ── Vector Store Registry ────────────────────────────────────────────────
+    # Maps provider names to their adapter classes (lazy imports).
+    # Add new providers here to support them via VECTOR_STORE_PROVIDER env var.
+    VECTOR_STORE_REGISTRY: dict = {
+        "pgvector": "app.rag.services.vector_store.PGVectorAdapter",
+        # "qdrant": "app.rag.services.qdrant_adapter.QdrantAdapter",  # uncomment when available
+    }
+
     @staticmethod
     def _resolve_provider_base_url(provider: str, base_url: Optional[str] = None) -> Optional[str]:
         """
@@ -78,9 +86,31 @@ class AdapterFactory:
 
     @staticmethod
     def get_vector_store() -> BaseVectorStoreAdapter:
-        from app.rag.services.vector_store import PGVectorAdapter
+        """
+        Factory method: instantiates the vector store adapter based on
+        VECTOR_STORE_PROVIDER env var (default: 'pgvector').
+        
+        Uses a registry pattern inspired by Open-Brain for easy provider switching.
+        """
         if AdapterFactory._vector_store_instance is None:
-            AdapterFactory._vector_store_instance = PGVectorAdapter()
-        return AdapterFactory._vector_store_instance
+            provider = settings.vector_store_provider.lower()
+            class_path = AdapterFactory.VECTOR_STORE_REGISTRY.get(provider)
 
+            if class_path is None:
+                available = ", ".join(AdapterFactory.VECTOR_STORE_REGISTRY.keys())
+                raise ValueError(
+                    f"Unknown VECTOR_STORE_PROVIDER '{provider}'. "
+                    f"Must be one of: {available}"
+                )
+
+            # Lazy import the adapter class
+            module_path, class_name = class_path.rsplit(".", 1)
+            import importlib
+            module = importlib.import_module(module_path)
+            adapter_cls = getattr(module, class_name)
+
+            logger.info(f"Initializing vector store: provider='{provider}', class='{class_name}'")
+            AdapterFactory._vector_store_instance = adapter_cls()
+
+        return AdapterFactory._vector_store_instance
 

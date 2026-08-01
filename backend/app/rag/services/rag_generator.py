@@ -5,6 +5,7 @@ from loguru import logger
 
 from app.rag.services.interfaces import BaseLLMAdapter
 from app.rag.services.rag_retriever import HybridRetriever
+from app.rag.services.intent import QueryIntentDetector, QueryIntent
 from app.rag.config import settings
 
 # --- LLM Adapter Implementations ---
@@ -20,7 +21,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         kwargs = {
             "model": target_model,
             "api_key": api_key,
-            "temperature": 0.2
+            "temperature": 0.0  # Grounded & factual response (0.0 temperature)
         }
         if base_url:
             kwargs["base_url"] = base_url
@@ -47,25 +48,41 @@ class OpenAIAdapter(BaseLLMAdapter):
                     raise e
 
 
+# --- Grounded System Prompt Configuration ---
 
-# --- System Prompt Configuration ---
+SYSTEM_PROMPT = """You are ERHA Assistant, a grounded knowledge-base assistant.
 
-SYSTEM_PROMPT = """You are CHAT AI ERHA, an expert Clinical Decision Support System & Medical Copilot designed specifically for ERHA (PT Arya Noble) Dermatologists, Medical Officers, and General Practitioners.
-Your primary role is to assist doctors in selecting, prescribing, and recommending the most appropriate ERHA skin care products, active formulations, and clinical aesthetic treatments for their patients based on diagnosis, skin conditions, and clinical guidelines.
+Your primary responsibility is to answer the user's question accurately and concisely using ONLY the retrieved knowledge base.
 
-DOCTOR-FOCUSED CLINICAL COMMUNICATION GUIDELINES:
-1. **Professional Clinical Tone**: Speak collegially as a peer medical aesthetic AI expert (Doctor-to-Doctor tone). Use precise dermatological terminology (e.g., *acne vulgaris*, *papulopustular*, *post-inflammatory hyperpigmentation*, *keratolytic*, *sebum control*, *skin barrier restoration*).
-2. **Patient Recommendation & Prescription Focus**: When a doctor asks for product or treatment recommendations for a specific patient condition (e.g., oily skin with inflammatory acne, hyperpigmentation, sensitive skin), structure your response clearly:
-   - 📌 **Rekomendasi Produk Topikal (Homecare)**: Product name, key active ingredients & concentration (e.g. 2% Salicylic Acid, 4% Niacinamide), primary clinical mechanism.
-   - 💆 **Rekomendasi Tindakan Klinis (Clinical Treatments)**: In-clinic procedures (only if available in context).
-   - 📋 **Petunjuk Penggunaan & Dosis**: Frequency (e.g. 2x sehari pagi & malam), sunscreen integration.
-   - ⚠️ **Kontraindikasi & Perhatian Khusus**: Pregnancy/lactation safety (e.g., Salicylic Acid precautions), potential side effects (transient erythema, dryness).
-3. **Clean Display Rule (Omit Missing/Empty Sections)**:
-   - If no data or relevant information is found in context for a specific section (such as Clinical Treatments / Tindakan Klinis), DO NOT output disclaimer notes or placeholders like "(Catatan: Saat ini informasi spesifik... belum terdaftar)". Simply OMIT that entire section completely so the output remains clean, sharp, and concise.
-4. **Greetings & Catalog Inquiries**: For greetings (e.g., "halo", "selamat pagi") or general catalog questions ("ada produk apa saja?"), greet the doctor warmly and provide a clean, structured overview of available ERHA products and treatments from the context.
-5. **Markdown Formatting**: Output must be beautifully structured in clean Markdown with clear titles (`#`), section headers (`##`), bold highlights (`**`), bullet points (`-`), and clean tables where relevant.
-6. **Contextual & Citation Grounding**: Ground all clinical facts strictly on the provided Context block. Cite source references using `[1]`, `[2]` when context passages are cited.
-"""
+STRICT RULES:
+1. Answer ONLY what the user asked.
+2. Do not provide unrelated information.
+3. Do not expand a simple factual question into a long explanation.
+4. Do not provide unsolicited product recommendations.
+5. Do not provide unsolicited treatment regimens.
+6. Do not provide unsolicited clinical advice.
+7. Do not mention other products unless they are necessary to answer the user's question.
+8. Do not add greetings such as 'Halo Dok' unless explicitly requested.
+9. Do not add unnecessary sections, bullet points, emojis, or disclaimers.
+10. Do not end with phrases such as 'Jika Dokter membutuhkan...' unless explicitly requested.
+11. Do not repeat the user's question.
+12. Do not speculate.
+13. Do not use information outside the retrieved context.
+14. Never substitute one product name for another.
+15. Preserve exact product names, ingredient names, percentages, quantities, and other factual values from the retrieved context.
+16. If the requested information is not available in the retrieved context, clearly state that the information is not available in the knowledge base.
+17. If the question is simple, the answer must also be simple.
+
+RESPONSE LENGTH RULES:
+- Product name question: 1 sentence.
+- Ingredient question: 1-2 sentences or a concise list.
+- Function/benefit question: maximum 2-3 sentences.
+- How-to-use question: maximum 2-4 sentences.
+- Comparison question: concise comparison using only relevant information.
+- If the user asks for detailed information, then provide more detail.
+
+Do not maximize information.
+Maximize relevance."""
 
 
 # --- Generation Pipeline ---
@@ -75,30 +92,17 @@ class GenerationPipeline:
         self.retriever = retriever
         self.llm_adapter = llm_adapter
 
-    def _get_approved_docs_summary(self) -> str:
-        """Fetches list of approved documents for conversational context fallback."""
-        approved_dir = "data/output"
-        docs_list = []
-        if os.path.exists(approved_dir):
-            for f in os.listdir(approved_dir):
-                if f.endswith(".json"):
-                    try:
-                        with open(os.path.join(approved_dir, f), "r", encoding="utf-8") as fp:
-                            data = json.load(fp)
-                            if isinstance(data, dict):
-                                fn = data.get("file_name", f.replace(".json", ""))
-                                summary_head = data.get("summary", "")[:200].replace("\n", " ")
-                                docs_list.append(f"- **{fn}**: {summary_head}...")
-                    except Exception:
-                        pass
-        if docs_list:
-            return "Daftar Dokumen Terdaftar di Knowledge Base:\n" + "\n".join(docs_list)
-        return "Basis data saat ini sedang diperbarui."
-
-    def build_prompt(self, query: str, context: str, history: List[Dict[str, str]]) -> str:
+    def build_prompt(
+        self, 
+        query: str, 
+        context: str, 
+        history: List[Dict[str, str]], 
+        intent: QueryIntent, 
+        intent_rules: Dict[str, Any]
+    ) -> str:
         """
-        Compiles the system prompt, retrieved context, conversation history, 
-        and the user's latest query into a single string.
+        Compiles system prompt, retrieved context, intent instructions,
+        conversation history, and user query into a grounded prompt.
         """
         history_str = ""
         if history:
@@ -109,9 +113,14 @@ class GenerationPipeline:
         else:
             history_str = "No previous conversation.\n"
 
+        length_instruction = intent_rules.get("length_instruction", "Be concise and factual.")
+
         prompt = (
             f"{SYSTEM_PROMPT}\n\n"
-            f"--- CONTEXT ---\n"
+            f"--- DETECTED INTENT ---\n"
+            f"Intent Category: {intent.value}\n"
+            f"Specific Instruction: {length_instruction}\n\n"
+            f"--- CONTEXT (RETRIEVED FROM ERHA KNOWLEDGE BASE) ---\n"
             f"{context}\n\n"
             f"--- CONVERSATION HISTORY ---\n"
             f"{history_str}\n"
@@ -130,12 +139,13 @@ class GenerationPipeline:
         history: List[Dict[str, str]] = []
     ) -> Dict[str, Any]:
         """
-        Retrieves relevant context, compiles the prompt, and generates 
-        an grounded response from the LLM adapter.
+        Retrieves relevant context, compiles prompt, and generates grounded response.
+        Includes intent classification and debug logging.
         """
-        logger.info(f"Generating answer for query: '{query}'")
+        # 1. Query Intent Detection
+        intent, intent_rules = QueryIntentDetector.detect(query)
 
-        # 1. Retrieve relevant chunks from Hybrid Retriever
+        # 2. Retrieve relevant chunks from Hybrid Retriever
         retrieval_response = self.retriever.retrieve(
             query=query,
             top_k=top_k,
@@ -148,22 +158,63 @@ class GenerationPipeline:
         results = retrieval_response.get("results", [])
         context = retrieval_response.get("context", "")
 
-        # 2. If context is empty, supply fallback catalog context for conversational queries
-        if not results or context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found."):
-            logger.info("Retrieval context empty. Using approved knowledge base catalog for fallback AI response.")
-            context = self._get_approved_docs_summary()
+        # 3. Check for empty context or low confidence
+        is_context_empty = (
+            not results 
+            or context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
+            or len(context.strip()) == 0
+        )
 
-        # 3. Build Prompt with Context & History
-        full_prompt = self.build_prompt(query, context, history)
+        if is_context_empty:
+            missing_msg = intent_rules.get("missing_fallback", "Informasi tersebut tidak tersedia dalam knowledge base.")
+            logger.info(f"Retrieval context empty for query '{query}'. Returning grounded fallback message.")
+            
+            # --- DEBUG LOGGING ---
+            logger.debug(
+                f"\n=== [RAG DEBUG LOG] ===\n"
+                f"QUERY: {query}\n"
+                f"INTENT: {intent.value}\n"
+                f"RETRIEVED CONTEXT: [EMPTY]\n"
+                f"SIMILARITY SCORE: N/A\n"
+                f"LLM RESPONSE (GROUNDED FALLBACK): {missing_msg}\n"
+                f"========================\n"
+            )
+            return {
+                "query": query,
+                "answer": missing_msg,
+                "context": "No relevant context found in knowledge base.",
+                "results": []
+            }
 
-        # 4. Generate Answer via LLM Adapter
+        # 4. Build Grounded Prompt with Context, Intent & History
+        full_prompt = self.build_prompt(query, context, history, intent, intent_rules)
+
+        # 5. Generate Answer via LLM Adapter
         try:
-            logger.info("Executing LLM generation...")
             answer = self.llm_adapter.generate(full_prompt)
             answer = answer.strip()
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             answer = "Maaf, terjadi kesalahan teknis pada pemrosesan LLM. Silakan coba beberapa saat lagi."
+
+        # --- DEBUG LOGGING ---
+        scores_summary = []
+        for i, res in enumerate(results, 1):
+            sc = res.get("rerank_score") if "rerank_score" in res else res.get("score", 0.0)
+            src = res.get("metadata", {}).get("source_file", "unknown")
+            scores_summary.append(f"Chunk {i}: source={src}, score={sc:.4f}")
+        
+        logger.debug(
+            f"\n=== [RAG DEBUG LOG] ===\n"
+            f"QUERY: {query}\n"
+            f"INTENT: {intent.value}\n"
+            f"RETRIEVED CHUNKS COUNT: {len(results)}\n"
+            f"RETRIEVED CONTEXT PREVIEW:\n{context[:600]}...\n"
+            f"SIMILARITY SCORES:\n" + "\n".join(scores_summary) + "\n"
+            f"FINAL LLM PROMPT PREVIEW:\n{full_prompt[:500]}...\n"
+            f"LLM RESPONSE:\n{answer}\n"
+            f"========================\n"
+        )
 
         return {
             "query": query,

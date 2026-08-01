@@ -10,7 +10,8 @@ echo "Seeding database..."
 python seed.py
 
 echo "Ensuring AI models are downloaded..."
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
+# Models cached in volume; skip redundant download loop
+
 
 echo "Starting application in $ENV mode..."
 if [ "$ENV" = "dev" ]; then

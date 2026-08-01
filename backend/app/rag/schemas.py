@@ -18,6 +18,7 @@ class ChatResponse(BaseModel):
     answer: str = Field(..., description="Doctor-aligned AI generated response")
     context: str = Field(..., description="Retrieved context passages formatted for reference")
     results: List[Dict[str, Any]] = Field(..., description="Retrieved passage citations and metadata")
+    agent_used: bool = Field(False, description="Whether AI Agent (multi-step reasoning) was used for this response")
 
 class EvaluationItem(BaseModel):
     query: str = Field(..., description="Test query string (e.g. 'Apa indikasi ERHA Acne Clear Gel?')")
@@ -66,3 +67,16 @@ class ApprovedDocumentResponse(BaseModel):
     chunks: List[Dict[str, Any]] = Field(..., description="Document text chunks")
 
 
+# --- RAGAS-style Evaluation Schemas ---
+
+class RAGEvaluationItem(BaseModel):
+    query: str = Field(..., description="Test query string")
+    expected_file: str = Field(..., description="Expected source document filename for retrieval metrics")
+    expected_answer: Optional[str] = Field(None, description="Expected reference answer for generation metrics (Faithfulness, Answer Relevance)")
+
+class RAGEvaluationResponse(BaseModel):
+    hit_rate: float = Field(..., description="Hit Rate@K — proportion of queries where relevant doc is in top-K")
+    mrr: float = Field(..., description="Mean Reciprocal Rank@K")
+    faithfulness: Optional[float] = Field(None, description="Faithfulness score (0-1) — are claims grounded in context?")
+    answer_relevance: Optional[float] = Field(None, description="Answer Relevance score (0-1) — does answer address the question?")
+    total_queries: int = Field(..., description="Number of queries evaluated")
