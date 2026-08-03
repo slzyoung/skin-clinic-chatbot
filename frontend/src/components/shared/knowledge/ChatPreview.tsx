@@ -29,7 +29,7 @@ import {
 	RiUser3Line,
 } from "@remixicon/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ interface ChatPreviewProps {
 	aiSummary?: string | null;
 	fileName?: string | null;
 	isDetailLoading?: boolean;
+	isEditMode?: boolean;
 }
 
 interface Message {
@@ -54,13 +55,35 @@ export function ChatPreview({
 	aiSummary,
 	fileName,
 	isDetailLoading,
+	isEditMode,
 }: ChatPreviewProps) {
-	const [userChatMessages, setUserChatMessages] = useState<Message[]>([]);
+	const STORAGE_KEY = `chat_preview_${knowledgeId || 'default'}`;
+
+	const [userChatMessages, setUserChatMessages] = useState<Message[]>(() => {
+		if (typeof window !== "undefined") {
+			const saved = localStorage.getItem(STORAGE_KEY);
+			if (saved) {
+				try {
+					return JSON.parse(saved);
+				} catch (e) {
+					console.error("Failed to parse chat messages", e);
+				}
+			}
+		}
+		return [];
+	});
+
 	const [input, setInput] = useState("");
 	const [attachedFile, setAttachedFile] = useState<File | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const queryClient = useQueryClient();
+
+	useEffect(() => {
+		if (typeof window !== "undefined") {
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(userChatMessages));
+		}
+	}, [userChatMessages, STORAGE_KEY]);
 
 	const initialSummaryMessage: Message | null =
 		aiSummary && knowledgeStatus !== "PROCESSING"
@@ -92,8 +115,12 @@ export function ChatPreview({
 		setIsLoading(true);
 
 		try {
-			if (knowledgeStatus === "PENDING" && fileName) {
-				const response = await api.post(`/ai/ingest/pending/${fileName}/refine`, {
+			if ((knowledgeStatus === "PENDING" || (knowledgeStatus === "APPROVED" && isEditMode)) && knowledgeId) {
+				const endpoint = knowledgeStatus === "PENDING" 
+					? `/ai/ingest/pending/${knowledgeId}/refine`
+					: `/ai/ingest/approved/${knowledgeId}/refine`;
+					
+				const response = await api.post(endpoint, {
 					prompt: userMsg.content,
 				});
 				const chatResponse = response.data.summary
@@ -123,7 +150,7 @@ export function ChatPreview({
 		}
 	};
 
-	const isInputDisabled = knowledgeStatus === "PROCESSING" || isLoading || isDetailLoading;
+	const isInputDisabled = knowledgeStatus === "PROCESSING" || isLoading || isDetailLoading || (knowledgeStatus === "APPROVED" && !isEditMode);
 
 	return (
 		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
@@ -259,7 +286,14 @@ export function ChatPreview({
 												)}
 											</div>
 											<div
-												className={`${msg.role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100`}
+												className={`${
+													msg.role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"
+												} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed 
+												prose-pre:bg-zinc-800 prose-pre:text-zinc-100 
+												prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 
+												prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white 
+												prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 
+												prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
 											>
 												{msg.role === "assistant" ? (
 													<ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -315,6 +349,8 @@ export function ChatPreview({
 						placeholder={
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
+								: knowledgeStatus === "APPROVED" && !isEditMode
+								? "Click 'Edit Knowledge' to refine summary..."
 								: "Ask questions or request adjustments..."
 						}
 						disabled={isInputDisabled}

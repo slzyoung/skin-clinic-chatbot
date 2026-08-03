@@ -1,5 +1,5 @@
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
-import { useUpdateKnowledgeStatus } from "@/app/dashboard/knowledge/hooks/use-knowledge";
+import { useUpdateKnowledgeStatus, useApproveKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -12,13 +12,17 @@ interface ClassificationSidebarProps {
 
 export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps) {
 	const updateStatus = useUpdateKnowledgeStatus();
+	const approveKnowledge = useApproveKnowledge();
 	const { user } = useSession();
 	const hasWriteAccess = user?.accesses?.includes("knowledge:write");
 
 	if (!knowledge) return null;
 
 	const handleApprove = () => {
-		updateStatus.mutate({ id: knowledge.id, status: "APPROVED" });
+		approveKnowledge.mutate(knowledge.id);
+		if (typeof window !== "undefined") {
+			localStorage.removeItem(`chat_preview_${knowledge.id}`);
+		}
 	};
 
 	const handleReject = () => {
@@ -137,7 +141,7 @@ export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps)
 					<div className="flex flex-col gap-2 pt-1">
 						<Button
 							onClick={handleApprove}
-							disabled={updateStatus.isPending}
+							disabled={approveKnowledge.isPending}
 							className="w-full bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
 						>
 							<RiCheckLine className="size-4" />

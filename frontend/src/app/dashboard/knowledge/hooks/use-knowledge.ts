@@ -45,11 +45,7 @@ export const useUploadKnowledge = () => {
 
 	return useMutation({
 		mutationFn: async (formData: FormData) => {
-			const response = await api.post("/ai/ingest", formData, {
-				headers: {
-					"Content-Type": "multipart/form-data",
-				},
-			});
+			const response = await api.post("/ai/ingest", formData);
 			return response.data;
 		},
 		onSuccess: () => {
@@ -79,6 +75,25 @@ export const useUpdateKnowledgeStatus = () => {
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to update status."));
+		},
+	});
+};
+
+export const useApproveKnowledge = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (id: string) => {
+			const response = await api.post(`/ai/ingest/approve/${id}`);
+			return response.data;
+		},
+		onSuccess: (_, id) => {
+			toast.success("Document approved and indexed into AI Knowledge Base!");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(id) });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to approve and index document."));
 		},
 	});
 };

@@ -3,10 +3,11 @@
 import { ChatPreview } from "@/components/shared/knowledge/ChatPreview";
 import { ClassificationSidebar } from "@/components/shared/knowledge/ClassificationSidebar";
 import { Button } from "@/components/ui/button";
-import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line } from "@remixicon/react";
+import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line, RiCheckLine } from "@remixicon/react";
+import { toast } from "sonner";
 
 import { useRouter } from "next/navigation";
-import { use } from "react";
+import { use, useState } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
 
@@ -19,6 +20,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const { user } = useSession();
 	const hasWriteAccess = user?.accesses?.includes("knowledge:write");
 	const hasDeleteAccess = user?.accesses?.includes("knowledge:delete");
+	const [isEditMode, setIsEditMode] = useState(false);
 
 	const handleDelete = () => {
 		if (confirm("Are you sure you want to delete this knowledge document?")) {
@@ -73,11 +75,22 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 						</Button>
 					)}
 					{hasWriteAccess && data?.status === "APPROVED" && (
-						<Button variant="outline" className="gap-2 text-zinc-950" disabled={isLoading}>
-							<RiEdit2Line className="size-4" />
-							Edit Knowledge
+						<Button
+							variant={isEditMode ? "default" : "outline"}
+							className={`gap-2 ${isEditMode ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "text-zinc-950"}`}
+							disabled={isLoading}
+							onClick={() => {
+								if (isEditMode) {
+									toast.success("Document edits saved successfully.");
+								}
+								setIsEditMode(!isEditMode);
+							}}
+						>
+							{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
+							{isEditMode ? "Save" : "Edit Knowledge"}
 						</Button>
 					)}
+
 				</div>
 			</div>
 
@@ -85,11 +98,12 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 			<div className="flex flex-1 overflow-hidden">
 				{/* Left Column (Chat / Preview) */}
 				<ChatPreview
-					knowledgeId={data?.id}
+					knowledgeId={id}
 					knowledgeStatus={data?.status}
 					aiSummary={data?.ai_summary}
 					fileName={formatDisplayTitle(data?.title || data?.file_name)}
 					isDetailLoading={isLoading}
+					isEditMode={isEditMode}
 				/>
 
 				{/* Right Column (Classification) */}

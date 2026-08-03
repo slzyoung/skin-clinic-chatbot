@@ -32,8 +32,10 @@ export default function IngestPage() {
 		setErrorMsg(null);
 
 		const formData = new FormData();
-		formData.append("title", value || "Untitled Knowledge Base Document");
-		formData.append("type", category.toUpperCase());
+		if (value) {
+			formData.append("prompt", value);
+		}
+		formData.append("category_type", category.toUpperCase());
 
 		files.forEach((file) => {
 			formData.append("file", file); // Adjust based on your backend field name for files
