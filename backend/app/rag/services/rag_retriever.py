@@ -174,13 +174,20 @@ class BM25Index:
 # --- Cross-Encoder Reranker ---
 class Reranker:
     def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
-        logger.info(f"Loading Cross-Encoder Reranker model: {model_name}...")
-        try:
-            self.model = CrossEncoder(model_name)
-            logger.info("Cross-Encoder Reranker model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to load CrossEncoder model: {e}")
-            self.model = None
+        self.model_name = model_name
+        self.model = None
+        self._initialized = False
+
+    def _ensure_loaded(self):
+        if not self._initialized:
+            self._initialized = True
+            logger.info(f"Lazy loading Cross-Encoder Reranker model: {self.model_name}...")
+            try:
+                self.model = CrossEncoder(self.model_name)
+                logger.info("Cross-Encoder Reranker model loaded successfully.")
+            except Exception as e:
+                logger.error(f"Failed to load CrossEncoder model: {e}")
+                self.model = None
 
     def rerank(self, query: str, hits: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
         """
@@ -189,6 +196,7 @@ class Reranker:
         if not hits:
             return []
             
+        self._ensure_loaded()
         if not self.model:
             logger.warning("Reranker model is not loaded. Returning original hits limited to top_n.")
             return hits[:top_n]
