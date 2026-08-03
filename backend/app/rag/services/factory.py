@@ -63,7 +63,11 @@ class AdapterFactory:
                 if "LLM_ACTIVE_MODEL_NAME" in config_map:
                     model_name = config_map["LLM_ACTIVE_MODEL_NAME"]
                 if "LLM_API_KEY" in config_map:
-                    api_key = config_map["LLM_API_KEY"]
+                    try:
+                        from app.core.security import decrypt_api_key
+                        api_key = decrypt_api_key(config_map["LLM_API_KEY"])
+                    except Exception:
+                        api_key = config_map["LLM_API_KEY"]
                 if "LLM_BASE_URL" in config_map:
                     base_url = config_map["LLM_BASE_URL"]
             except Exception as e:

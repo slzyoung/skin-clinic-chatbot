@@ -34,6 +34,21 @@ async def get_knowledge(
     knowledge = result.scalar_one_or_none()
     
     if knowledge:
+        # OUT-OF-BAND SYNC: Fetch latest AI summary from RAG JSON files
+        try:
+            from app.rag.router import resolve_pending_file, resolve_approved_file
+            import json, os
+            target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
+            if target_file and os.path.exists(target_file):
+                with open(target_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                latest_summary = data.get("summary", "")
+                if latest_summary and knowledge.ai_summary != latest_summary:
+                    knowledge.ai_summary = latest_summary
+                    await db.commit()
+        except Exception:
+            pass
+            
         return knowledge
 
     # 2. Fallback check in RAG staging files (data/pending or data/output)

@@ -79,6 +79,13 @@ backend/app/rag/
   - Updated `backend/AGENTS.md` and `frontend/AGENTS.md` to document the unified folder structure, API contracts, and testing procedures.
   - Provided direct Swagger UI testing instructions (`http://localhost:8000/docs#/AI%20%2F%20RAG`).
 
+#### Sprint 5: Security & UI Sync Fixes
+- **API Key Decryption**: 
+  - Restored API key encryption in `app/api/routers/config.py` for security purposes.
+  - Added explicit decryption in `app/rag/services/factory.py` so the `AdapterFactory` can correctly process encrypted `LLM_API_KEY`s before initializing OpenAI adapters (authorized security exception).
+- **Out-of-Band Summary Sync**:
+  - Intercepted `GET /api/knowledge/{id}` in `app/api/routers/knowledge.py` to seamlessly auto-sync the latest AI-generated summary from the `rag` staging JSON files to the PostgreSQL database, ensuring UI freshness after HITL refinement/approval without modifying internal `rag` router logic.
+
 ---
 
 ### Summary of Key Improvements
