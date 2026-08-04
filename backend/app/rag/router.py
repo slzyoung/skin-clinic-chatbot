@@ -599,10 +599,19 @@ async def refine_pending_document(
             ]
             db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
 
-        # Prompt Gemini to refine the staged data based on instructions
+        history_str = ""
+        if request.history:
+            for msg in request.history:
+                role = "User" if getattr(msg, "role", "") == "user" else "Assistant"
+                content = getattr(msg, "content", "")
+                history_str += f"{role}: {content}\n"
+        else:
+            history_str = "No previous refinement history.\n"
+
+        # Prompt Gemini to refine the staged data based on instructions & history
         refine_prompt = f"""
         You are an intelligent medical aesthetic AI validator for ERHA (PT Arya Noble) knowledge base.
-        You are refining a staged document's review data based on a user instruction.
+        You are refining a staged document's review data based on user instructions and multi-turn conversation history.
         
         Staged Document:
         {json.dumps(staged_data, indent=2, ensure_ascii=False)}
@@ -610,7 +619,10 @@ async def refine_pending_document(
         Available System Categories:
         {json.dumps(db_categories, ensure_ascii=False)}
         
-        User Instruction:
+        Conversation History:
+        {history_str}
+        
+        Latest User Instruction:
         "{request.prompt}"
         
         Refine the document as requested:
@@ -926,9 +938,18 @@ async def refine_approved_document(
         except Exception as cat_err:
             logger.warning(f"Failed to fetch categories: {cat_err}")
 
+        history_str = ""
+        if request.history:
+            for msg in request.history:
+                role = "User" if getattr(msg, "role", "") == "user" else "Assistant"
+                content = getattr(msg, "content", "")
+                history_str += f"{role}: {content}\n"
+        else:
+            history_str = "No previous refinement history.\n"
+
         refine_prompt = f"""
         You are an intelligent medical aesthetic AI validator for ERHA (PT Arya Noble) knowledge base.
-        You are refining an APPROVED document based on user prompt instructions.
+        You are refining an APPROVED document based on user instructions and multi-turn conversation history.
         
         Document Data:
         {json.dumps(existing_doc, indent=2, ensure_ascii=False)}
@@ -936,7 +957,10 @@ async def refine_approved_document(
         Available Categories:
         {json.dumps(db_categories, ensure_ascii=False)}
         
-        User Instruction:
+        Conversation History:
+        {history_str}
+        
+        Latest User Instruction:
         "{request.prompt}"
         
         Refine the document summary, categories, or chunks according to the instruction.
@@ -1160,13 +1184,12 @@ async def search_hybrid(
     query: str = Query(..., description="Search query string"),
     categories: Optional[List[str]] = Query(None, description="Optional category filters (e.g. ['Acne Care'])"),
     document_type: Optional[str] = Query(None, description="Optional document category filter ('Product', 'Treatment', or 'Promotional')"),
-    top_k: int = Query(5, description="Number of passage matches to return"),
-    rerank: bool = Query(True, description="Apply Cross-Encoder reranking"),
+    top_k: int = Query(8, description="Number of passage matches to return"),
     retriever: HybridRetriever = Depends(get_hybrid_retriever)
 ):
     """
     Advanced Hybrid Search (PGVector Dense Embeddings + BM25 Sparse Keyword Match) 
-    with Reciprocal Rank Fusion (RRF) and Cross-Encoder Reranking.
+    with Reciprocal Rank Fusion (RRF).
     """
     if not retriever:
         raise HTTPException(status_code=500, detail="Hybrid retriever is not initialized.")
@@ -1186,7 +1209,7 @@ async def search_hybrid(
             query=query, 
             top_k=top_k, 
             filter_metadata=parsed_filter, 
-            rerank=rerank,
+            rerank=False,
             rerank_top_n=top_k
         )
         return hits
@@ -1253,7 +1276,7 @@ async def chat_endpoint(
             query=request.query,
             top_k=request.top_k,
             filter_metadata=parsed_filter,
-            rerank=request.rerank,
+            rerank=False,
             history=raw_history
         )
         
@@ -1273,67 +1296,7 @@ async def chat_endpoint(
         logger.error(f"Chat generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/search/evaluate", tags=["Retrieval"])
-async def evaluate_retrieval_endpoint(
-    dataset: List[EvaluationItem],
-    retriever: HybridRetriever = Depends(get_hybrid_retriever)
-):
-    """
-    Evaluates search pipeline performance metrics (Hit Rate and Mean Reciprocal Rank - MRR) over a test dataset.
-    """
-    if not retriever:
-        raise HTTPException(status_code=500, detail="Hybrid retriever is not initialized.")
-    try:
-        raw_dataset = [{"query": item.query, "ground_truth": {"source_file": item.expected_file}} for item in dataset]
-        metrics = RetrievalEvaluator.evaluate_dataset(
-            retriever=retriever,
-            dataset=raw_dataset,
-            top_k=5,
-            rerank=True,
-            rerank_top_n=3
-        )
-        return metrics
-    except Exception as e:
-        logger.error(f"Evaluation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.post("/search/evaluate-full", response_model=RAGEvaluationResponse, tags=["Retrieval"])
-async def evaluate_full_rag_endpoint(
-    dataset: List[RAGEvaluationItem],
-    retriever: HybridRetriever = Depends(get_hybrid_retriever),
-    pipeline: GenerationPipeline = Depends(get_generation_pipeline),
-    llm: BaseLLMAdapter = Depends(get_llm)
-):
-    """
-    RAGAS-style Full Evaluation Endpoint.
-    Evaluates both Retrieval Quality (Hit Rate@K, MRR@K) and Generation Quality (Faithfulness, Answer Relevance).
-    """
-    if not retriever:
-        raise HTTPException(status_code=500, detail="Hybrid retriever is not initialized.")
-    try:
-        raw_dataset = [
-            {
-                "query": item.query,
-                "ground_truth": {"source_file": item.expected_file},
-                "expected_answer": item.expected_answer
-            }
-            for item in dataset
-        ]
-        metrics = RAGEvaluator.evaluate_full(
-            retriever=retriever,
-            generation_pipeline=pipeline,
-            llm_adapter=llm,
-            dataset=raw_dataset,
-            top_k=5,
-            rerank=True,
-            rerank_top_n=3,
-            evaluate_generation=True
-        )
-        return metrics
-    except Exception as e:
-        logger.error(f"Full RAG evaluation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/ingest/reset", tags=["Ingestion"])

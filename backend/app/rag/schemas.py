@@ -9,8 +9,7 @@ class ChatRequest(BaseModel):
     query: str = Field(..., description="User question or medical query string")
     categories: Optional[List[str]] = Field(default=[], description="Optional list of category filters (e.g. ['Acne Care', 'Brightening'])")
     document_type: Optional[str] = Field(None, description="Optional document category type filter ('Product', 'Treatment', or 'Promotional')")
-    top_k: int = Field(5, description="Number of context passages to retrieve")
-    rerank: bool = Field(True, description="Whether to apply Cross-Encoder reranking")
+    top_k: int = Field(8, description="Number of context passages to retrieve")
     history: List[ChatMessage] = Field(default=[], description="Multi-turn conversation chat history context")
 
 class ChatResponse(BaseModel):
@@ -53,6 +52,7 @@ class PendingDocumentResponse(BaseModel):
 
 class RefineRequest(BaseModel):
     prompt: str = Field(..., description="Instructions to refine the document summary or text content")
+    history: Optional[List[ChatMessage]] = Field(default=[], description="Multi-turn conversation history for refine editing")
 
 class EditApprovedDocumentRequest(BaseModel):
     summary: Optional[str] = Field(None, description="Updated document summary markdown (for manual save)")
