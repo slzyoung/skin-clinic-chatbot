@@ -23,68 +23,66 @@ def detectChanges() {
 }
 def POD_LABEL = "jenkins-${UUID.randomUUID()}"
 withFolderProperties {
-        def branch = env.BRANCH_NAME
-        def repoName = env.REPO_NAME
-        def isPR = env.CHANGE_ID != null
-        def repoSlugName = env.ECRNAME
-        println "Branch: ${branch}"
-        if (branch in ['dev', 'staging', 'master']) {
-            properties([
-                disableConcurrentBuilds(abortPrevious: true)
-            ])
-        }
+    def branch = env.BRANCH_NAME
+    def repoName = env.REPO_NAME
+    def isPR = env.CHANGE_ID != null
+    def repoSlugName = env.ECRNAME
+    println "Branch: ${branch}"
+    if (branch in ['dev', 'staging', 'master']) {
+        properties([
+            disableConcurrentBuilds(abortPrevious: true)
+        ])
+    }
 
-        /*
-        =========================
-        PULL REQUEST
-        =========================
-        */
-        if (isPR) {
+    /*
+    =========================
+    PULL REQUEST
+    =========================
+    */
+    if (isPR) {
 
-            podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-pr') {
+        podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-pr') {
 
-                node(POD_LABEL) {
+            node(POD_LABEL) {
 
-                    stage('Checkout SCM') {
-                        container('agent-noncis-be-pr') {
-                            checkout scm
-                        }
+                stage('Checkout SCM') {
+                    container('agent-noncis-be-pr') {
+                        checkout scm
                     }
+                }
 
-                    stage('Validation PR') {
+                stage('Validation PR') {
 
-                        container('agent-noncis-be-pr') {
+                    container('agent-noncis-be-pr') {
 
-                            validatePr(
-                                projectName: repoName
-                            )
-
-                        }
-
-                    }
-
-                    stage('Sonar Scan') {
-
-                        container('agent-noncis-be-pr') {
-
-                            sonarScan(
-                                projectKey: repoSlugName,
-                                projectName: repoSlugName
-                            )
-
-                        }
+                        validatePr(
+                            projectName: repoName
+                        )
 
                     }
 
-                    stage('Quality Gate') {
+                }
 
-                        container('agent-noncis-be-pr') {
+                stage('Sonar Scan') {
 
-                            sonarGate(
-                                projectKey: repoSlugName
-                            )
+                    container('agent-noncis-be-pr') {
 
-                        }
+                        sonarScan(
+                            projectKey: repoSlugName,
+                            projectName: repoSlugName
+                        )
+
+                    }
+
+                }
+
+                stage('Quality Gate') {
+
+                    container('agent-noncis-be-pr') {
+
+                        sonarGate(
+                            projectKey: repoSlugName
+                        )
 
                     }
 
@@ -94,34 +92,36 @@ withFolderProperties {
 
         }
 
-        /*
-        =========================
-        DEVELOP
-        =========================
-        */
-        if (branch == 'dev') {
+    }
 
-            podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-dev') {
+    /*
+    =========================
+    DEVELOP
+    =========================
+    */
+    if (branch == 'dev') {
 
-                node(POD_LABEL) {
+        podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-dev') {
 
-                        
-                    stage('Checkout SCM') {
-                        container('agent-noncis-be-pr') {
-                            checkout scm
+            node(POD_LABEL) {
 
-                        }
+                stage('Checkout SCM') {
+                    container('agent-noncis-be-pr') {
+                        checkout scm
                     }
-                    def changes = detectChanges()
+                }
 
-                    echo "Backend changed : ${changes.backend}"
-                    echo "Frontend changed: ${changes.frontend}"
+                def changes = detectChanges()
 
-                    def runBackend = changes.backend
-                    def runFrontend = changes.frontend
-                    stage("Build & Deploy"){
+                echo "Backend changed : ${changes.backend}"
+                echo "Frontend changed: ${changes.frontend}"
+
+                def runBackend = changes.backend
+                def runFrontend = changes.frontend
+
+                stage("Build & Deploy") {
                     parallel(
-                        backend:{
+                        backend: {
                             if (!runBackend) {
                                 echo "Skipping Backend"
                                 return
@@ -129,14 +129,14 @@ withFolderProperties {
                             stage('Build and Push Docker Image') {
 
                                 container('agent-noncis-be-dev') {
-                                    dir("backend"){
-                                    buildPushImageNoncisBe(
-                                        repoName: repoName,
-                                        registry: env.REGISTRY,
-                                        project: env.PROJECT,
-                                        ecrRepo: env.ECRNAME,
-                                        branch: env.BRANCH_NAME
-                                    )
+                                    dir("backend") {
+                                        buildPushImageNoncisBe(
+                                            repoName: repoName,
+                                            registry: env.REGISTRY,
+                                            project: env.PROJECT,
+                                            ecrRepo: env.ECRNAME,
+                                            branch: env.BRANCH_NAME
+                                        )
                                     }
 
                                 }
@@ -153,17 +153,17 @@ withFolderProperties {
                                 }
 
                             }
-                    
+
                         },
-                        frontend:{
-                                if (!runFrontend) {
-                                    echo "Skipping Frontend"
-                                    return
-                                }
-                                stage('Build and Push Docker Image') {
-                                
-                                    container('agent-noncis-be-dev') {
-                                        dir("frontend"){
+                        frontend: {
+                            if (!runFrontend) {
+                                echo "Skipping Frontend"
+                                return
+                            }
+                            stage('Build and Push Docker Image') {
+
+                                container('agent-noncis-be-dev') {
+                                    dir("frontend") {
                                         buildPushImageNoncisFe(
                                             repoName: repoName,
                                             registry: env.REGISTRY,
@@ -171,147 +171,149 @@ withFolderProperties {
                                             ecrRepo: env.ECRNAME,
                                             branch: env.BRANCH_NAME
                                         )
-                                        }
                                     }
+                                }
+
+                            }
+                            stage('Argocd Sync Develop') {
+
+                                container('agent-noncis-be-dev') {
+
+                                    argocdSync.sync(
+                                        appName: 'connect-' + repoName + '-dev'
+                                    )
 
                                 }
-                                stage('Argocd Sync Develop') {
-                                
-                                    container('agent-noncis-be-dev') {
-                                    
-                                        argocdSync.sync(
-                                            appName: 'connect-' + repoName + '-dev'
-                                        )
 
-                                    }
-
-                                }
+                            }
                         }
 
-                            )
-                        }
+                    )
+                }
 
             }
 
         }
 
-        /*
-        =========================
-        STAGING
-        =========================
-        */
-        if (branch == 'staging') {
+    }
 
-            podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-dev') {
+    /*
+    =========================
+    STAGING
+    =========================
+    */
+    if (branch == 'staging') {
 
-                node(POD_LABEL) {
+        podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-dev') {
 
-                    stage('Checkout SCM') {
-                        container('agent-noncis-be-pr') {
+            node(POD_LABEL) {
 
+                stage('Checkout SCM') {
+                    container('agent-noncis-be-pr') {
+
+                        checkout scm
+
+                    }
+                }
+
+                stage('Build and Push Docker Image') {
+
+                    container('agent-noncis-be-dev') {
+
+                        buildPushImageNoncisBe(
+                            repoName: repoName,
+                            registry: env.REGISTRY,
+                            project: env.PROJECT,
+                            ecrRepo: env.ECRNAME,
+                            branch: env.BRANCH_NAME
+                        )
+
+                    }
+
+                }
+                stage('Argocd Sync Staging') {
+
+                    container('agent-noncis-be-dev') {
+
+                        argocdSync.sync(
+                            appName: 'connect-' + repoName + '-staging'
+                        )
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+    /*
+    =========================
+    PRODUCTION
+    =========================
+    */
+    if (branch == 'master') {
+
+        podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-prod') {
+
+            node(POD_LABEL) {
+
+                stage('Checkout SCM') {
+                    container('agent-noncis-be-prod') {
+                        def bitbucketAvailable = true
+                        try {
+                            def status = sh(
+                                script: """
+                                    curl -s https://bitbucket.status.atlassian.com/api/v2/status.json \
+                                    | jq -r '.status.indicator'
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            echo "Bitbucket indicator: ${status}"
+
+                            // "none" = fully operational; anything else (minor/major/critical) = degraded/down
+                            bitbucketAvailable = (status == "none")
+                        } catch (Exception e) {
+                            bitbucketAvailable = false
+                            echo "Bitbucket tidak dapat diakses, switching ke mirror"
+                        }
+
+                        if (bitbucketAvailable) {
+                            echo "Bitbucket OK, menggunakan checkout scm"
                             checkout scm
-
+                        } else {
+                            echo "Menggunakan fallback checkout"
+                            checkoutScm()
                         }
                     }
-
-                    stage('Build and Push Docker Image') {
-
-                        container('agent-noncis-be-dev') {
-
-                            buildPushImageNoncisBe(
-                                repoName: repoName,
-                                registry: env.REGISTRY,
-                                project: env.PROJECT,
-                                ecrRepo: env.ECRNAME,
-                                branch: env.BRANCH_NAME
-                            )
-
-                        }
-
-                    }
-                    stage('Argocd Sync Staging') {
-
-                        container('agent-noncis-be-dev') {
-
-                            argocdSync.sync(
-                                appName: 'connect-' + repoName + '-staging'
-                            )
-
-                        }
-
-                    }
-
                 }
-
-            }
-
-        }
-        /*
-        =========================
-        PRODUCTION
-        =========================
-        */
-        if (branch == 'master') {
-
-            podTemplate(label: POD_LABEL, inheritFrom: 'noncis-be-prod') {
-
-                node(POD_LABEL) {
-
-                    stage('Checkout SCM') {
-                        container('agent-noncis-be-prod') {
-                            def bitbucketAvailable = true
-                            try {
-                                def status = sh(
-                                    script: """
-                                        curl -s https://bitbucket.status.atlassian.com/api/v2/status.json \
-                                        | jq -r '.status.indicator'
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-                                echo "Bitbucket indicator: ${status}"
-
-                                if (status == "none") {
-                                    bitbucketAvailable = true
-                                }
-                            } catch (Exception e) {
-                                bitbucketAvailable = false
-                                echo "Bitbucket tidak dapat diakses, switching ke mirror"
-                            }
-
-                            if (bitbucketAvailable) {
-                                echo "Bitbucket OK, menggunakan checkout scm"
-                                checkout scm
-                            } else {
-                                echo "Menggunakan fallback checkout"
-                                checkoutScm()
-                            }
-                        }
+                stage('Build Jar') {
+                    container('agent-noncis-be-prod') {
+                        buildJar()
                     }
-                    stage('Build Jar') {
-                        container('agent-noncis-be-prod') {
-                            buildJar()
-                        }
+                }
+                stage('Build and Push Docker Image') {
+
+                    container('agent-noncis-be-prod') {
+
+                        buildPushImageCisBe(
+                            repoName: repoName,
+                            registry: env.REGISTRY,
+                            project: env.PROJECT,
+                            ecrRepo: env.ECRNAME,
+                            branch: env.BRANCH_NAME
+                        )
+
                     }
-                    stage('Build and Push Docker Image') {
-
-                        container('agent-noncis-be-prod') {
-
-                            buildPushImageCisBe(
-                                repoName: repoName,
-                                registry: env.REGISTRY,
-                                project: env.PROJECT,
-                                ecrRepo: env.ECRNAME,
-                                branch: env.BRANCH_NAME
-                            )
-
-                        }
-                    }
-                    stage('Schedule Deployment to Prod') {
-                        container('agent-noncis-be-prod') {
-                            scheduleDeploy()
-                        }
+                }
+                stage('Schedule Deployment to Prod') {
+                    container('agent-noncis-be-prod') {
+                        scheduleDeploy()
                     }
                 }
             }
         }
+    }
 }
