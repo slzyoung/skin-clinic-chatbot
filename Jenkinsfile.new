@@ -27,7 +27,7 @@ withFolderProperties {
     def repoName = env.REPO_NAME
     def isPR = env.CHANGE_ID != null
     def repoSlugName = env.ECRNAME
-    println "Branch: ${branch}"
+    echo "Branch: ${branch}"
     if (branch in ['dev', 'staging', 'master']) {
         properties([
             disableConcurrentBuilds(abortPrevious: true)
@@ -111,7 +111,12 @@ withFolderProperties {
                     }
                 }
 
-                def changes = detectChanges()
+                def changes
+                stage('Detect Changes') {
+                    container('agent-noncis-be-pr') {
+                        changes = detectChanges()
+                    }
+                }
 
                 echo "Backend changed : ${changes.backend}"
                 echo "Frontend changed: ${changes.frontend}"
