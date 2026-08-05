@@ -85,6 +85,8 @@ backend/app/rag/
   - Added explicit decryption in `app/rag/services/factory.py` so the `AdapterFactory` can correctly process encrypted `LLM_API_KEY`s before initializing OpenAI adapters (authorized security exception).
 - **Out-of-Band Summary Sync**:
   - Intercepted `GET /api/knowledge/{id}` in `app/api/routers/knowledge.py` to seamlessly auto-sync the latest AI-generated summary from the `rag` staging JSON files to the PostgreSQL database, ensuring UI freshness after HITL refinement/approval without modifying internal `rag` router logic.
+- **Chunk Metadata Synchronization**:
+  - Fixed a bug in `app/rag/router.py` (`edit_approved_document`, `edit_pending_document`, `approve_document`) where only the primary category was assigned to chunk metadata. Now, the complete array of categories (e.g., `["Acne", "Anti-Aging"]`) is correctly injected into every chunk's metadata prior to PGVector indexing, ensuring accurate dense vector filtering.
 
 ---
 
