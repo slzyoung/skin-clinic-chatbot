@@ -29,10 +29,18 @@ import {
 	RiUser3Line,
 } from "@remixicon/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
+import { useCategories } from "@/app/dashboard/category/hooks/use-categories";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { RiAddLine } from "@remixicon/react";
 
 interface ChatPreviewProps {
 	knowledgeId?: string;
@@ -41,6 +49,8 @@ interface ChatPreviewProps {
 	fileName?: string | null;
 	isDetailLoading?: boolean;
 	isEditMode?: boolean;
+	categories?: string[];
+	onChangeCategories?: (newCategories: string[]) => void;
 }
 
 interface Message {
@@ -54,8 +64,10 @@ export function ChatPreview({
 	knowledgeStatus,
 	aiSummary,
 	fileName,
-	isDetailLoading,
-	isEditMode,
+	isDetailLoading = false,
+	isEditMode = false,
+	categories = [],
+	onChangeCategories,
 }: ChatPreviewProps) {
 	const STORAGE_KEY = `chat_preview_${knowledgeId || 'default'}`;
 
@@ -79,6 +91,8 @@ export function ChatPreview({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const queryClient = useQueryClient();
 
+	const { data: allCategories = [] } = useCategories();
+
 	useEffect(() => {
 		if (typeof window !== "undefined") {
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(userChatMessages));
@@ -90,9 +104,79 @@ export function ChatPreview({
 			? { role: "assistant", content: aiSummary }
 			: null;
 
-	const messages: Message[] = initialSummaryMessage
-		? [initialSummaryMessage, ...userChatMessages]
-		: userChatMessages;
+	const messages: Message[] = [];
+	if (initialSummaryMessage) messages.push(initialSummaryMessage);
+	messages.push(...userChatMessages);
+
+	// Find the index of the latest assistant message so we know where to attach the Categories
+	let lastAssistantIndex = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].role === "assistant") {
+			lastAssistantIndex = i;
+			break;
+		}
+	}
+
+	const renderCategoriesBlock = (standalone = false) => {
+		const shouldShow = knowledgeStatus !== "PROCESSING" && (categories.length > 0 || (isEditMode && knowledgeStatus === "APPROVED") || knowledgeStatus === "PENDING");
+		
+		const content = (
+			<div className={`flex items-start gap-3 w-full ${!standalone ? 'mt-4' : ''} ${!shouldShow ? 'hidden' : ''}`}>
+				<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+					<RiRobot2Line className="size-4" />
+				</div>
+				<div className="bg-blue-50 text-zinc-950 p-3.5 rounded-md text-sm w-full">
+					<p className="font-semibold mb-2 text-blue-900">Document Categories:</p>
+					<div className="flex flex-wrap gap-2">
+						{categories.map((c) => (
+							<div key={c} className="flex items-center gap-1 bg-white border border-blue-200 px-2 py-1 rounded-md text-xs font-medium text-blue-800 shadow-sm">
+								<span>{c}</span>
+								{(isEditMode || knowledgeStatus === "PENDING") && (
+									<button type="button" onClick={() => handleRemoveCategory(c)} className="text-blue-400 hover:text-blue-700 transition-colors">
+										<RiCloseLine className="size-3.5" />
+									</button>
+								)}
+							</div>
+						))}
+						{(isEditMode || knowledgeStatus === "PENDING") && (
+							<DropdownMenu>
+								<DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-6 text-xs px-2 gap-1 border-dashed border-blue-300 text-blue-600 hover:bg-blue-100/50 hover:text-blue-700" />}>
+									<RiAddLine className="size-3" />
+									Add Category
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="start" className="w-48 max-h-64 overflow-y-auto">
+									{availableCategories.length > 0 ? (
+										availableCategories.map((cat) => (
+											<DropdownMenuItem key={cat.id} onClick={() => handleAddCategory(cat.name)}>
+												{cat.name}
+											</DropdownMenuItem>
+										))
+									) : (
+										<DropdownMenuItem disabled>No more categories</DropdownMenuItem>
+									)}
+								</DropdownMenuContent>
+							</DropdownMenu>
+						)}
+					</div>
+				</div>
+			</div>
+		);
+
+		return standalone ? <MessageScrollerItem key="categories-block">{content}</MessageScrollerItem> : content;
+	};
+
+	const handleAddCategory = (catName: string) => {
+		if (categories.includes(catName)) return;
+		const newCategories = [...categories, catName];
+		onChangeCategories?.(newCategories);
+	};
+
+	const handleRemoveCategory = (catName: string) => {
+		const newCategories = categories.filter((c) => c !== catName);
+		onChangeCategories?.(newCategories);
+	};
+
+	const availableCategories = allCategories.filter((c) => !categories.includes(c.name));
 
 	const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files && e.target.files[0]) {
@@ -116,9 +200,7 @@ export function ChatPreview({
 
 		try {
 			if ((knowledgeStatus === "PENDING" || (knowledgeStatus === "APPROVED" && isEditMode)) && knowledgeId) {
-				const endpoint = knowledgeStatus === "PENDING" 
-					? `/ai/ingest/pending/${knowledgeId}/refine`
-					: `/ai/ingest/approved/${knowledgeId}/refine`;
+				const endpoint = `/knowledge/${knowledgeId}/refine`;
 					
 				const response = await api.post(endpoint, {
 					prompt: userMsg.content,
@@ -245,66 +327,75 @@ export function ChatPreview({
 								</MessageScrollerItem>
 							)}
 
-							{messages.map((msg, index) => (
-								<MessageScrollerItem key={index}>
-									<div
-										className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}
-									>
-										{/* Attached Knowledge Document Badge OUTSIDE & ABOVE initial AI summary bubble */}
-										{fileName && index === 0 && msg.role === "assistant" && (
-											<Attachment className="bg-white border-border shadow-sm p-1.5 w-fit min-w-40 max-w-sm mb-2">
-												<AttachmentMedia className="bg-blue-50 text-blue-600 shrink-0">
-													<RiFilePdf2Line className="size-5" />
-												</AttachmentMedia>
-												<AttachmentContent className="overflow-hidden">
-													<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate">
-														{fileName}
-													</AttachmentTitle>
-													<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
-														DOCUMENT
-													</AttachmentDescription>
-												</AttachmentContent>
-											</Attachment>
+							{messages.length > 0 && (
+								<MessageScrollerItem key="msg-0" scrollAnchor={messages.length === 1 && !isLoading}>
+									<div className={`flex flex-col w-full ${messages[0].role === "user" ? "items-end" : "items-start"}`}>
+										{fileName && messages[0].role === "assistant" && (
+											<div className="flex flex-col gap-2 mb-2">
+												<Attachment className="bg-white border-border shadow-sm p-1.5 w-fit min-w-40 max-w-sm">
+													<AttachmentMedia className="bg-blue-50 text-blue-600 shrink-0">
+														<RiFilePdf2Line className="size-5" />
+													</AttachmentMedia>
+													<AttachmentContent className="overflow-hidden">
+														<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate">
+															{fileName}
+														</AttachmentTitle>
+														<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+															DOCUMENT
+														</AttachmentDescription>
+													</AttachmentContent>
+												</Attachment>
+											</div>
 										)}
-
-										{/* User File Attachment Chip OUTSIDE & ABOVE user bubble */}
-										{msg.attachmentName && (
+										{messages[0].attachmentName && (
 											<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
 												<RiFileTextLine className="size-3.5 text-blue-600 shrink-0" />
-												<span className="truncate max-w-xs">{msg.attachmentName}</span>
+												<span className="truncate max-w-xs">{messages[0].attachmentName}</span>
 											</div>
 										)}
-
-										<div
-											className={`flex items-start gap-3 w-full ${msg.role === "user" ? "flex-row-reverse" : ""}`}
-										>
+										<div className={`flex items-start gap-3 w-full ${messages[0].role === "user" ? "flex-row-reverse" : ""}`}>
 											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-												{msg.role === "user" ? (
-													<RiUser3Line className="size-4" />
-												) : (
-													<RiRobot2Line className="size-4" />
-												)}
+												{messages[0].role === "user" ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
 											</div>
-											<div
-												className={`${
-													msg.role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"
-												} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed 
-												prose-pre:bg-zinc-800 prose-pre:text-zinc-100 
-												prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 
-												prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white 
-												prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 
-												prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
-											>
-												{msg.role === "assistant" ? (
-													<ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-												) : (
-													msg.content
-												)}
+											<div className={`${messages[0].role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}>
+												{messages[0].role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{messages[0].content}</ReactMarkdown> : messages[0].content}
 											</div>
 										</div>
+										{/* Inject Categories below initial summary if it's the latest assistant message */}
+										{0 === lastAssistantIndex && renderCategoriesBlock()}
 									</div>
 								</MessageScrollerItem>
-							))}
+							)}
+
+							{/* Categories Section (Fallback: if no messages exist at all but we need to show categories) */}
+							{messages.length === 0 && renderCategoriesBlock(true)}
+
+							{/* Render remaining messages */}
+							{messages.slice(1).map((msg, sliceIndex) => {
+								const actualIndex = sliceIndex + 1;
+								return (
+									<MessageScrollerItem key={`msg-${actualIndex}`} scrollAnchor={actualIndex === messages.length - 1 && !isLoading}>
+										<div className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}>
+											{msg.attachmentName && (
+												<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
+													<RiFileTextLine className="size-3.5 text-blue-600 shrink-0" />
+													<span className="truncate max-w-xs">{msg.attachmentName}</span>
+												</div>
+											)}
+											<div className={`flex items-start gap-3 w-full ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+												<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+													{msg.role === "user" ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
+												</div>
+											<div className={`${msg.role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}>
+												{msg.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown> : msg.content}
+											</div>
+										</div>
+										{/* Inject Categories below this AI message if it's the latest assistant message */}
+										{actualIndex === lastAssistantIndex && renderCategoriesBlock()}
+									</div>
+								</MessageScrollerItem>
+								);
+							})}
 
 							{isLoading && (
 								<MessageScrollerItem scrollAnchor>

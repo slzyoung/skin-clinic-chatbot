@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 import { useRouter } from "next/navigation";
 import { use, useState } from "react";
-import { useDeleteKnowledge, useKnowledgeDetail } from "../hooks/use-knowledge";
+import { useDeleteKnowledge, useKnowledgeDetail, useEditKnowledge } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
 
 export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -21,6 +21,16 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const hasWriteAccess = user?.accesses?.includes("knowledge:write");
 	const hasDeleteAccess = user?.accesses?.includes("knowledge:delete");
 	const [isEditMode, setIsEditMode] = useState(false);
+	const editKnowledge = useEditKnowledge();
+
+	const initialCategories = (data?.metadata?.categories as string[]) || (data?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
+	const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
+	const [prevMetadataStr, setPrevMetadataStr] = useState(JSON.stringify(data?.metadata || {}));
+
+	if (JSON.stringify(data?.metadata || {}) !== prevMetadataStr) {
+		setPrevMetadataStr(JSON.stringify(data?.metadata || {}));
+		setPendingCategories(initialCategories);
+	}
 
 	const handleDelete = () => {
 		if (confirm("Are you sure you want to delete this knowledge document?")) {
@@ -78,10 +88,12 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 						<Button
 							variant={isEditMode ? "default" : "outline"}
 							className={`gap-2 ${isEditMode ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "text-zinc-950"}`}
-							disabled={isLoading}
-							onClick={() => {
+							disabled={isLoading || editKnowledge.isPending}
+							onClick={async () => {
 								if (isEditMode) {
-									toast.success("Document edits saved successfully.");
+									await editKnowledge.mutateAsync({ id, data: { summary: data?.ai_summary || "", categories: pendingCategories } });
+								} else {
+									toast.info("You can now edit the document categories below.");
 								}
 								setIsEditMode(!isEditMode);
 							}}
@@ -104,10 +116,12 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					fileName={formatDisplayTitle(data?.title || data?.file_name)}
 					isDetailLoading={isLoading}
 					isEditMode={isEditMode}
+					categories={pendingCategories}
+					onChangeCategories={setPendingCategories}
 				/>
 
 				{/* Right Column (Classification) */}
-				<ClassificationSidebar knowledge={data} />
+				<ClassificationSidebar knowledge={data} pendingCategories={pendingCategories} />
 			</div>
 		</div>
 	);

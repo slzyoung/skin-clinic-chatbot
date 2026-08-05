@@ -45,7 +45,7 @@ export const useUploadKnowledge = () => {
 
 	return useMutation({
 		mutationFn: async (formData: FormData) => {
-			const response = await api.post("/ai/ingest", formData);
+			const response = await api.post("/knowledge/upload", formData);
 			return response.data;
 		},
 		onSuccess: () => {
@@ -84,7 +84,7 @@ export const useApproveKnowledge = () => {
 
 	return useMutation({
 		mutationFn: async (id: string) => {
-			const response = await api.post(`/ai/ingest/approve/${id}`);
+			const response = await api.post(`/knowledge/${id}/approve`);
 			return response.data;
 		},
 		onSuccess: (_, id) => {
@@ -112,6 +112,45 @@ export const useDeleteKnowledge = () => {
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to delete knowledge document."));
+		},
+	});
+};
+
+export const useEditKnowledge = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({ id, data, hideToast }: { id: string; data: { summary: string; categories: string[] }; hideToast?: boolean }) => {
+			const response = await api.put(`/knowledge/${id}`, data);
+			return { data: response.data, hideToast };
+		},
+		onSuccess: (result, variables) => {
+			if (!result.hideToast) {
+				toast.success("Document updated successfully!");
+			}
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to update document."));
+		},
+	});
+};
+
+export const useRefineKnowledge = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({ id, prompt }: { id: string; prompt: string }) => {
+			const response = await api.post(`/knowledge/${id}/refine`, { prompt });
+			return response.data;
+		},
+		onSuccess: (_, variables) => {
+			toast.success("Document refined successfully!");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to refine document."));
 		},
 	});
 };

@@ -1,24 +1,29 @@
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
-import { useUpdateKnowledgeStatus, useApproveKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
+import { useUpdateKnowledgeStatus, useApproveKnowledge, useEditKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { RiCheckLine, RiCloseLine, RiFilePdf2Line, RiMedicineBottleLine } from "@remixicon/react";
+import { RiCheckLine, RiCloseLine, RiFilePdf2Line, RiMedicineBottleLine, RiLoader4Line } from "@remixicon/react";
 import { useSession } from "@/hooks/use-session";
 
 interface ClassificationSidebarProps {
 	knowledge?: KnowledgeResponse;
+	pendingCategories?: string[];
 }
 
-export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps) {
+export function ClassificationSidebar({ knowledge, pendingCategories }: ClassificationSidebarProps) {
 	const updateStatus = useUpdateKnowledgeStatus();
 	const approveKnowledge = useApproveKnowledge();
+	const editKnowledge = useEditKnowledge();
 	const { user } = useSession();
 	const hasWriteAccess = user?.accesses?.includes("knowledge:write");
 
 	if (!knowledge) return null;
 
-	const handleApprove = () => {
+	const handleApprove = async () => {
+		if (pendingCategories && pendingCategories.length > 0) {
+			await editKnowledge.mutateAsync({ id: knowledge.id, data: { summary: knowledge.ai_summary || "", categories: pendingCategories }, hideToast: true });
+		}
 		approveKnowledge.mutate(knowledge.id);
 		if (typeof window !== "undefined") {
 			localStorage.removeItem(`chat_preview_${knowledge.id}`);
@@ -141,11 +146,20 @@ export function ClassificationSidebar({ knowledge }: ClassificationSidebarProps)
 					<div className="flex flex-col gap-2 pt-1">
 						<Button
 							onClick={handleApprove}
-							disabled={approveKnowledge.isPending}
+							disabled={approveKnowledge.isPending || editKnowledge.isPending}
 							className="w-full bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
 						>
-							<RiCheckLine className="size-4" />
-							Approve Knowledge
+							{approveKnowledge.isPending || editKnowledge.isPending ? (
+								<>
+									<RiLoader4Line className="size-4 animate-spin" />
+									Indexing...
+								</>
+							) : (
+								<>
+									<RiCheckLine className="size-4" />
+									Approve Knowledge
+								</>
+							)}
 						</Button>
 						<Button
 							onClick={handleReject}
