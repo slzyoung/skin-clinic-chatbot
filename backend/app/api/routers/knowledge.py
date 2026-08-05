@@ -1,15 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
+from typing import List, Optional
 import uuid
+import json
+import os
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType
-from app.models.knowledge import Knowledge, KnowledgeStatus
+from app.models.knowledge import Knowledge, KnowledgeStatus, KnowledgeType
 from app.schemas.knowledge import KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse
 from datetime import datetime, timezone
+
+from app.rag.deps import get_ingestion_pipeline, get_llm, get_bm25_index, get_vector_store
+from app.rag.services.interfaces import BaseLLMAdapter
+from app.rag.router import (
+    ingest_document, 
+    approve_document, 
+    edit_approved_document,
+    edit_pending_document,
+    refine_pending_document,
+    refine_approved_document,
+    delete_document_endpoint,
+    resolve_pending_file,
+    resolve_approved_file
+)
+from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest
 
 router = APIRouter(tags=["Knowledge"])
 
@@ -36,8 +53,6 @@ async def get_knowledge(
     if knowledge:
         # OUT-OF-BAND SYNC: Fetch latest AI summary from RAG JSON files
         try:
-            from app.rag.router import resolve_pending_file, resolve_approved_file
-            import json, os
             target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
             if target_file and os.path.exists(target_file):
                 with open(target_file, "r", encoding="utf-8") as f:
@@ -46,14 +61,19 @@ async def get_knowledge(
                 if latest_summary and knowledge.ai_summary != latest_summary:
                     knowledge.ai_summary = latest_summary
                     await db.commit()
-        except Exception:
-            pass
+                    await db.refresh(knowledge)
+                # Inject full RAG data into metadata manually
+                knowledge_dict = KnowledgeResponse.model_validate(knowledge).model_dump(by_alias=False)
+                knowledge_dict["metadata_"] = data
+                return knowledge_dict
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Error loading RAG JSON: {e}")
             
         return knowledge
 
     # 2. Fallback check in RAG staging files (data/pending or data/output)
-    from app.rag.router import resolve_pending_file, resolve_approved_file
-    import json, os
     target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
     now = datetime.now(timezone.utc)
     
@@ -138,18 +158,28 @@ ALLOWED_MIME_TYPES = {
 
 @router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_knowledge_file(
-    files: List[UploadFile] = File(...),
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    category_type: str = Form("Product"),
+    prompt: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(RequireAccess("knowledge:write"))
+    current_user: User = Depends(RequireAccess("knowledge:write")),
+    llm: BaseLLMAdapter = Depends(get_llm)
 ):
-    results = []
-    for file in files:
-        if file.content_type not in ALLOWED_MIME_TYPES:
-            raise HTTPException(status_code=400, detail=f"File type {file.content_type} not allowed for file {file.filename}")
-        results.append(file.filename)
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(status_code=400, detail=f"File type {file.content_type} not allowed for file {file.filename}")
         
-    # Stub for the Langchain partner to implement file saving and text extraction/chunking
-    return {"message": f"{len(files)} files received. Processing is handled by Langchain integration.", "filenames": results}
+    pipeline = get_ingestion_pipeline(request)
+    
+    return await ingest_document(
+        background_tasks=background_tasks,
+        file=file,
+        category_type=category_type,
+        prompt=prompt,
+        pipeline=pipeline,
+        llm=llm
+    )
 
 @router.put("/{knowledge_id}/status", response_model=KnowledgeResponse)
 @router.patch("/{knowledge_id}/status", response_model=KnowledgeResponse)
@@ -166,8 +196,6 @@ async def update_knowledge_status(
     
     if not knowledge:
         # Fallback: check RAG staging file to auto-create Knowledge DB record if missing
-        from app.rag.router import resolve_pending_file, resolve_approved_file
-        import json, os
         target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
         
         file_name = "document.pdf"
@@ -213,8 +241,82 @@ async def update_knowledge_status(
     await db.refresh(knowledge)
     return knowledge
 
+@router.post("/{knowledge_id}/approve")
+async def approve_knowledge(
+    request: Request,
+    knowledge_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write"))
+):
+    pipeline = get_ingestion_pipeline(request)
+    bm25 = get_bm25_index(request)
+    
+    res = await approve_document(str(knowledge_id), pipeline=pipeline, bm25=bm25)
+    
+    # Ensure DB status is updated
+    stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
+    result = await db.execute(stmt)
+    k_entry = result.scalar_one_or_none()
+    if k_entry:
+        k_entry.status = KnowledgeStatus.APPROVED
+        k_entry.approved_by = current_user.id
+        await db.commit()
+        
+    return res
+
+@router.put("/{knowledge_id}")
+async def edit_knowledge(
+    request: Request,
+    knowledge_id: uuid.UUID,
+    payload: EditApprovedDocumentRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write"))
+):
+    pipeline = get_ingestion_pipeline(request)
+    bm25 = get_bm25_index(request)
+    vector_store = get_vector_store(request)
+    
+    p_file = resolve_pending_file(str(knowledge_id))
+    if p_file:
+        res = await edit_pending_document(
+            knowledge_id=str(knowledge_id),
+            request=payload
+        )
+    else:
+        res = await edit_approved_document(
+            knowledge_id=str(knowledge_id),
+            request=payload,
+            pipeline=pipeline,
+            bm25=bm25,
+            vector_store=vector_store
+        )
+    return res
+
+@router.post("/{knowledge_id}/refine")
+async def refine_knowledge(
+    request: Request,
+    knowledge_id: uuid.UUID,
+    payload: RefineRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write")),
+    llm: BaseLLMAdapter = Depends(get_llm)
+):
+    p_file = resolve_pending_file(str(knowledge_id))
+    a_file = resolve_approved_file(str(knowledge_id))
+    
+    if p_file:
+        return await refine_pending_document(str(knowledge_id), payload, llm)
+    elif a_file:
+        pipeline = get_ingestion_pipeline(request)
+        bm25 = get_bm25_index(request)
+        vector_store = get_vector_store(request)
+        return await refine_approved_document(str(knowledge_id), payload, pipeline, bm25, vector_store, llm)
+    else:
+        raise HTTPException(status_code=404, detail="Document not found for refinement.")
+
 @router.delete("/{knowledge_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_knowledge(
+    request: Request,
     knowledge_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(RequireAccess("knowledge:delete"))
@@ -228,15 +330,14 @@ async def delete_knowledge(
         knowledge.deleted_at = datetime.now(timezone.utc)
         await db.commit()
         
-    # 2. Also remove physical JSON files in pending or output folder if present
-    from app.rag.router import resolve_pending_file, resolve_approved_file
-    import os
-    for resolver in [resolve_pending_file, resolve_approved_file]:
-        fpath = resolver(str(knowledge_id))
-        if fpath and os.path.exists(fpath):
-            try:
-                os.remove(fpath)
-            except Exception:
-                pass
+    # 2. Hard delete vector store embeddings and JSON files via RAG subsystem
+    pipeline = get_ingestion_pipeline(request)
+    bm25 = get_bm25_index(request)
+    vector_store = get_vector_store(request)
+    
+    try:
+        await delete_document_endpoint(str(knowledge_id), pipeline, bm25, vector_store)
+    except Exception:
+        pass
                 
     return None

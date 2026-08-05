@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.models.base import Base
 from app.models.user import User, UserType, Role, UserRole, Access, RoleAccess, UserAccess
+from app.models.category import Category
 from app.core.security import get_password_hash
 import app.models # Ensure all models are loaded
 
@@ -138,6 +139,21 @@ async def init_db():
                 await session.commit()
             
             print("Successfully seeded functional user with delete access: dept2@mail.com / dept123")
+            
+        # Seed initial categories
+        initial_categories = [
+            "Acne", "Anti-Aging", "Hair Loss", "Dermatitis", 
+            "Pigmentation", "Sensitive Skin", "Eczema", "Psoriasis", 
+            "Rosacea", "Melasma"
+        ]
+        
+        print("Seeding initial categories...")
+        for cat_name in initial_categories:
+            result = await session.execute(__import__('sqlalchemy').select(Category).where(Category.name == cat_name))
+            if not result.scalar_one_or_none():
+                session.add(Category(name=cat_name))
+        await session.commit()
+        print("Successfully seeded initial categories.")
 
 
     await engine.dispose()

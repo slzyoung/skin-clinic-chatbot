@@ -386,6 +386,8 @@ async def ingest_document(
         with open(file_path, "wb") as f:
             f.write(await file.read())
             
+        file_size = os.path.getsize(file_path)
+            
         k_id = None
         
         # Auto-deduplicate by file_name if knowledge_id was not explicitly passed
@@ -438,6 +440,7 @@ async def ingest_document(
                         knowledge.ai_summary = "Processing..."
                         knowledge.original_path = file_path
                         knowledge.mime_type = file.content_type
+                        knowledge.file_size = file_size
                         await session.commit()
                         await session.refresh(knowledge)
                         k_id = str(knowledge.id)
@@ -449,6 +452,7 @@ async def ingest_document(
                         file_name=file.filename,
                         original_path=file_path,
                         mime_type=file.content_type,
+                        file_size=file_size,
                         status=KnowledgeStatus.PROCESSING,
                         uploaded_by=user_id,
                         ai_summary="Processing...",
@@ -848,6 +852,8 @@ async def edit_approved_document(
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 if primary_cat:
                     chunk["metadata"]["document_type"] = primary_cat
+                if updated_categories:
+                    chunk["metadata"]["categories"] = updated_categories
                 if updated_summary:
                     chunk["metadata"]["summary"] = updated_summary
 
@@ -888,6 +894,62 @@ async def edit_approved_document(
     except Exception as e:
         logger.error(f"Edit approved document failed for '{knowledge_id}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update approved document: {e}")
+
+@router.put("/ingest/pending/{knowledge_id}", tags=["Ingestion"])
+async def edit_pending_document(
+    knowledge_id: str,
+    request: EditApprovedDocumentRequest
+):
+    """
+    Edits a pending document's summary and categories manually (from UI Save Form).
+    """
+    pending_file = resolve_pending_file(knowledge_id)
+    if not pending_file:
+        raise HTTPException(status_code=404, detail=f"Pending document '{knowledge_id}' not found.")
+
+    try:
+        with open(pending_file, "r", encoding="utf-8") as f:
+            existing_doc = json.load(f)
+
+        updated_summary = request.summary if request.summary is not None else existing_doc.get("summary", "")
+        updated_categories = request.categories if (request.categories is not None and len(request.categories) > 0) else existing_doc.get("suggested_categories", [])
+
+        # Normalize suggested_categories to list of dicts for pending json
+        normalized_categories = []
+        if updated_categories:
+            if isinstance(updated_categories[0], str):
+                normalized_categories = [{"name": c} for c in updated_categories]
+            else:
+                normalized_categories = updated_categories
+                
+        existing_doc["summary"] = updated_summary
+        if updated_categories is not None and len(updated_categories) > 0:
+            existing_doc["suggested_categories"] = normalized_categories
+            
+        updated_chunks = existing_doc.get("chunks", existing_doc.get("corrected_chunks", existing_doc.get("raw_chunks", [])))
+        primary_cat = updated_categories[0] if updated_categories else None
+        str_categories = [c["name"] if isinstance(c, dict) else c for c in normalized_categories]
+        
+        for chunk in updated_chunks:
+            if isinstance(chunk, dict):
+                if "metadata" not in chunk:
+                    chunk["metadata"] = {}
+                if str_categories:
+                    chunk["metadata"]["categories"] = str_categories
+                if primary_cat:
+                    chunk["metadata"]["document_type"] = primary_cat["name"] if isinstance(primary_cat, dict) else primary_cat
+                if updated_summary:
+                    chunk["metadata"]["summary"] = updated_summary
+
+        with open(pending_file, "w", encoding="utf-8") as f:
+            json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+
+        return existing_doc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Edit pending document failed for '{knowledge_id}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update pending document: {e}")
 
 
 @router.post("/ingest/approved/{knowledge_id}/refine", tags=["Ingestion"])
@@ -1046,6 +1108,14 @@ async def approve_document(
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = k_id
                 chunk["metadata"]["source_file"] = file_name
+                
+                # Ensure categories are preserved
+                cats = data.get("suggested_categories", data.get("categories", []))
+                str_cats = [c["name"] if isinstance(c, dict) else c for c in cats]
+                if str_cats:
+                    chunk["metadata"]["categories"] = str_cats
+                if "summary" not in chunk["metadata"] and "summary" in data:
+                    chunk["metadata"]["summary"] = data.get("summary")
                 
         if pipeline.vector_store:
             logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
