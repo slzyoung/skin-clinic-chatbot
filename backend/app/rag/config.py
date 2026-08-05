@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     
     # Embedding Settings
-    embedding_model_name: str = "BAAI/bge-m3"
+    embedding_provider: str = "openai"
+    embedding_model_name: str = "text-embedding-3-small"
     
     # Reranker Settings
     reranker_model_name: str = "BAAI/bge-reranker-base"

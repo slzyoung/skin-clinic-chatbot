@@ -18,8 +18,10 @@ except ImportError:
 
 from app.rag.utils.parser import ParseResult
 
+from app.rag.services.embeddings import EmbeddingFactory
+
 class CustomChunker:
-    def __init__(self, embedding_model_name: str = "BAAI/bge-m3"):
+    def __init__(self, embedding_model_name: str = None):
         logger.info("Initializing Custom Chunker (Structural + Semantic)...")
         
         # 1. Structural Chunker (Docling) — only for OCR path
@@ -28,16 +30,16 @@ class CustomChunker:
         else:
             self.structural_chunker = None
             
-        # 2. Semantic Chunker
+        # 2. Semantic Chunker using active EmbeddingFactory
         try:
-            logger.info(f"Loading Embedding Model for Semantic Chunking: {embedding_model_name}")
-            self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model_name)
+            logger.info("Loading active EmbeddingAdapter for Semantic Chunking...")
+            self.embeddings = EmbeddingFactory.get_embeddings_adapter()
             self.semantic_splitter = SemanticChunker(
                 self.embeddings, 
                 breakpoint_threshold_type="percentile"
             )
         except Exception as e:
-            logger.error(f"Failed to initialize SemanticChunker: {e}")
+            logger.warning(f"SemanticChunker using fallback: {e}")
             self.semantic_splitter = None
 
     # =========================================================================

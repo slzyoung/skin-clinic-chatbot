@@ -9,13 +9,6 @@ alembic upgrade head
 echo "Seeding database..."
 python seed.py
 
-echo "Ensuring AI models are downloaded..."
-# Models cached in volume; skip redundant download loop
-
-
-echo "Starting application in $ENV mode..."
-if [ "$ENV" = "dev" ]; then
-    exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
-else
-    exec uvicorn app.main:app --host 0.0.0.0 --port 8000
-fi
+PORT="${PORT:-8000}"
+echo "Starting application in $ENV mode on port $PORT..."
+exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"

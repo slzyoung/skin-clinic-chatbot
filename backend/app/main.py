@@ -30,11 +30,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"BM25 index load failed: {e}")
 
-        try:
-            reranker = Reranker(model_name=rag_settings.reranker_model_name)
-        except Exception as e:
-            logger.error(f"Failed to initialize reranker: {e}")
-            reranker = None
+        # Pure RRF Hybrid Search Architecture (PGVector + BM25) for production
+        reranker = None
 
         try:
             hybrid_retriever = HybridRetriever(
@@ -112,6 +109,6 @@ try:
 except Exception as e:
     print(f"AI module skipped due to error: {e}")
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 async def health_check():
     return {"status": "ok", "project": settings.PROJECT_NAME}

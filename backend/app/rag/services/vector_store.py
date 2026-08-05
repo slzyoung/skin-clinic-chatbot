@@ -1,15 +1,15 @@
 import os
 import json
 from typing import List, Dict, Any
+from functools import lru_cache
 from loguru import logger
 
 from sqlalchemy import create_engine, Column, String, Text, Integer, JSON, text
 from sqlalchemy.orm import declarative_base, sessionmaker
-# pyrefly: ignore [missing-import]
 from pgvector.sqlalchemy import Vector
-from langchain_huggingface import HuggingFaceEmbeddings
 
 from app.rag.services.interfaces import BaseVectorStoreAdapter
+from app.rag.services.embeddings import EmbeddingFactory
 from app.rag.config import settings
 
 Base = declarative_base()
@@ -21,27 +21,54 @@ class DocumentChunk(Base):
     text = Column(Text, nullable=False)
     source_file = Column(String, nullable=False, index=True)
     metadata_ = Column("metadata", JSON, nullable=False)
-    embedding = Column(Vector(1024), nullable=False) # bge-m3 uses 1024 dimensions
+    embedding = Column(Vector(768), nullable=False)
+
 
 class PGVectorAdapter(BaseVectorStoreAdapter):
     def __init__(self):
         self.conn_str = settings.pg_conn_str
         self.collection_name = settings.pg_collection_name
         
-        logger.info(f"Initializing PGVector client for database...")
+        # Instantiate embedding adapter first to get dimension
+        self.embeddings = EmbeddingFactory.get_embeddings_adapter()
+        dim = self.embeddings.dimension
+        
+        logger.info(f"Initializing PGVector client (Dimension: {dim})...")
         try:
             self.engine = create_engine(self.conn_str)
-            # Ensure pgvector extension exists
             with self.engine.connect() as conn:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 conn.commit()
-            
-            # Create table if not exists
-            Base.metadata.create_all(self.engine)
-            
-            # Create HNSW index if not exists (using raw SQL for pgvector specific syntax)
-            with self.engine.connect() as conn:
-                # bge-m3 uses cosine similarity, so we use vector_cosine_ops
+
+                # Check if table exists and if vector dimension matches
+                check_table_sql = text("""
+                    SELECT atttypmod 
+                    FROM pg_attribute 
+                    WHERE attrelid = :tablename::regclass AND attname = 'embedding';
+                """)
+                try:
+                    result = conn.execute(check_table_sql, {"tablename": self.collection_name}).fetchone()
+                    if result and result[0] != dim:
+                        logger.warning(f"Vector dimension mismatch (DB: {result[0]}, Model: {dim}). Recreating table...")
+                        conn.execute(text(f"DROP TABLE IF EXISTS {self.collection_name} CASCADE;"))
+                        conn.commit()
+                except Exception:
+                    conn.rollback()
+
+                # Create table if not exists with correct dimension
+                create_table_sql = f"""
+                CREATE TABLE IF NOT EXISTS {self.collection_name} (
+                    id VARCHAR PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    source_file VARCHAR NOT NULL,
+                    metadata JSONB NOT NULL,
+                    embedding vector({dim}) NOT NULL
+                );
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                
+                # Create HNSW index if not exists
                 index_name = f"idx_{self.collection_name}_embedding_hnsw"
                 conn.execute(text(f"""
                     CREATE INDEX IF NOT EXISTS {index_name} 
@@ -51,32 +78,25 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
                 conn.commit()
                 
             self.Session = sessionmaker(bind=self.engine)
-            logger.info("Connected to PostgreSQL and verified vector extension + HNSW index.")
+            logger.info(f"Connected to PostgreSQL. Table '{self.collection_name}' ready with {dim}D vectors.")
         except Exception as e:
             logger.error(f"Failed to initialize PGVector: {e}")
             raise
 
-        logger.info(f"Loading embedding model for PGVector store: {settings.embedding_model_name}")
-        self.embeddings = HuggingFaceEmbeddings(model_name=settings.embedding_model_name)
         logger.info("PGVectorAdapter initialized successfully.")
 
-
     def insert_chunks(self, chunks: List[Dict]):
-        """
-        Embeds chunks and inserts/upserts them into PGVector.
-        """
         if not chunks:
             logger.warning("No chunks provided to insert.")
             return
 
-        logger.info(f"Embedding {len(chunks)} chunks using {settings.embedding_model_name}...")
+        logger.info(f"Embedding {len(chunks)} chunks with active embedding model...")
         
         texts_to_embed = []
         for chunk in chunks:
             metadata = chunk.get("metadata", {})
             source_file = metadata.get("source_file", "unknown")
             
-            # Clean up source_file to get a cleaner product name
             product_name = source_file
             for ext in [".pdf", ".docx", ".txt", "_parsed.json"]:
                 product_name = product_name.replace(ext, "")
@@ -97,10 +117,8 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
                 source_file = metadata.get("source_file", "unknown")
                 chunk_index = metadata.get("chunk_index", i)
                 
-                # Deterministic ID
                 unique_id = f"{source_file}_{chunk_index}_{i}"
                 
-                # Upsert logic (Delete if exists, then insert)
                 existing = session.query(DocumentChunk).filter_by(id=unique_id).first()
                 if existing:
                     session.delete(existing)
@@ -117,23 +135,17 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             session.commit()
             logger.info(f"Successfully inserted {len(chunks)} chunks into PGVector.")
 
-    from functools import lru_cache
-
     @lru_cache(maxsize=2048)
     def _get_cached_embedding(self, query: str) -> List[float]:
         return self.embeddings.embed_query(query)
 
     def search(self, query: str, top_k: int = 5, filter_metadata: Any = None) -> List[Dict]:
-        """
-        Embeds the query and searches PGVector for the closest points using cosine distance.
-        Calculates exact cosine similarity (1.0 - distance).
-        """
         try:
             query_vector = self._get_cached_embedding(query)
             
             with self.Session() as session:
                 dist_col = DocumentChunk.embedding.cosine_distance(query_vector).label("dist")
-                q = session.query(DocumentChunk, dist_col).filter(DocumentChunk.deleted_at.is_(None))
+                q = session.query(DocumentChunk, dist_col)
                 
                 if filter_metadata:
                     for k, v in filter_metadata.items():
@@ -162,9 +174,6 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             return []
 
     def delete_document(self, source_file: str):
-        """
-        Deletes all chunks associated with the given source_file name.
-        """
         try:
             logger.info(f"Deleting chunks for source_file: {source_file}")
             with self.Session() as session:
@@ -176,9 +185,6 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             raise
 
     def clear_all(self):
-        """
-        Deletes all rows in the table.
-        """
         try:
             logger.info(f"Clearing all data from {self.collection_name}...")
             with self.Session() as session:
