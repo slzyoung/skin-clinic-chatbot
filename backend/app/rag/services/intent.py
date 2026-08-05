@@ -139,59 +139,59 @@ class QueryIntentDetector:
             return {
                 "max_sentences": 1,
                 "length_instruction": "Return ONLY the exact product name in 1 sentence. Do not add unsolicited product recommendations, clinical regimens, or usage instructions.",
-                "missing_fallback": "Informasi nama produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.INGREDIENTS:
             return {
                 "max_sentences": 2,
                 "length_instruction": "Return ONLY the relevant active ingredients in 1-2 sentences or a concise list. Do not add unsolicited product recommendations or clinical advice.",
-                "missing_fallback": "Informasi ingredients produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.PRODUCT_FUNCTION or intent == QueryIntent.BENEFITS:
             return {
                 "max_sentences": 3,
                 "length_instruction": "Return ONLY the primary product function/benefits in maximum 2-3 sentences. Do not add unsolicited clinical regimens, extra product recommendations, or disclaimers.",
-                "missing_fallback": "Informasi fungsi produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.HOW_TO_USE:
             return {
                 "max_sentences": 4,
                 "length_instruction": "Return ONLY the usage instructions in maximum 2-4 sentences. Do not add extra product recommendations or clinical disclaimers.",
-                "missing_fallback": "Informasi cara penggunaan produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.PRICE:
             return {
                 "max_sentences": 1,
                 "length_instruction": "Return ONLY the product price if found in context in 1 sentence.",
-                "missing_fallback": "Informasi harga produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.WARNING:
             return {
                 "max_sentences": 3,
                 "length_instruction": "Return ONLY safety warnings, contraindications, or pregnancy notes mentioned in context in maximum 2-3 sentences. Do not provide medical advice outside retrieved context.",
-                "missing_fallback": "Informasi mengenai keamanan/kontraindikasi penggunaan produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.COMPARISON:
             return {
                 "max_sentences": 4,
                 "length_instruction": "Provide a concise comparison comparing ONLY the requested products using retrieved context. Do not mention any third product.",
-                "missing_fallback": "Informasi perbandingan produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.SUITABLE_FOR:
             return {
                 "max_sentences": 2,
                 "length_instruction": "Return ONLY the target skin type / indication in 1-2 sentences.",
-                "missing_fallback": "Informasi indikasi/kesesuaian jenis kulit produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         elif intent == QueryIntent.AVAILABILITY:
             return {
                 "max_sentences": 2,
                 "length_instruction": "Return ONLY product availability or branch availability mentioned in context.",
-                "missing_fallback": "Informasi ketersediaan produk tersebut tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }
         else:
             return {
                 "max_sentences": 3,
                 "length_instruction": "Answer the question concisely in maximum 2-3 sentences using ONLY the retrieved context. Do not over-explain or provide unsolicited recommendations.",
-                "missing_fallback": "Informasi yang diminta tidak tersedia dalam knowledge base."
+                "missing_fallback": "Untuk saat ini informasi tersebut belum tersedia."
             }

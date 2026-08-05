@@ -3,7 +3,7 @@ import json
 import asyncio
 from typing import List, Optional
 from loguru import logger
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Path, Body
 
 import uuid
 
@@ -12,8 +12,6 @@ from app.rag.schemas import (
     ChatResponse, 
     EvaluationItem,
     DocumentListItem,
-    ApproveRequest,
-    RejectRequest,
     PendingDocumentResponse,
     RefineRequest,
     EditApprovedDocumentRequest,
@@ -227,14 +225,16 @@ async def process_ingestion_background(
                 - Do NOT include any generic AI intros like "Here is the summary" or "AI Executive Overview". The `summary` MUST start directly with `# [Document Title]`.
 
                 Perform the following tasks:
-                1. **Elaborated Full Document Markdown (`summary`)**: Present the ENTIRE document content in production-ready Markdown starting directly with `# Document Title`. Fulfill any user custom instructions if provided.
-                2. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
-                3. **Executive Feedback (`feedback`)**: Provide a clear, professional 1-2 sentence executive summary feedback bubble for the review UI.
-                4. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
-                5. **Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count with user custom prompt applied.
+                1. **AI Recommended Title (`title`)**: Provide a short, professional title for the knowledge header (e.g. "Knowledge Ingestment Brightener Product" or "Knowledge Ingestment ERHA Acne Spot Gel Protocol").
+                2. **Elaborated Full Document Markdown (`summary`)**: Present the ENTIRE document content in production-ready Markdown starting directly with `# Document Title`. Fulfill any user custom instructions if provided.
+                3. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
+                4. **Executive Feedback (`feedback`)**: Provide a clear, professional 1-2 sentence executive summary feedback bubble for the review UI.
+                5. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
+                6. **Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count with user custom prompt applied.
 
                 Return a valid JSON object ONLY (do not wrap in markdown block code like ```json):
                 {{
+                    "title": "Knowledge Ingestment ERHA Acne Spot Gel Protocol",
                     "summary": "# ERHA Product / Protocol Title\\n\\nContent...",
                     "feedback": "Document validated and structured successfully with 100% clinical accuracy.",
                     "text_accuracy": "100%",
@@ -260,6 +260,7 @@ async def process_ingestion_background(
                     llm_response_clean = "\n".join(lines).strip()
                     
                 parsed_review = json.loads(llm_response_clean)
+                recommended_title = parsed_review.get("title", f"Knowledge Ingestment {file_name}")
                 summary = parsed_review.get("summary", summary)
                 text_accuracy = parsed_review.get("text_accuracy", "100%")
                 feedback = parsed_review.get("feedback", feedback)
@@ -273,6 +274,7 @@ async def process_ingestion_background(
                         
             except Exception as llm_err:
                 logger.error(f"Failed to process AI review: {llm_err}")
+                recommended_title = f"Knowledge Ingestment {file_name}"
                 if not summary or summary == "":
                     summary = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
                 if not suggested_categories and db_categories:
@@ -293,16 +295,26 @@ async def process_ingestion_background(
                 chunk["metadata"].pop("suggested_categories", None)
                 chunk["metadata"].pop("document_type", None)
 
+        history_list = []
+        if user_prompt and str(user_prompt).strip():
+            history_list = [
+                {"role": "user", "content": str(user_prompt).strip()},
+                {"role": "assistant", "content": summary}
+            ]
+
         # Structure the final pending document state
         staged_document = {
             "knowledge_id": knowledge_id,
             "file_name": file_name,
+            "title": recommended_title,
             "type": doc_type_display,
             "status": "On review",
             "summary": summary,
             "text_accuracy": text_accuracy,
             "feedback": feedback,
             "suggested_categories": suggested_categories,
+            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+            "history": history_list,
             "chunks": enriched_chunks
         }
         
@@ -338,155 +350,197 @@ async def process_ingestion_background(
     except Exception as e:
         logger.error(f"Failed background processing for document: {e}")
 
-@router.post("/ingest", tags=["Ingestion"], summary="Upload and Ingest Document")
+@router.post(
+    "/ingest", 
+    tags=["Ingestion"], 
+    summary="Upload and Ingest Document",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "file": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                                "description": "Primary document file(s) to upload. Select 1 or multiple files (Choose File)"
+                            },
+                            "category_type": {
+                                "type": "string",
+                                "default": "Product",
+                                "description": "Category Type: 'Product', 'Treatment', 'Promotional', or 'Other'"
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"
+                            }
+                        },
+                        "required": ["file"]
+                    }
+                }
+            }
+        }
+    }
+)
 async def ingest_document(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="Document file to upload (Supports DOCX, PDF, TXT, CSV, etc.)"),
-    category_type: str = Form("Product", description="Category Type: 'Product', 'Treatment', or 'Promotional'"),
+    file: List[UploadFile] = File(..., description="Primary document file(s) to upload (Choose File)"),
+    category_type: str = Form("Product", description="Category Type: 'Product', 'Treatment', 'Promotional', or 'Other'"),
     prompt: Optional[str] = Form(None, description="Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     llm: BaseLLMAdapter = Depends(get_llm)
 ):
     """
-    API endpoint to upload and stage a document for ingestion.
-    Parses, chunks, self-heals, and summarizes the file using AI, 
-    then stores it in data/pending/ for approval.
+    API endpoint to upload and stage document(s) for ingestion.
+    Parses, chunks, self-heals, and summarizes the file(s) using AI, 
+    then stores them in data/pending/ for approval.
     """
+    upload_list = file if isinstance(file, list) else [file]
+    upload_list = [f for f in upload_list if f is not None and f.filename]
+    if not upload_list:
+        raise HTTPException(status_code=400, detail="Please upload at least one document file.")
+
     try:
-        # Determine Knowledge Category Type
         raw_type = (category_type or "").strip().upper()
         from app.models.knowledge import KnowledgeType
-        if "PRODUCT" in raw_type:
-            k_type = KnowledgeType.PRODUCT
-            doc_type_display = "Product"
-        elif "TREATMENT" in raw_type:
-            k_type = KnowledgeType.TREATMENT
-            doc_type_display = "Treatment"
-        elif "PROMO" in raw_type:
-            k_type = KnowledgeType.PROMOTIONAL
-            doc_type_display = "Promotional"
-        else:
-            fn_lower = file.filename.lower()
-            if any(w in fn_lower for w in ["product", "gel", "cream", "serum", "lotion", "cleanser", "acne", "brochure"]):
+        
+        response_items = []
+        os.makedirs("data/temp", exist_ok=True)
+
+        for target_file in upload_list:
+            if not target_file.filename:
+                continue
+
+            if "PRODUCT" in raw_type:
                 k_type = KnowledgeType.PRODUCT
                 doc_type_display = "Product"
-            elif any(w in fn_lower for w in ["treatment", "procedure", "terapi", "tindakan"]):
+            elif "TREATMENT" in raw_type:
                 k_type = KnowledgeType.TREATMENT
                 doc_type_display = "Treatment"
-            elif any(w in fn_lower for w in ["promo", "discount", "voucher"]):
+            elif "PROMO" in raw_type:
                 k_type = KnowledgeType.PROMOTIONAL
                 doc_type_display = "Promotional"
+            elif "OTHER" in raw_type or "LAIN" in raw_type:
+                k_type = KnowledgeType.GENERAL
+                doc_type_display = "Other"
             else:
-                k_type = KnowledgeType.PRODUCT
-                doc_type_display = "Product"
+                fn_lower = target_file.filename.lower()
+                if any(w in fn_lower for w in ["product", "gel", "cream", "serum", "lotion", "cleanser", "acne", "brochure"]):
+                    k_type = KnowledgeType.PRODUCT
+                    doc_type_display = "Product"
+                elif any(w in fn_lower for w in ["treatment", "procedure", "terapi", "tindakan"]):
+                    k_type = KnowledgeType.TREATMENT
+                    doc_type_display = "Treatment"
+                elif any(w in fn_lower for w in ["promo", "discount", "voucher"]):
+                    k_type = KnowledgeType.PROMOTIONAL
+                    doc_type_display = "Promotional"
+                else:
+                    k_type = KnowledgeType.GENERAL
+                    doc_type_display = "Other"
 
-        # Save file temporarily
-        os.makedirs("data/temp", exist_ok=True)
-        file_path = f"data/temp/{file.filename}"
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-            
-        k_id = None
-        
-        # Auto-deduplicate by file_name if knowledge_id was not explicitly passed
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.knowledge import Knowledge, KnowledgeStatus
-            from app.models.user import User
-            from sqlalchemy import select
-            import uuid as _uuid
+            file_path = f"data/temp/{target_file.filename}"
+            with open(file_path, "wb") as f_out:
+                f_out.write(await target_file.read())
 
-            async with AsyncSessionLocal() as session:
-                user_result = await session.execute(select(User).limit(1))
-                user = user_result.scalars().first()
-                user_id = user.id if user else _uuid.uuid4()
+            k_id = None
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.models.knowledge import Knowledge, KnowledgeStatus
+                from app.models.user import User
+                from sqlalchemy import select
+                import uuid as _uuid
 
-                # If no k_id provided, check if a file with same file_name already exists in DB
-                existing_doc = None
-                if not k_id:
+                async with AsyncSessionLocal() as session:
+                    user_result = await session.execute(select(User).limit(1))
+                    user = user_result.scalars().first()
+                    user_id = user.id if user else _uuid.uuid4()
+
                     res = await session.execute(
-                        select(Knowledge).where(Knowledge.file_name == file.filename).order_by(Knowledge.created_at.desc())
+                        select(Knowledge).where(Knowledge.file_name == target_file.filename).order_by(Knowledge.created_at.desc())
                     )
                     existing_doc = res.scalars().first()
                     if existing_doc:
                         k_id = str(existing_doc.id)
 
-                # Check filesystem pending/approved if k_id still not found
-                if not k_id:
-                    pf = resolve_pending_file(file.filename) or resolve_approved_file(file.filename)
-                    if pf and os.path.exists(pf):
+                    if not k_id:
+                        pf = resolve_pending_file(target_file.filename) or resolve_approved_file(target_file.filename)
+                        if pf and os.path.exists(pf):
+                            try:
+                                with open(pf, "r", encoding="utf-8") as fp:
+                                    pf_data = json.load(fp)
+                                if isinstance(pf_data, dict) and pf_data.get("knowledge_id"):
+                                    k_id = str(pf_data.get("knowledge_id"))
+                            except Exception:
+                                pass
+
+                    custom_uuid = None
+                    if k_id:
                         try:
-                            with open(pf, "r", encoding="utf-8") as fp:
-                                pf_data = json.load(fp)
-                            if isinstance(pf_data, dict) and pf_data.get("knowledge_id"):
-                                k_id = str(pf_data.get("knowledge_id"))
-                        except Exception:
+                            custom_uuid = _uuid.UUID(k_id)
+                        except ValueError:
                             pass
 
-                custom_uuid = None
-                if k_id:
-                    try:
-                        custom_uuid = _uuid.UUID(k_id)
-                    except ValueError:
-                        pass
-
-                if existing_doc or (custom_uuid and (await session.get(Knowledge, custom_uuid))):
-                    knowledge = await session.get(Knowledge, custom_uuid) if custom_uuid else existing_doc
-                    if knowledge:
-                        knowledge.type = k_type
-                        knowledge.status = KnowledgeStatus.PROCESSING
-                        knowledge.ai_summary = "Processing..."
-                        knowledge.original_path = file_path
-                        knowledge.mime_type = file.content_type
+                    if existing_doc or (custom_uuid and (await session.get(Knowledge, custom_uuid))):
+                        knowledge = await session.get(Knowledge, custom_uuid) if custom_uuid else existing_doc
+                        if knowledge:
+                            knowledge.type = k_type
+                            knowledge.status = KnowledgeStatus.PROCESSING
+                            knowledge.ai_summary = "Processing..."
+                            knowledge.original_path = file_path
+                            knowledge.mime_type = target_file.content_type
+                            await session.commit()
+                            await session.refresh(knowledge)
+                            k_id = str(knowledge.id)
+                    else:
+                        knowledge = Knowledge(
+                            id=custom_uuid if custom_uuid else _uuid.uuid4(),
+                            type=k_type,
+                            title=target_file.filename,
+                            file_name=target_file.filename,
+                            original_path=file_path,
+                            mime_type=target_file.content_type,
+                            status=KnowledgeStatus.PROCESSING,
+                            uploaded_by=user_id,
+                            ai_summary="Processing...",
+                            ai_confidence=0.0
+                        )
+                        session.add(knowledge)
                         await session.commit()
                         await session.refresh(knowledge)
                         k_id = str(knowledge.id)
-                else:
-                    knowledge = Knowledge(
-                        id=custom_uuid if custom_uuid else _uuid.uuid4(),
-                        type=k_type,
-                        title=file.filename,
-                        file_name=file.filename,
-                        original_path=file_path,
-                        mime_type=file.content_type,
-                        status=KnowledgeStatus.PROCESSING,
-                        uploaded_by=user_id,
-                        ai_summary="Processing...",
-                        ai_confidence=0.0
-                    )
-                    session.add(knowledge)
-                    await session.commit()
-                    await session.refresh(knowledge)
-                    k_id = str(knowledge.id)
-        except Exception as db_err:
-            logger.warning(f"Could not create or update Knowledge DB record: {db_err}")
-            if not k_id:
-                k_id = str(_uuid.uuid4())
-            
-        if not k_id:
-            raise HTTPException(status_code=500, detail="Failed to create or resolve Knowledge record.")
+            except Exception as db_err:
+                logger.warning(f"Could not create or update Knowledge DB record for {target_file.filename}: {db_err}")
+                if not k_id:
+                    k_id = str(_uuid.uuid4())
 
-        # Dispatch background task with optional user prompt
-        background_tasks.add_task(
-            process_ingestion_background,
-            k_id,
-            file_path,
-            file.filename,
-            pipeline,
-            llm,
-            doc_type_display,
-            prompt
-        )
-        
+            background_tasks.add_task(
+                process_ingestion_background,
+                k_id,
+                file_path,
+                target_file.filename,
+                pipeline,
+                llm,
+                doc_type_display,
+                prompt
+            )
+
+            response_items.append({
+                "knowledge_id": k_id,
+                "file_name": target_file.filename,
+                "type": doc_type_display,
+                "status": "On review"
+            })
+
         return {
-            "status": "on_review", 
-            "message": "Document uploaded and processing in background.", 
-            "file_name": file.filename,
-            "knowledge_id": k_id,
-            "type": doc_type_display
+            "status": "success",
+            "message": f"Successfully queued {len(response_items)} document(s) for ingestion.",
+            "total_files": len(response_items),
+            "documents": response_items
         }
+
     except Exception as e:
-        logger.error(f"Failed to ingest document: {e}")
+        logger.error(f"Failed to ingest document(s): {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -668,6 +722,22 @@ async def refine_pending_document(
 
         k_id = staged_data.get("knowledge_id", knowledge_id)
         updated_data["knowledge_id"] = k_id
+
+        # Preserve initial_prompt and visibility_settings
+        if "initial_prompt" not in updated_data and "initial_prompt" in staged_data:
+            updated_data["initial_prompt"] = staged_data.get("initial_prompt")
+        if "visibility_settings" not in updated_data and "visibility_settings" in staged_data:
+            updated_data["visibility_settings"] = staged_data.get("visibility_settings")
+
+        # Build updated multi-turn conversation history
+        existing_hist = staged_data.get("history", [])
+        if not isinstance(existing_hist, list):
+            existing_hist = []
+        new_hist = list(existing_hist)
+        new_hist.append({"role": "user", "content": request.prompt})
+        new_hist.append({"role": "assistant", "content": updated_data.get("summary", "")})
+        updated_data["history"] = new_hist
+
         for chunk in updated_data.get("chunks", []):
             if isinstance(chunk, dict):
                 if "metadata" not in chunk:
@@ -812,12 +882,19 @@ async def get_approved_document_details(knowledge_id: str):
                 if cat:
                     categories = [cat]
 
+        vis_settings = (data.get("visibility_settings") if isinstance(data, dict) else None) or {
+            "clinics": ["all"],
+            "doctor_types": ["all"],
+            "doctors": ["all"]
+        }
+
         return ApprovedDocumentResponse(
             knowledge_id=knowledge_id,
             file_name=file_name,
             status="Approved",
             summary=summary,
             categories=categories,
+            visibility_settings=vis_settings,
             chunks=chunks
         )
     except HTTPException:
@@ -1040,89 +1117,116 @@ async def refine_approved_document(
 
 @router.post("/ingest/approve/{knowledge_id}", tags=["Ingestion"])
 async def approve_document(
-    knowledge_id: str,
+    knowledge_id: str = Path(..., description="Knowledge ID(s) to approve. Supports single ID (e.g. 'uuid1') or comma-separated IDs for batch approval (e.g. 'uuid1,uuid2,uuid3')"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index)
 ):
     """
-    Approves a staged document. Indexes its chunks into PGVector database and BM25 index,
-    then moves the document's JSON representation to the approved directory.
+    Approves staged document(s) and indexes them into PGVector & BM25 database.
+    Supports single document approval or comma-separated batch approval in 1 click.
     """
-    target_id = knowledge_id
-    if not target_id:
-        raise HTTPException(status_code=400, detail="knowledge_id must be provided.")
+    targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() not in ("string", "all")]
 
-    pending_file = resolve_pending_file(target_id)
-    if not pending_file:
-        raise HTTPException(status_code=404, detail=f"Pending document '{target_id}' not found.")
-        
-    try:
-        with open(pending_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    if not targets:
+        raise HTTPException(status_code=400, detail="At least one valid knowledge_id must be provided.")
+
+    approved_results = []
+    for target_id in targets:
+        pending_file = resolve_pending_file(target_id)
+        if not pending_file:
+            logger.warning(f"Pending document '{target_id}' not found for approval, skipping.")
+            continue
             
-        chunks = data.get("chunks", []) if isinstance(data, dict) else data
-        k_id = data.get("knowledge_id", target_id) if isinstance(data, dict) else target_id
-        file_name = data.get("file_name", target_id) if isinstance(data, dict) else target_id
-        
-        for chunk in chunks:
-            if isinstance(chunk, dict):
-                if "metadata" not in chunk:
-                    chunk["metadata"] = {}
-                chunk["metadata"]["knowledge_id"] = k_id
-                chunk["metadata"]["source_file"] = file_name
-                
-        if pipeline.vector_store:
-            logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
-            pipeline.vector_store.insert_chunks(chunks)
-        else:
-            logger.warning("No vector store instance available for indexing.")
-            
-        if bm25:
-            logger.info(f"Indexing chunks for knowledge_id {k_id} into BM25 index...")
-            bm25.add_chunks(chunks)
-            bm25.save(settings.bm25_index_path)
-            
-        os.makedirs("data/output", exist_ok=True)
-        approved_file = os.path.join("data/output", f"{k_id}.json")
-        approved_doc_structure = {
-            "knowledge_id": k_id,
-            "file_name": file_name,
-            "type": data.get("type", "Product") if isinstance(data, dict) else "Product",
-            "document_type": data.get("document_type", "product") if isinstance(data, dict) else "product",
-            "status": "Approved",
-            "summary": data.get("summary", "") if isinstance(data, dict) else "",
-            "chunks": chunks
-        }
-        with open(approved_file, "w", encoding="utf-8") as f:
-            json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
-            
-        if os.path.exists(pending_file):
-            os.remove(pending_file)
-            
-        # Dual-sync update to Knowledge DB table
         try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.knowledge import Knowledge, KnowledgeStatus
-            from sqlalchemy import select
-            import uuid as _uuid
-            async with AsyncSessionLocal() as session:
-                try:
-                    k_uuid = _uuid.UUID(k_id)
-                    stmt_k = select(Knowledge).where(Knowledge.id == k_uuid, Knowledge.deleted_at.is_(None))
-                except ValueError:
-                    stmt_k = select(Knowledge).where(Knowledge.file_name.ilike(f"%{file_name}%"), Knowledge.deleted_at.is_(None))
-                res_k = await session.execute(stmt_k)
-                k_entry = res_k.scalars().first()
-                if k_entry:
-                    k_entry.status = KnowledgeStatus.APPROVED
-                    await session.commit()
-        except Exception as db_err:
-            logger.warning(f"Could not dual-sync approved status to Knowledge DB table: {db_err}")
+            with open(pending_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                
+            chunks = data.get("chunks", []) if isinstance(data, dict) else data
+            k_id = data.get("knowledge_id", target_id) if isinstance(data, dict) else target_id
+            file_name = data.get("file_name", target_id) if isinstance(data, dict) else target_id
+            
+            for chunk in chunks:
+                if isinstance(chunk, dict):
+                    if "metadata" not in chunk:
+                        chunk["metadata"] = {}
+                    chunk["metadata"]["knowledge_id"] = k_id
+                    chunk["metadata"]["source_file"] = file_name
+                    
+            if pipeline.vector_store:
+                logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
+                pipeline.vector_store.insert_chunks(chunks)
+            else:
+                logger.warning("No vector store instance available for indexing.")
+                
+            if bm25:
+                logger.info(f"Indexing chunks for knowledge_id {k_id} into BM25 index...")
+                bm25.add_chunks(chunks)
+                bm25.save(settings.bm25_index_path)
+                
+            raw_cats = data.get("categories") or data.get("suggested_categories") or []
+            parsed_cats = []
+            if isinstance(raw_cats, list):
+                for c in raw_cats:
+                    if isinstance(c, dict) and "name" in c:
+                        parsed_cats.append(c["name"])
+                    elif isinstance(c, str):
+                        parsed_cats.append(c)
 
-        return {"status": "success", "message": f"Document '{k_id}' approved and indexed successfully.", "knowledge_id": k_id}
-    except Exception as e:
-        logger.error(f"Approval failed for document '{target_id}': {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            vis_settings = data.get("visibility_settings") or {
+                "clinics": ["all"],
+                "doctor_types": ["all"],
+                "doctors": ["all"]
+            }
+
+            os.makedirs("data/output", exist_ok=True)
+            approved_file = os.path.join("data/output", f"{k_id}.json")
+            approved_doc_structure = {
+                "knowledge_id": k_id,
+                "file_name": file_name,
+                "type": data.get("type", "Product") if isinstance(data, dict) else "Product",
+                "document_type": data.get("document_type", "product") if isinstance(data, dict) else "product",
+                "status": "Approved",
+                "summary": data.get("summary", "") if isinstance(data, dict) else "",
+                "categories": parsed_cats,
+                "suggested_categories": raw_cats,
+                "visibility_settings": vis_settings,
+                "chunks": chunks
+            }
+            with open(approved_file, "w", encoding="utf-8") as f:
+                json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
+                
+            if os.path.exists(pending_file):
+                os.remove(pending_file)
+                
+            # Dual-sync update to Knowledge DB table
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.models.knowledge import Knowledge, KnowledgeStatus
+                from sqlalchemy import select
+                import uuid as _uuid
+                async with AsyncSessionLocal() as session:
+                    try:
+                        k_uuid = _uuid.UUID(k_id)
+                        stmt_k = select(Knowledge).where(Knowledge.id == k_uuid, Knowledge.deleted_at.is_(None))
+                    except ValueError:
+                        stmt_k = select(Knowledge).where(Knowledge.file_name.ilike(f"%{file_name}%"), Knowledge.deleted_at.is_(None))
+                    res_k = await session.execute(stmt_k)
+                    k_entry = res_k.scalars().first()
+                    if k_entry:
+                        k_entry.status = KnowledgeStatus.APPROVED
+                        await session.commit()
+            except Exception as db_err:
+                logger.warning(f"Could not dual-sync approved status to Knowledge DB table for {k_id}: {db_err}")
+
+            approved_results.append(k_id)
+        except Exception as e:
+            logger.error(f"Approval failed for document '{target_id}': {e}")
+
+    return {
+        "status": "success", 
+        "message": f"Successfully approved {len(approved_results)} document(s).", 
+        "approved_ids": approved_results
+    }
 
 
 @router.delete("/ingest/documents/{knowledge_id}", tags=["Ingestion"])
@@ -1133,50 +1237,47 @@ async def delete_document_endpoint(
     vector_store: BaseVectorStoreAdapter = Depends(get_vector_store)
 ):
     """
-    Deletes a document across all statuses (Pending or Approved).
+    Deletes document(s) across all statuses (Pending or Approved).
+    Supports single ID or comma-separated list of IDs (e.g. 'id1,id2,id3').
     Removes physical JSON files, PGVector embeddings, BM25 indices, and performs soft-delete (deleted_at) in PostgreSQL.
     """
+    targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() not in ("string", "all")]
+    if not targets:
+        raise HTTPException(status_code=400, detail="At least one valid knowledge_id must be provided.")
+
     target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
+    deleted_ids = []
 
-    # 1. Check in Pending
-    pending_file = resolve_pending_file(knowledge_id)
-    if pending_file and os.path.exists(pending_file):
-        try:
-            os.remove(pending_file)
-            if target_store and hasattr(target_store, "soft_delete_document"):
-                target_store.soft_delete_document(knowledge_id)
-            return {"status": "success", "message": f"Pending document '{knowledge_id}' deleted."}
-        except Exception as e:
-            logger.error(f"Failed to delete pending document '{knowledge_id}': {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete pending document: {e}")
+    for k_id in targets:
+        # 1. Check in Pending
+        pending_file = resolve_pending_file(k_id)
+        if pending_file and os.path.exists(pending_file):
+            try:
+                os.remove(pending_file)
+                if target_store and hasattr(target_store, "soft_delete_document"):
+                    target_store.soft_delete_document(k_id)
+                deleted_ids.append(k_id)
+                continue
+            except Exception as e:
+                logger.error(f"Failed to delete pending document '{k_id}': {e}")
 
-    # 2. Check in Approved
-    approved_file = resolve_approved_file(knowledge_id)
-    if not approved_file or not os.path.exists(approved_file):
-        raise HTTPException(status_code=404, detail=f"Document '{knowledge_id}' not found.")
+        # 2. Check in Approved
+        approved_file = resolve_approved_file(k_id)
+        if approved_file and os.path.exists(approved_file):
+            try:
+                if target_store:
+                    target_store.delete_document(k_id)
+                if bm25:
+                    bm25.remove_file_chunks(k_id)
+                    bm25.save(settings.bm25_index_path)
+                os.remove(approved_file)
+                if target_store and hasattr(target_store, "soft_delete_document"):
+                    target_store.soft_delete_document(k_id)
+                deleted_ids.append(k_id)
+            except Exception as e:
+                logger.error(f"Failed to delete approved document '{k_id}': {e}")
 
-    try:
-        # Clear vector store embeddings
-        if target_store:
-            target_store.delete_document(knowledge_id)
-
-        # Clear BM25 index
-        if bm25:
-            bm25.remove_file_chunks(knowledge_id)
-            bm25.save(settings.bm25_index_path)
-
-        # Soft delete in PostgreSQL KnowledgeCategory table
-        if target_store and hasattr(target_store, "soft_delete_document"):
-            target_store.soft_delete_document(knowledge_id)
-
-        # Remove physical file
-        if os.path.exists(approved_file):
-            os.remove(approved_file)
-
-        return {"status": "success", "message": f"Approved document '{knowledge_id}' completely deleted."}
-    except Exception as e:
-        logger.error(f"Deletion failed for document '{knowledge_id}': {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "success", "message": f"Successfully deleted {len(deleted_ids)} document(s).", "deleted_ids": deleted_ids}
 
 
 @router.get("/search", tags=["Retrieval"])
