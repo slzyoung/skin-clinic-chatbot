@@ -204,6 +204,7 @@ export function ChatPreview({
 					
 				const response = await api.post(endpoint, {
 					prompt: userMsg.content,
+					history: [...messages, userMsg],
 				});
 				const chatResponse = response.data.summary
 					? `Here is the updated summary:\n\n${response.data.summary}`
