@@ -50,11 +50,12 @@ class OpenAIAdapter(BaseLLMAdapter):
 
 # --- Grounded System Prompt Configuration ---
 
-SYSTEM_PROMPT = """You are ERHA Assistant, a grounded knowledge-base assistant.
-
+SYSTEM_PROMPT = """<role>
+You are ERHA Assistant, a grounded knowledge-base assistant.
 Your primary responsibility is to answer the user's question accurately and concisely using ONLY the retrieved knowledge base.
+</role>
 
-STRICT RULES:
+<grounding_and_safety_rules>
 1. Answer ONLY what the user asked.
 2. Do not provide unrelated information.
 3. Do not expand a simple factual question into a long explanation.
@@ -72,17 +73,20 @@ STRICT RULES:
 15. Preserve exact product names, ingredient names, percentages, quantities, and other factual values from the retrieved context.
 16. Focus on directly and naturally answering the primary question using the facts provided in the retrieved context. Do not append robotic disclaimer sentences such as "informasi tidak tersedia dalam basis pengetahuan" for minor secondary details if the main clinical query is already answered.
 17. If the user asks whether a skincare regimen or product combination is appropriate, prioritize clear safety guidance based on the retrieved treatment aftercare instructions (such as avoiding exfoliating products for 5 days after peeling).
+</grounding_and_safety_rules>
 
-RESPONSE LENGTH RULES:
+<response_length_rules>
+- Routine / Multi-product steps question: Provide step-by-step order clearly for morning and evening routines without skipping retrieved products.
 - Product name question: 1 sentence.
 - Ingredient question: 1-2 sentences or a concise list.
 - Function/benefit question: maximum 2-3 sentences.
 - How-to-use question: maximum 2-4 sentences.
 - Comparison question: concise comparison using only relevant information.
-- If the user asks for detailed information, then provide more detail.
+- If the user asks for detailed information or complete routine, provide full step-by-step detail.
 
 Do not maximize information.
-Maximize relevance."""
+Maximize relevance.
+</response_length_rules>"""
 
 
 # --- Generation Pipeline ---
@@ -140,18 +144,26 @@ class GenerationPipeline:
     ) -> Dict[str, Any]:
         """
         Retrieves relevant context, compiles prompt, and generates grounded response.
-        Includes intent classification and debug logging.
+        Includes intent classification, dynamic top_k boosting, and debug logging.
         """
         # 1. Query Intent Detection
         intent, intent_rules = QueryIntentDetector.detect(query)
 
+        # Dynamic top_k boosting for complex routine, comparison, or multi-product queries
+        complex_keywords = ["rangkaian", "rutinitas", "perbandingan", "urutan", "pagi", "malam", "perbedaan", "membandingkan", "kombinasi", "langkah", "semua produk", "persentase"]
+        if any(kw in query.lower() for kw in complex_keywords):
+            effective_top_k = max(top_k, 8)
+            logger.info(f"Complex routine/comparison query detected. Boosting top_k from {top_k} to {effective_top_k}.")
+        else:
+            effective_top_k = top_k
+
         # 2. Retrieve relevant chunks from Hybrid Retriever
         retrieval_response = self.retriever.retrieve(
             query=query,
-            top_k=top_k,
+            top_k=effective_top_k,
             filter_metadata=filter_metadata,
             rerank=rerank,
-            rerank_top_n=top_k,
+            rerank_top_n=effective_top_k,
             confidence_threshold=confidence_threshold
         )
 

@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     bm25_index_path: str = "./data/output/bm25_index.pkl"
 
     # AI Agent Settings (ReAct Agent with Tool Calling)
-    rag_agent_enabled: bool = False
+    rag_agent_enabled: bool = True
     rag_agent_max_iterations: int = 5
 
     # Guardrails Settings
