@@ -18,14 +18,9 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
     branch_dict = {
         "id": branch.id,
         "name": branch.name,
-        "address": branch.address,
-        "latitude": branch.latitude,
-        "longitude": branch.longitude,
-        "image_url": branch.image_url,
         "token_limit": branch.token_limit,
         "created_at": branch.created_at,
         "updated_at": branch.updated_at,
-        "tokensMonth": branch.token_limit,
         "used": 0,
         "remaining": branch.token_limit,
         "doctors": []
@@ -105,17 +100,7 @@ async def get_branch(
         
     return await _hydrate_branch(branch, db)
 
-@router.post("/", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
-async def create_branch(
-    branch_in: BranchCreate,
-    db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(RequireAccess("branches:write"))
-):
-    branch = Branch(**branch_in.model_dump())
-    db.add(branch)
-    await db.commit()
-    await db.refresh(branch)
-    return await _hydrate_branch(branch, db)
+
 
 @router.put("/{branch_id}", response_model=BranchResponse)
 async def update_branch(
@@ -139,18 +124,4 @@ async def update_branch(
     await db.refresh(branch)
     return await _hydrate_branch(branch, db)
 
-@router.delete("/{branch_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_branch(
-    branch_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(RequireAccess("branches:write"))
-):
-    stmt = select(Branch).where(Branch.id == branch_id, Branch.deleted_at.is_(None))
-    result = await db.execute(stmt)
-    branch = result.scalar_one_or_none()
-    
-    if not branch:
-        raise HTTPException(status_code=404, detail="Branch not found")
-        
-    branch.deleted_at = datetime.now(timezone.utc)
-    await db.commit()
+
