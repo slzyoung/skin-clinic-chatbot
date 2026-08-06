@@ -13,7 +13,7 @@ from app.models.knowledge import Knowledge, KnowledgeStatus, KnowledgeType
 from app.schemas.knowledge import KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse
 from datetime import datetime, timezone
 
-from app.rag.deps import get_ingestion_pipeline, get_llm, get_bm25_index, get_vector_store
+from app.rag.deps import get_ingestion_pipeline, get_llm, get_bm25_index, get_vector_store, get_generation_pipeline, get_medical_agent
 from app.rag.services.interfaces import BaseLLMAdapter
 from app.rag.router import (
     ingest_document, 
@@ -24,9 +24,10 @@ from app.rag.router import (
     refine_approved_document,
     delete_document_endpoint,
     resolve_pending_file,
-    resolve_approved_file
+    resolve_approved_file,
+    chat_endpoint
 )
-from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest
+from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatRequest, ChatResponse
 
 router = APIRouter(tags=["Knowledge"])
 
@@ -133,17 +134,15 @@ async def get_knowledge(
         updated_at=now
     )
 
-@router.post("/", response_model=KnowledgeResponse, status_code=status.HTTP_201_CREATED)
-async def create_knowledge(
-    knowledge_in: KnowledgeCreate,
+@router.post("/chat", response_model=ChatResponse)
+async def knowledge_chat(
+    request: ChatRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(RequireAccess("knowledge:write"))
+    current_user: User = Depends(RequireAccess("knowledge:read")),
+    pipeline = Depends(get_generation_pipeline),
+    agent = Depends(get_medical_agent)
 ):
-    knowledge = Knowledge(**knowledge_in.model_dump(), uploaded_by=current_user.id)
-    db.add(knowledge)
-    await db.commit()
-    await db.refresh(knowledge)
-    return knowledge
+    return await chat_endpoint(request=request, pipeline=pipeline, agent=agent)
 
 ALLOWED_MIME_TYPES = {
     "application/pdf",

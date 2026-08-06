@@ -215,7 +215,7 @@ export function ChatPreview({
 					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(knowledgeId) });
 				}
 			} else {
-				const response = await api.post("/ai/chat", {
+				const response = await api.post("/knowledge/chat", {
 					query: userMsg.content,
 					knowledge_id: knowledgeId,
 					history: messages,
