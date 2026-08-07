@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
+from fastapi.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
@@ -246,7 +247,7 @@ async def create_chat_message(
 
     message = ChatMessage(
         session_id=session_id,
-        role=role,
+        role=role.upper(),
         content=content,
         attachments=attachments
     )
@@ -289,7 +290,7 @@ async def create_chat_message(
                 result_msg = await session.execute(stmt_msg)
                 messages = result_msg.scalars().all()
                 
-                history = [{"role": msg.role, "content": msg.content} for msg in messages if msg.role in ["user", "assistant"]]
+                history = [{"role": msg.role.value.lower(), "content": msg.content} for msg in messages if msg.role.value in ["USER", "ASSISTANT"]]
                 if history and history[-1]["role"] == "user":
                     history.pop()
 
@@ -317,7 +318,7 @@ async def create_chat_message(
                 # Save the final AI message to the DB
                 ai_msg = ChatMessage(
                     session_id=session_id,
-                    role="assistant",
+                    role="ASSISTANT",
                     content=ai_response_text
                 )
                 session.add(ai_msg)
@@ -329,8 +330,122 @@ async def create_chat_message(
                 yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 
-                ai_msg = ChatMessage(session_id=session_id, role="assistant", content=fallback)
+                ai_msg = ChatMessage(session_id=session_id, role="ASSISTANT", content=fallback)
                 session.add(ai_msg)
                 await session.commit()
                 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+@router.post("/{session_id}/messages/stream", status_code=status.HTTP_201_CREATED)
+async def create_chat_message_stream(
+    session_id: uuid.UUID,
+    request: Request,
+    role: str = Form(...),
+    content: str = Form(...),
+    files: Optional[List[UploadFile]] = File(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verify access to session
+    stmt_session = select(ChatSession).where(ChatSession.id == session_id)
+    if not await has_chats_read_access(current_user, db):
+        stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
+    
+    result_session = await db.execute(stmt_session)
+    if not result_session.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Chat session not found")
+        
+    attachments = None
+    if files:
+        attachments = {}
+        for file in files:
+            if file.content_type not in ALLOWED_MIME_TYPES:
+                raise HTTPException(status_code=400, detail=f"File type {file.content_type} not allowed for file {file.filename}")
+            attachments[file.filename] = {"content_type": file.content_type, "status": "processed"}
+
+    message = ChatMessage(
+        session_id=session_id,
+        role=role.upper(),
+        content=content,
+        attachments=attachments
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+    
+    if role != "user":
+        from fastapi.encoders import jsonable_encoder
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=status.HTTP_201_CREATED, content=jsonable_encoder(message))
+
+    async def sse_generator():
+        try:
+            from app.rag.services.factory import AdapterFactory
+            from app.rag.services.rag_retriever import HybridRetriever, BM25Index, Reranker
+            from app.rag.services.rag_generator import GenerationPipeline
+            from app.rag.config import settings as rag_settings
+        except ImportError as e:
+            logger.error(f"AI dependencies missing: {e}")
+            yield f"data: {json.dumps({'error': 'AI configuration error'})}\n\n"
+            return
+
+        async with AsyncSessionLocal() as session:
+            try:
+                vector_store = AdapterFactory.get_vector_store()
+                bm25_index = BM25Index()
+                try:
+                    bm25_index.load(rag_settings.bm25_index_path)
+                except Exception:
+                    pass
+                reranker = Reranker(model_name=rag_settings.reranker_model_name)
+                retriever = HybridRetriever(vector_store=vector_store, bm25_index=bm25_index, reranker=reranker)
+                llm_adapter = await AdapterFactory.get_dynamic_llm(session)
+                pipeline = GenerationPipeline(retriever=retriever, llm_adapter=llm_adapter)
+                
+                stmt_msg = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+                result_msg = await session.execute(stmt_msg)
+                messages = result_msg.scalars().all()
+                
+                history = [{"role": msg.role.value.lower(), "content": msg.content} for msg in messages if msg.role.value in ["USER", "ASSISTANT"]]
+                if history and history[-1]["role"] == "user":
+                    history.pop()
+
+                ai_response_text = ""
+                
+                async for chunk in pipeline.generate_answer_stream(
+                    query=content,
+                    top_k=5,
+                    rerank=True,
+                    history=history
+                ):
+                    if await request.is_disconnected():
+                        logger.info(f"Client disconnected from chat session {session_id}")
+                        break
+
+                    if chunk.startswith('{"type": "context"'):
+                        yield f"data: {chunk}\n\n"
+                    else:
+                        ai_response_text += chunk
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+                
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                
+                ai_msg = ChatMessage(
+                    session_id=session_id,
+                    role="ASSISTANT",
+                    content=ai_response_text
+                )
+                session.add(ai_msg)
+                await session.commit()
+                
+            except Exception as e:
+                logger.error(f"Error streaming AI response: {e}")
+                fallback = "Maaf, terjadi kesalahan pada pemrosesan AI."
+                yield f"data: {json.dumps({'type': 'token', 'content': fallback})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                
+                ai_msg = ChatMessage(session_id=session_id, role="ASSISTANT", content=fallback)
+                session.add(ai_msg)
+                await session.commit()
+                
+    return EventSourceResponse(sse_generator())
