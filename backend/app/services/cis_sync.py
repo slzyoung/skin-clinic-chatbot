@@ -39,66 +39,71 @@ def get_cis_public_key():
 
 async def upsert_branch_payload(db: AsyncSession, data: Dict[str, Any]) -> Branch:
     """Upsert a branch record from pushed webhook data payload."""
-    b_id_str = data.get("id") or data.get("branch_id")
-    if not b_id_str:
+    external_id = data.get("id") or data.get("branch_id")
+    if not external_id:
         raise ValueError("Missing branch id in payload")
     
-    b_id = uuid.UUID(b_id_str)
     name = data.get("name")
-    address = data.get("address")
-    image_url = data.get("image_url")
+    code = data.get("code")
+    ecosystem = data.get("ecosystem", "ERHA")
+    status = data.get("status")
     
-    stmt = select(Branch).where(Branch.id == b_id)
+    stmt = select(Branch).where(Branch.external_id == external_id)
     branch = (await db.execute(stmt)).scalar_one_or_none()
+    
+    is_inactive = (status == "0")
     
     if not branch:
         branch = Branch(
-            id=b_id,
+            external_id=external_id,
             name=name,
-            address=address,
-            image_url=image_url
+            code=code,
+            ecosystem=ecosystem
         )
+        if is_inactive:
+            branch.deleted_at = datetime.now(timezone.utc)
         db.add(branch)
     else:
         branch.name = name
-        branch.address = address
-        branch.image_url = image_url
-        branch.deleted_at = None
+        branch.code = code
+        branch.ecosystem = ecosystem
+        if is_inactive:
+            branch.deleted_at = datetime.now(timezone.utc)
+        else:
+            branch.deleted_at = None
         
     await db.flush()
     return branch
 
 async def delete_branch_payload(db: AsyncSession, branch_id: str):
     """Soft delete a branch record."""
-    b_id = uuid.UUID(branch_id)
-    stmt = select(Branch).where(Branch.id == b_id)
+    stmt = select(Branch).where(Branch.external_id == branch_id)
     branch = (await db.execute(stmt)).scalar_one_or_none()
     if branch:
         branch.deleted_at = datetime.now(timezone.utc)
         await db.flush()
 
 async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
-    """Upsert a doctor record and branch associations from pushed webhook payload."""
-    cis_id = data.get("cis_id") or data.get("doctor_cis_id")
+    """Upsert a doctor record from pushed webhook payload."""
+    cis_id = data.get("id") or data.get("cis_id") or data.get("doctor_cis_id")
     if not cis_id:
-        raise ValueError("Missing doctor cis_id in payload")
+        raise ValueError("Missing doctor id in payload")
         
     name = data.get("name")
     email = data.get("email")
-    employee_id = data.get("employee_id")
-    dr_type = data.get("dr_type")
+    employee_id = data.get("nik") or data.get("employee_id")
+    dr_type = data.get("user_type_name") or data.get("dr_type")
     ecosystem = data.get("ecosystem", "ERHA")
-    branch_ids = data.get("branch_ids", [])
     status = data.get("status")
     
     stmt = select(User).where(User.cis_id == cis_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
     
-    is_inactive = (status and status.lower() == "inactive")
+    is_inactive = (status == "0")
     
     if not user:
         user = User(
-            email=email,
+            email=email or f"{cis_id}@placeholder.com",
             name=name,
             cis_id=cis_id,
             employee_id=employee_id,
@@ -112,7 +117,8 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
         db.add(user)
     else:
         user.name = name
-        user.email = email
+        if email:
+            user.email = email
         user.employee_id = employee_id
         user.dr_type = dr_type
         user.ecosystem = ecosystem
@@ -122,21 +128,40 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
             user.deleted_at = None
         
     await db.flush()
-    
-    # Sync Doctor-Branch associations
-    # Remove existing branch mappings for this user
-    await db.execute(UserBranch.__table__.delete().where(UserBranch.user_id == user.id))
-    
-    # Re-add mappings if branch exists
-    for b_id_str in branch_ids:
-        b_id = uuid.UUID(b_id_str)
-        b_stmt = select(Branch).where(Branch.id == b_id)
-        branch = (await db.execute(b_stmt)).scalar_one_or_none()
-        if branch:
-            db.add(UserBranch(user_id=user.id, branch_id=b_id))
-            
-    await db.flush()
     return user
+
+async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str, Any]]):
+    """Process a list of user-branch association updates."""
+    for item in data_list:
+        user_cis_id = item.get("user_id")
+        branch_external_id = item.get("branch_id")
+        status = item.get("status")
+        
+        if not user_cis_id or not branch_external_id:
+            logger.warning(f"Skipping user_branch mapping, missing user_id or branch_id: {item}")
+            continue
+            
+        u_stmt = select(User).where(User.cis_id == user_cis_id)
+        user = (await db.execute(u_stmt)).scalar_one_or_none()
+        
+        b_stmt = select(Branch).where(Branch.external_id == branch_external_id)
+        branch = (await db.execute(b_stmt)).scalar_one_or_none()
+        
+        if not user or not branch:
+            logger.warning(f"Skipping user_branch mapping, user ({user_cis_id}) or branch ({branch_external_id}) not found")
+            continue
+            
+        ub_stmt = select(UserBranch).where(UserBranch.user_id == user.id, UserBranch.branch_id == branch.id)
+        ub = (await db.execute(ub_stmt)).scalar_one_or_none()
+        
+        if status == "1":
+            if not ub:
+                db.add(UserBranch(user_id=user.id, branch_id=branch.id))
+        elif status == "0":
+            if ub:
+                await db.delete(ub)
+                
+    await db.flush()
 
 async def delete_doctor_payload(db: AsyncSession, cis_id: str):
     """Soft delete a doctor record."""
@@ -147,20 +172,21 @@ async def delete_doctor_payload(db: AsyncSession, cis_id: str):
         await db.flush()
 
 async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]):
-    """Process a full bulk sync payload containing branches and doctors lists."""
+    """Process a full bulk sync payload containing branches, users, and user_branches lists."""
     branches_data = data.get("branches", [])
-    doctors_data = data.get("doctors", [])
+    doctors_data = data.get("users", [])
+    user_branches_data = data.get("user_branches", [])
     
     pulled_branch_ids = set()
     for b_data in branches_data:
         branch = await upsert_branch_payload(db, b_data)
-        pulled_branch_ids.add(branch.id)
+        pulled_branch_ids.add(branch.external_id)
         
     # Soft delete local branches omitted from full sync
     all_b_stmt = select(Branch).where(Branch.deleted_at.is_(None))
     all_branches = (await db.execute(all_b_stmt)).scalars().all()
     for b in all_branches:
-        if b.id not in pulled_branch_ids:
+        if b.external_id and b.external_id not in pulled_branch_ids:
             b.deleted_at = datetime.now(timezone.utc)
             
     pulled_doc_cis_ids = set()
@@ -176,3 +202,6 @@ async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]):
             d.deleted_at = datetime.now(timezone.utc)
             
     await db.flush()
+    
+    if user_branches_data:
+        await upsert_user_branch_payload(db, user_branches_data)

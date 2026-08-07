@@ -42,108 +42,62 @@ def sign_payload_bytes(payload_bytes: bytes) -> str:
 # Mock Master Data
 MOCK_BRANCHES = [
     {
-        "id": "11111111-1111-1111-1111-111111111111",
-        "name": "Jakarta Central Clinic",
-        "address": "Sudirman St. No. 12, South Jakarta"
+        "id": "838",
+        "name": "Klinik Utama Erha Ultimate BSD",
+        "code": "011",
+        "ecosystem": "Erha",
+        "status": "1",
+        "image_url": "https://example.com/branch/838.png"
     },
     {
-        "id": "22222222-2222-2222-2222-222222222222",
-        "name": "Bandung Main Clinic",
-        "address": "Ir. H. Juanda St. (Dago) No. 45, Bandung"
-    },
-    {
-        "id": "33333333-3333-3333-3333-333333333333",
-        "name": "Surabaya Skin Care Center",
-        "address": "Pemuda St. No. 88, Surabaya"
-    },
-    {
-        "id": "44444444-4444-4444-4444-444444444444",
-        "name": "Bali Medical & Esthetics",
-        "address": "Sunset Road No. 101, Seminyak, Bali"
-    },
-    {
-        "id": "55555555-5555-5555-5555-555555555555",
-        "name": "Yogyakarta Health & Wellness",
-        "address": "Malioboro St. No. 15, Yogyakarta"
+        "id": "847",
+        "name": "Klinik Utama Dermies BSD",
+        "code": "034",
+        "ecosystem": "Dermies",
+        "status": "1",
+        "image_url": "https://example.com/branch/847.png"
     }
 ]
 
 MOCK_DOCTORS = [
     {
-        "cis_id": "DR-12345",
-        "employee_id": "EMP-001",
-        "dr_type": "SpDVE",
-        "ecosystem": "ERHA",
-        "status": "active",
-        "name": "Dr. Jane Doe, Sp.D.V.E.",
-        "email": "doctor@mail.com",
-        "branch_ids": [
-            "11111111-1111-1111-1111-111111111111"
-        ]
+        "id": "1",
+        "name": "dr Sulistyo SpKK",
+        "user_type": "1",
+        "user_type_name": "Doctor SpKK",
+        "nik": "dr00123",
+        "email": "drkk11@gmail.com",
+        "ecosystem": "Erha",
+        "status": "1",
+        "image_url": "https://example.com/doctor/1.png"
     },
     {
-        "cis_id": "DR-67890",
-        "employee_id": "EMP-002",
-        "dr_type": "SpDVE",
-        "ecosystem": "ERHA",
-        "status": "active",
-        "name": "Dr. John Smith, Sp.D.V.E.",
-        "email": "john.smith@example.com",
-        "branch_ids": [
-            "11111111-1111-1111-1111-111111111111",
-            "22222222-2222-2222-2222-222222222222"
-        ]
+        "id": "2",
+        "name": "dr Budi Santoso",
+        "user_type": "2",
+        "user_type_name": "Doctor gp",
+        "nik": "dr00456",
+        "email": "drbudi@gmail.com",
+        "ecosystem": "Dermies",
+        "status": "1",
+        "image_url": "https://example.com/doctor/2.png"
+    }
+]
+
+MOCK_USER_BRANCHES = [
+    {
+        "user_id": "1",
+        "branch_id": "838",
+        "branch_code": "011",
+        "status": "1",
+        "ecosystem": "Erha"
     },
     {
-        "cis_id": "DR-11223",
-        "employee_id": "EMP-003",
-        "dr_type": "GP Plus",
-        "ecosystem": "ERHA",
-        "status": "active",
-        "name": "Dr. Amanda Prasetya",
-        "email": "amanda.prasetya@example.com",
-        "branch_ids": [
-            "22222222-2222-2222-2222-222222222222",
-            "55555555-5555-5555-5555-555555555555"
-        ]
-    },
-    {
-        "cis_id": "DR-44556",
-        "employee_id": "EMP-004",
-        "dr_type": "GP Plus",
-        "ecosystem": "ERHA",
-        "status": "active",
-        "name": "Dr. Budi Santoso, Sp.B.P.R.E.",
-        "email": "budi.santoso@example.com",
-        "branch_ids": [
-            "33333333-3333-3333-3333-333333333333"
-        ]
-    },
-    {
-        "cis_id": "DR-77889",
-        "employee_id": "EMP-005",
-        "dr_type": "SpDVE",
-        "ecosystem": "ERHA",
-        "status": "active",
-        "name": "Dr. Citra Dewi",
-        "email": "citra.dewi@example.com",
-        "branch_ids": [
-            "11111111-1111-1111-1111-111111111111",
-            "44444444-4444-4444-4444-444444444444"
-        ]
-    },
-    {
-        "cis_id": "DR-99001",
-        "employee_id": "EMP-006",
-        "dr_type": "GP Plus",
-        "ecosystem": "ERHA",
-        "status": "inactive",
-        "name": "Dr. Edward Wijaya",
-        "email": "edward.wijaya@example.com",
-        "branch_ids": [
-            "33333333-3333-3333-3333-333333333333",
-            "44444444-4444-4444-4444-444444444444"
-        ]
+        "user_id": "2",
+        "branch_id": "847",
+        "branch_code": "034",
+        "status": "1",
+        "ecosystem": "Dermies"
     }
 ]
 
@@ -175,7 +129,8 @@ async def auto_sync_task():
         "event": "bulk.sync",
         "data": {
             "branches": MOCK_BRANCHES,
-            "doctors": MOCK_DOCTORS
+            "users": MOCK_DOCTORS,
+            "user_branches": MOCK_USER_BRANCHES
         }
     }
     
@@ -230,13 +185,15 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
-    doctor = next((d for d in MOCK_DOCTORS if d["cis_id"] == req.cis_id), None)
+    doctor = next((d for d in MOCK_DOCTORS if d.get("id") == req.cis_id or d.get("cis_id") == req.cis_id), None)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
         
     private_key = load_private_key()
+    # Support both id and cis_id for backwards compatibility with mock frontend
+    user_id = doctor.get("id") or doctor.get("cis_id")
     payload = {
-        "sub": doctor["cis_id"],
+        "sub": user_id,
         "iat": datetime.datetime.now(datetime.timezone.utc),
         "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=12)
     }
@@ -258,7 +215,7 @@ async def trigger_push_doctor(doctor_index: int = 0, webhook_url: Optional[str] 
         raise HTTPException(status_code=400, detail="Invalid doctor index")
     
     payload = {
-        "event": "doctor.upsert",
+        "event": "user.upsert",
         "data": MOCK_DOCTORS[doctor_index]
     }
     return await send_signed_webhook(payload, webhook_url)
@@ -274,13 +231,22 @@ async def trigger_push_branch(branch_index: int = 0, webhook_url: Optional[str] 
     }
     return await send_signed_webhook(payload, webhook_url)
 
+@app.post("/trigger/push-user-branch")
+async def trigger_push_user_branch(webhook_url: Optional[str] = None):
+    payload = {
+        "event": "user_branch.upsert",
+        "data": MOCK_USER_BRANCHES
+    }
+    return await send_signed_webhook(payload, webhook_url)
+
 @app.post("/trigger/push-all")
 async def trigger_push_all(webhook_url: Optional[str] = None):
     payload = {
         "event": "bulk.sync",
         "data": {
             "branches": MOCK_BRANCHES,
-            "doctors": MOCK_DOCTORS
+            "users": MOCK_DOCTORS,
+            "user_branches": MOCK_USER_BRANCHES
         }
     }
     return await send_signed_webhook(payload, webhook_url)
