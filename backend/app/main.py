@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from loguru import logger
 from app.core.config import settings
-from app.api.routers import auth, users, branches, categories, knowledge, chats, webhooks, config
+from app.api.routers import auth, users, branches, categories, knowledge, chats, webhooks, config, events
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -100,6 +100,7 @@ app.include_router(knowledge.router, prefix="/api/knowledge")
 app.include_router(chats.router, prefix="/api/chats")
 app.include_router(webhooks.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
+app.include_router(events.router, prefix="/api/events")
 
 # --- RAG Integration Router ---
 try:
