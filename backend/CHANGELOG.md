@@ -88,6 +88,17 @@ backend/app/rag/
 - **Chunk Metadata Synchronization**:
   - Fixed a bug in `app/rag/router.py` (`edit_approved_document`, `edit_pending_document`, `approve_document`) where only the primary category was assigned to chunk metadata. Now, the complete array of categories (e.g., `["Acne", "Anti-Aging"]`) is correctly injected into every chunk's metadata prior to PGVector indexing, ensuring accurate dense vector filtering.
 
+#### Sprint 6: Real-time SSE Chat Streaming
+- **LLM Streaming (`app/rag/services/interfaces.py`, `app/rag/services/rag_generator.py`)**:
+  - Added an asynchronous generator method `generate_stream()` to `BaseLLMAdapter` and implemented it in `OpenAIAdapter` using LangChain's native `astream` to yield tokens immediately.
+  - Implemented `generate_answer_stream()` inside `GenerationPipeline` to yield initial context metadata (JSON) followed by real-time LLM text tokens, replacing the slow blocking generation for chat interfaces.
+- **SSE Chat Endpoint (`app/api/routers/chats.py`)**:
+  - Completely refactored `POST /api/chats/{session_id}/messages` to return a `StreamingResponse` using the Server-Sent Events (SSE) `text/event-stream` standard.
+  - Removed the background task dependency; user messages now instantly trigger the real-time stream, persisting the final AI message directly to the PostgreSQL database exactly when generation finishes.
+- **Frontend Sync Strategy (`frontend`)**:
+  - Eliminated the 3-second React Query polling mechanism inside `useChatMessages`.
+  - Rewrote the `useSendMessage` mutation to execute a native `fetch` POST, utilizing a custom stream reader and text decoder to instantly parse SSE chunks and feed an optimistic "streaming bubble" UI on the doctor chat page.
+
 ---
 
 ### Summary of Key Improvements
@@ -100,3 +111,4 @@ backend/app/rag/
 | **Reranking** | Basic external reranker | **Cross-Encoder (`bge-reranker-base`)** with **Section & Intent Boosting** (+0.05 score boost) |
 | **LLM Adapter** | Generic ChatOpenAI | **OpenAIAdapter** (`gpt-4o-mini`) with ground-rule prompt & citation mapping `[1]`, `[2]` |
 | **Document Review** | Direct DB insert | **HITL Staging Workflow**: AI auto-review, accuracy grading, & interactive prompt refinement |
+| **Chat Generation** | REST POST + 3-sec polling | **Real-time SSE Streaming**: Async native fetch & instant token rendering |
