@@ -79,6 +79,27 @@ export default function DoctorChatSessionPage() {
                   </MessageScrollerItem>
                 );
               })}
+
+              {sendMessage.isStreaming && (
+                <MessageScrollerItem key="streaming-msg">
+                  <div className="flex items-start gap-3 mt-2">
+                    <div className="bg-zinc-100 rounded-md text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+                      <RiRobot2Line className="size-4 animate-pulse" />
+                    </div>
+                    <div className="bg-blue-50 p-3 rounded-md text-sm w-full leading-relaxed text-zinc-950">
+                      {sendMessage.streamingText ? (
+                        <p className="whitespace-pre-wrap">{sendMessage.streamingText}</p>
+                      ) : (
+                        <div className="flex gap-1 items-center h-5">
+                          <div className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <div className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <div className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </MessageScrollerItem>
+              )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton />

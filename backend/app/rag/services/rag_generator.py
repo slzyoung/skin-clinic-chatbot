@@ -47,6 +47,28 @@ class OpenAIAdapter(BaseLLMAdapter):
                     logger.error(f"LLM generation failed on attempt {attempt}/{max_retries}: {e}")
                     raise e
 
+    async def generate_stream(self, prompt: str):
+        import time
+        import asyncio
+        max_retries = 3
+        backoff_delay = 5.0
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                # We use astream to yield tokens
+                async for chunk in self.llm.astream(prompt):
+                    yield chunk.content
+                return
+            except Exception as e:
+                err_msg = str(e)
+                if ("429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "Quota exceeded" in err_msg or "rate-limit" in err_msg.lower()) and attempt < max_retries:
+                    logger.warning(f"LLM Stream 429 Rate limit hit (attempt {attempt}/{max_retries}). Retrying in {backoff_delay}s... Error: {err_msg}")
+                    await asyncio.sleep(backoff_delay)
+                    backoff_delay *= 2.0
+                else:
+                    logger.error(f"LLM stream generation failed on attempt {attempt}/{max_retries}: {e}")
+                    raise e
+
 
 # --- Grounded System Prompt Configuration ---
 
@@ -234,3 +256,65 @@ class GenerationPipeline:
             "context": context,
             "results": results
         }
+
+    async def generate_answer_stream(
+        self, 
+        query: str, 
+        top_k: int = 5, 
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        rerank: bool = True,
+        confidence_threshold: Optional[float] = None,
+        history: List[Dict[str, str]] = []
+    ):
+        """
+        Retrieves context and yields a stream of response tokens.
+        First yields a JSON object with 'type': 'context' containing the results.
+        Then yields text tokens.
+        """
+        import json
+        
+        intent, intent_rules = QueryIntentDetector.detect(query)
+
+        complex_keywords = ["rangkaian", "rutinitas", "perbandingan", "urutan", "pagi", "malam", "perbedaan", "membandingkan", "kombinasi", "langkah", "semua produk", "persentase"]
+        if any(kw in query.lower() for kw in complex_keywords):
+            effective_top_k = max(top_k, 8)
+        else:
+            effective_top_k = top_k
+
+        # Using thread for retrieve since it might be sync
+        import asyncio
+        retrieval_response = await asyncio.to_thread(
+            self.retriever.retrieve,
+            query=query,
+            top_k=effective_top_k,
+            filter_metadata=filter_metadata,
+            rerank=rerank,
+            rerank_top_n=effective_top_k,
+            confidence_threshold=confidence_threshold
+        )
+
+        results = retrieval_response.get("results", [])
+        context = retrieval_response.get("context", "")
+
+        # Send initial context metadata block so frontend knows sources immediately
+        yield json.dumps({"type": "context", "results": results}) + "\n"
+
+        is_context_empty = (
+            not results 
+            or context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
+            or len(context.strip()) == 0
+        )
+
+        if is_context_empty:
+            missing_msg = intent_rules.get("missing_fallback", "Informasi tersebut tidak tersedia dalam knowledge base.")
+            yield missing_msg
+            return
+
+        full_prompt = self.build_prompt(query, context, history, intent, intent_rules)
+
+        try:
+            async for token in self.llm_adapter.generate_stream(full_prompt):
+                yield token
+        except Exception as e:
+            logger.error(f"LLM stream generation failed: {e}")
+            yield "Maaf, terjadi kesalahan teknis pada pemrosesan LLM. Silakan coba beberapa saat lagi."

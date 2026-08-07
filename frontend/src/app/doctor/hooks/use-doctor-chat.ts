@@ -63,28 +63,78 @@ export const useChatMessages = (sessionId: string) => {
       return response.data;
     },
     enabled: !!sessionId,
-    refetchInterval: 3000, // Poll every 3 seconds for new messages
   });
 };
 
+import { useState } from "react";
+
 export const useSendMessage = (sessionId: string) => {
   const queryClient = useQueryClient();
+  const [streamingText, setStreamingText] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
 
-  return useMutation({
-    mutationFn: async (formData: FormData): Promise<ChatMessageResponse> => {
-      const response = await api.post(`/chats/${sessionId}/messages`, formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
+  const mutation = useMutation({
+    mutationFn: async (formData: FormData): Promise<void> => {
+      setIsStreaming(true);
+      setStreamingText("");
+      
+      const baseURL = api.defaults.baseURL || "http://localhost:8000/api";
+      
+      const response = await fetch(`${baseURL}/chats/${sessionId}/messages`, {
+        method: "POST",
+        body: formData,
+        credentials: "include",
       });
-      return response.data;
+
+      if (!response.ok) {
+        throw new Error("Failed to send message");
+      }
+
+      if (!response.body) {
+        throw new Error("No response body");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const dataStr = line.replace("data: ", "").trim();
+            if (!dataStr) continue;
+            try {
+              const data = JSON.parse(dataStr);
+              if (data.type === "token") {
+                setStreamingText((prev) => prev + data.content);
+              } else if (data.type === "done") {
+                // finished
+              }
+            } catch (e) {
+              console.error("Error parsing SSE data", e);
+            }
+          }
+        }
+      }
     },
     onSuccess: () => {
+      setIsStreaming(false);
       queryClient.invalidateQueries({ queryKey: doctorChatKeys.messages(sessionId) });
       queryClient.invalidateQueries({ queryKey: doctorChatKeys.sessions() });
     },
     onError: (error: unknown) => {
+      setIsStreaming(false);
       toast.error(getErrorMessage(error, "Failed to send message"));
     },
   });
+
+  return {
+    ...mutation,
+    streamingText,
+    isStreaming,
+  };
 };
