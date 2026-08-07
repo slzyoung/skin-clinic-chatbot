@@ -228,15 +228,15 @@ async def process_ingestion_background(
                 1. **AI Recommended Title (`title`)**: Provide a short, professional title for the knowledge header (e.g. "Knowledge Ingestment Brightener Product" or "Knowledge Ingestment ERHA Acne Spot Gel Protocol").
                 2. **Elaborated Full Document Markdown (`summary`)**: Present the ENTIRE document content in production-ready Markdown starting directly with `# Document Title`. Fulfill any user custom instructions if provided.
                 3. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
-                4. **Executive Feedback (`feedback`)**: Provide a clear, professional 1-2 sentence executive summary feedback bubble for the review UI.
+                4. **Dynamic Content Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary explaining EXACTLY what this specific document covers in Indonesian, including key product/treatment names and clinical focus. DO NOT use generic boilerplate text like "Document successfully validated and restructured into production-grade Markdown". Example: "Dokumen ini memuat panduan 5 prosedur klinik estetika ERHA, mencakup protokol Chemical Peeling, Microdermabrasion, dan Laser Therapy beserta instruksi perawatan pasca-tindakan."
                 5. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
-                6. **Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count with user custom prompt applied.
+                6. **Granular Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count. For each chunk, provide an object with "text" and "category" (matching the single most relevant category name from Available System Categories for that specific chunk).
 
                 Return a valid JSON object ONLY (do not wrap in markdown block code like ```json):
                 {{
                     "title": "Knowledge Ingestment ERHA Acne Spot Gel Protocol",
                     "summary": "# ERHA Product / Protocol Title\\n\\nContent...",
-                    "feedback": "Document validated and structured successfully with 100% clinical accuracy.",
+                    "feedback": "Dokumen ini memuat panduan 5 prosedur klinik estetika ERHA, mencakup protokol Chemical Peeling, Microdermabrasion, dan Laser Therapy beserta instruksi perawatan pasca-tindakan.",
                     "text_accuracy": "100%",
                     "suggested_categories": [
                         {{
@@ -244,7 +244,16 @@ async def process_ingestion_background(
                             "name": "Acne Care"
                         }}
                     ],
-                    "corrected_chunks": ["chunk 1 text", "chunk 2 text", ...]
+                    "corrected_chunks": [
+                        {{
+                            "text": "Corrected chunk 1 text...",
+                            "category": "Acne Care"
+                        }},
+                        {{
+                            "text": "Corrected chunk 2 text...",
+                            "category": "Brightening"
+                        }}
+                    ]
                 }}
                 """
                 llm_response = await asyncio.to_thread(llm.generate, review_prompt)
@@ -267,10 +276,18 @@ async def process_ingestion_background(
                 suggested_categories = parsed_review.get("suggested_categories", [])
                 corrected_chunks = parsed_review.get("corrected_chunks", [])
                 
-                # Apply corrected chunks back to enriched_chunks if matching count
+                # Apply corrected chunks & granular chunk categories back to enriched_chunks
                 if len(corrected_chunks) == len(enriched_chunks):
-                    for idx, corrected_txt in enumerate(corrected_chunks):
-                        enriched_chunks[idx]["text"] = corrected_txt
+                    for idx, c_item in enumerate(corrected_chunks):
+                        if isinstance(c_item, dict):
+                            c_txt = c_item.get("text", "")
+                            c_cat = c_item.get("category") or c_item.get("category_name")
+                            if c_txt:
+                                enriched_chunks[idx]["text"] = c_txt
+                            if c_cat:
+                                enriched_chunks[idx]["chunk_category"] = c_cat
+                        elif isinstance(c_item, str):
+                            enriched_chunks[idx]["text"] = c_item
                         
             except Exception as llm_err:
                 logger.error(f"Failed to process AI review: {llm_err}")
@@ -281,7 +298,14 @@ async def process_ingestion_background(
                     suggested_categories = [db_categories[0]]
                 feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan. Pemrosesan analisis AI otomatis sementara tertunda (kuota token API perlu diperbarui). Seluruh isi teks dokumen dapat ditinjau di bawah."
                 
-        # Inject metadata cleanly into every chunk
+        # Define document-level visibility settings
+        visibility_settings = {
+            "clinics": ["all"],
+            "doctor_types": ["all"],
+            "doctors": ["all"]
+        }
+
+        # Inject metadata cleanly into every chunk with granular category priority and visibility settings
         cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
         for chunk in enriched_chunks:
             if isinstance(chunk, dict):
@@ -290,8 +314,20 @@ async def process_ingestion_background(
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 chunk["metadata"]["source_file"] = file_name
                 chunk["metadata"]["type"] = doc_type_display.lower()
-                if cat_names:
+                chunk["metadata"]["clinics"] = visibility_settings["clinics"]
+                chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
+                chunk["metadata"]["doctors"] = visibility_settings["doctors"]
+                
+                # Chunk-level category priority, falling back to document-level categories
+                chunk_specific_cat = chunk.get("chunk_category")
+                if chunk_specific_cat:
+                    chunk["metadata"]["category"] = chunk_specific_cat
+                    chunk["metadata"]["categories"] = [chunk_specific_cat] + [c for c in cat_names if c != chunk_specific_cat]
+                elif cat_names:
+                    chunk["metadata"]["category"] = cat_names[0]
                     chunk["metadata"]["categories"] = cat_names
+                    
+                chunk.pop("chunk_category", None)
                 chunk["metadata"].pop("suggested_categories", None)
                 chunk["metadata"].pop("document_type", None)
 
@@ -313,6 +349,7 @@ async def process_ingestion_background(
             "text_accuracy": text_accuracy,
             "feedback": feedback,
             "suggested_categories": suggested_categories,
+            "visibility_settings": visibility_settings,
             "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
             "history": history_list,
             "chunks": enriched_chunks
@@ -683,10 +720,11 @@ async def refine_pending_document(
         Latest User Instruction:
         "{request.prompt}"
         
-        Refine the document as requested:
+        Refine the document with Smart Chunk Category Tagging & Invalid Category Safety Rules:
         1. If the instruction asks to update or correct text (e.g. "perbaiki struktur", "translate ke Indonesia"), update the "summary" and the "text" in the "chunks" list.
-        2. If the instruction asks to add, remove, or change categories (e.g. "tambahkan kategori Brightening", "hapus kategori Anti Aging"), update the "suggested_categories" array accordingly using valid matching objects from Available System Categories.
-        3. Recalculate or update the "text_accuracy" and "feedback" to accurately reflect the changes made.
+        2. **Smart Category Re-mapping**: If categories are added/removed/updated in "suggested_categories", evaluate each chunk's text and update its `metadata.category` and `metadata.categories` array to match ONLY the relevant category for that chunk.
+        3. **Invalid Category Alert Guard**: If a requested category has NO factual/medical basis anywhere in the document chunks (e.g. adding "Psoriasis Care" to a pure Acne document), DO NOT tag any chunk with that category. Append an executive warning note in `feedback` (e.g. "⚠️ Warning: Category 'Psoriasis Care' has no matching content in this document and was excluded from chunk search filters.").
+        4. Recalculate or update the "text_accuracy" and "feedback" to accurately reflect the changes made.
         
         You must return a valid JSON object ONLY. Do not wrap in markdown block code like ```json.
         The JSON object must have EXACTLY the same structure as the Staged Document, containing these keys:
@@ -697,14 +735,19 @@ async def refine_pending_document(
             "status": "On review",
             "summary": "updated summary markdown",
             "text_accuracy": "100%",
-            "feedback": "updated executive feedback bubble",
+            "feedback": "updated executive feedback bubble with any category warnings if applicable",
             "suggested_categories": [
                 {{"id": "category_id", "name": "category_name"}}
             ],
             "chunks": [
                 {{
                     "text": "updated chunk text",
-                    "metadata": {{ ... }}
+                    "metadata": {{
+                        "knowledge_id": "id",
+                        "source_file": "filename",
+                        "category": "Acne Care",
+                        "categories": ["Acne Care"]
+                    }}
                 }}
             ]
         }}

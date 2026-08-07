@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from loguru import logger
@@ -91,6 +92,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Rate Limiting Middleware ---
+import time
+from collections import defaultdict
+from fastapi import Request, HTTPException, status
+
+from fastapi.responses import JSONResponse
+
+RATE_LIMIT_STORE = defaultdict(list)
+MAX_REQUESTS_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Protects AI & Chat endpoints against spam/DDoS by limiting requests per IP."""
+    path = request.url.path
+    if path.startswith("/api/chats") or path.startswith("/api/ai"):
+        client_ip = request.client.host if request.client else "127.0.0.1"
+        now = time.time()
+        
+        # Keep timestamps within the last 60 seconds
+        timestamps = [t for t in RATE_LIMIT_STORE[client_ip] if now - t < 60]
+        RATE_LIMIT_STORE[client_ip] = timestamps
+        
+        if len(timestamps) >= MAX_REQUESTS_PER_MINUTE:
+            logger.warning(f"Rate limit exceeded for IP {client_ip} on path {path}")
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Rate limit exceeded. Maximum 30 requests per minute allowed."}
+            )
+        
+        RATE_LIMIT_STORE[client_ip].append(now)
+
+    response = await call_next(request)
+    return response
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")

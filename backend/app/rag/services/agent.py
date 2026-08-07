@@ -20,21 +20,89 @@ from app.rag.services.rag_retriever import HybridRetriever
 
 # ── Agent System Prompt ──────────────────────────────────────────────────────
 
-AGENT_SYSTEM_PROMPT = """You are ERHA Assistant Agent, a grounded knowledge-base assistant.
-
+AGENT_SYSTEM_PROMPT = """<role>
+You are ERHA Assistant Agent, a grounded knowledge-base assistant.
 You have access to tools to search the ERHA product knowledge base.
+</role>
 
-STRICT RULES:
+<strict_rules>
 1. Answer ONLY what the user asked. Be concise and direct.
 2. Do not provide unsolicited product recommendations, treatment regimens, or clinical advice.
 3. Do not add greetings such as 'Halo Dok', emojis, unnecessary bullet points, or disclaimers.
 4. Never substitute one product name for another. Preserve exact product names from context.
 5. If requested information is not available in the knowledge base, state so clearly. Do not speculate.
 6. For simple factual questions, keep the final answer to 1-3 sentences maximum.
+</strict_rules>
 
-Conversation history:
-{history}"""
+<conversation_history>
+{history}
+</conversation_history>"""
 
+MEDICAL_AGENT_TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_products",
+            "description": "Search ERHA product knowledge base for skincare product information, ingredients, usage, and recommendations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query for skincare products"
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": "One sentence explanation as to why this search tool is being used"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_treatments",
+            "description": "Search ERHA clinical treatment/procedure database for in-clinic aesthetic procedures.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query for clinical treatments"
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": "One sentence explanation as to why this search tool is being used"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_contraindications",
+            "description": "Search for safety information, contraindications, side effects, and pregnancy/lactation warnings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query for contraindications and safety"
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": "One sentence explanation as to why this search tool is being used"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
 
 
 class MedicalAgent:
@@ -49,6 +117,7 @@ class MedicalAgent:
         self.retriever = retriever
         self.llm_adapter = llm_adapter
         self.max_iterations = max_iterations
+        self.tools_schema = MEDICAL_AGENT_TOOLS_SCHEMA
 
     def _search_knowledge_base(
         self,
@@ -125,7 +194,28 @@ Thought: I now have enough information to answer.
 Final Answer: [your comprehensive response in markdown format]"""
 
     def _parse_agent_action(self, response: str) -> Optional[Dict[str, str]]:
-        """Parse an action from the agent's response."""
+        """Parse an action from the agent's response (supports ReAct text format and JSON tool calls)."""
+        # Try JSON parsing if LLM returned structured JSON
+        try:
+            cleaned = response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+            elif cleaned.startswith("```"):
+                cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+            if cleaned.startswith("{") and cleaned.endswith("}"):
+                data = json.loads(cleaned)
+                if "name" in data and ("arguments" in data or "parameters" in data or "input" in data):
+                    action = data.get("name")
+                    args = data.get("arguments") or data.get("parameters") or data.get("input")
+                    action_input = args.get("query") if isinstance(args, dict) else str(args)
+                    return {"action": action, "input": action_input}
+                elif "action" in data and "input" in data:
+                    return {"action": str(data["action"]), "input": str(data["input"])}
+        except Exception:
+            pass
+
+        # Text ReAct format parsing fallback
         lines = response.strip().split("\n")
         action = None
         action_input = None
