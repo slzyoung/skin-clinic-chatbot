@@ -172,6 +172,7 @@
 	font-size: 0.8125rem;
 	color: #09090b;
 	word-wrap: break-word;
+	text-align: left;
 	animation: fadeIn 0.2s ease-out;
 }
 

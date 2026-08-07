@@ -69,12 +69,11 @@ export default function FloatingChatbot({
 		setIsLoading(true);
 
 		try {
-			// Step 2: Send the user's message using FormData (supports file attachments if needed)
 			const formData = new FormData();
 			formData.append("role", "user");
 			formData.append("content", userMessage.content);
 
-			const res = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages`, {
+			const res = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages/stream`, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${token}`,
@@ -83,19 +82,51 @@ export default function FloatingChatbot({
 			});
 
 			if (res.ok) {
-				// Step 3: Poll the API to retrieve the AI's response
-				// Note: In production, consider implementing WebSockets or Server-Sent Events (SSE)
-				// for real-time updates instead of polling, if supported by the backend.
-				setTimeout(async () => {
-					const histRes = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages`, {
-						headers: { Authorization: `Bearer ${token}` },
-					});
-					if (histRes.ok) {
-						const histData = await histRes.json();
-						setMessages(histData);
+				const reader = res.body.getReader();
+				const decoder = new TextDecoder("utf-8");
+				let assistantMessageId = "ai-" + Date.now().toString();
+
+				// Create a placeholder for the assistant message
+				setMessages((prev) => [
+					...prev,
+					{ id: assistantMessageId, role: "assistant", content: "" },
+				]);
+				setIsLoading(false); // Remove loading indicator once stream starts
+
+				while (true) {
+					const { value, done } = await reader.read();
+					if (done) break;
+
+					const chunkString = decoder.decode(value);
+					const events = chunkString.split("\n\n");
+
+					for (const event of events) {
+						if (!event.trim()) continue;
+
+						if (event.startsWith("data: ")) {
+							const jsonStr = event.replace("data: ", "").trim();
+							try {
+								const parsedData = JSON.parse(jsonStr);
+
+								if (parsedData.type === "token") {
+									setMessages((prev) =>
+										prev.map((msg) =>
+											msg.id === assistantMessageId
+												? { ...msg, content: msg.content + parsedData.content }
+												: msg,
+										),
+									);
+								} else if (parsedData.type === "done") {
+									// The stream has ended
+									break;
+								}
+								// 'context' type could be handled here if we want to show sources
+							} catch (err) {
+								console.error("Failed to parse SSE JSON chunk", err);
+							}
+						}
 					}
-					setIsLoading(false);
-				}, 3000);
+				}
 			} else {
 				setIsLoading(false);
 			}
@@ -125,8 +156,8 @@ export default function FloatingChatbot({
 							</svg>
 						</div>
 						<div className="fc-header-title">
-							<h3>Erha AI</h3>
-							<span>Assisting {doctorName}</span>
+							<h3>Erha AI Assistant</h3>
+							<span>{doctorName}</span>
 						</div>
 					</div>
 					<div className="fc-header-actions">
