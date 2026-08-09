@@ -167,6 +167,20 @@ async def update_user(
         
     if user.type == UserType.DOCTOR:
         update_data = DoctorUpdate(**user_in).model_dump(exclude_unset=True)
+        if "token_limit" in update_data and update_data["token_limit"] is not None:
+            stmt_branch = select(Branch).join(UserBranch, UserBranch.branch_id == Branch.id).where(UserBranch.user_id == user.id)
+            result_branch = await db.execute(stmt_branch)
+            user_branches = result_branch.scalars().all()
+            
+            if not user_branches:
+                raise HTTPException(status_code=400, detail="Doctor is not assigned to any branch yet.")
+                
+            max_branch_limit = max([b.token_limit for b in user_branches if b.token_limit] or [0])
+            if max_branch_limit == 0:
+                raise HTTPException(status_code=400, detail="Branch token limit must be set in the Branches menu before setting doctor token limit.")
+                
+            if update_data["token_limit"] > max_branch_limit:
+                raise HTTPException(status_code=400, detail=f"Doctor token limit ({update_data['token_limit']}) cannot exceed branch token limit ({max_branch_limit}).")
     else:
         update_data = StaffUpdate(**user_in).model_dump(exclude_unset=True)
 
