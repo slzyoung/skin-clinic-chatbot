@@ -33,14 +33,9 @@ import React, { useRef, useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
-import { useCategories } from "@/app/dashboard/category/hooks/use-categories";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { RiAddLine } from "@remixicon/react";
+import { VisibilitySettings as VisibilitySettingsUI } from "./VisibilitySettings";
+import { VisibilitySettings as IVisibilitySettings } from "@/app/dashboard/knowledge/api/types";
+import { CategorySettings } from "./CategorySettings";
 
 interface ChatPreviewProps {
 	knowledgeId?: string;
@@ -51,6 +46,10 @@ interface ChatPreviewProps {
 	isEditMode?: boolean;
 	categories?: string[];
 	onChangeCategories?: (newCategories: string[]) => void;
+	visibilitySettings?: IVisibilitySettings;
+	onChangeVisibilitySettings?: (settings: IVisibilitySettings) => void;
+	onSave?: () => void;
+	onCancel?: () => void;
 }
 
 interface Message {
@@ -68,6 +67,10 @@ export function ChatPreview({
 	isEditMode = false,
 	categories = [],
 	onChangeCategories,
+	visibilitySettings,
+	onChangeVisibilitySettings,
+	onSave,
+	onCancel,
 }: ChatPreviewProps) {
 	const STORAGE_KEY = `chat_preview_${knowledgeId || 'default'}`;
 
@@ -90,8 +93,6 @@ export function ChatPreview({
 	const [isLoading, setIsLoading] = useState(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const queryClient = useQueryClient();
-
-	const { data: allCategories = [] } = useCategories();
 
 	useEffect(() => {
 		if (typeof window !== "undefined") {
@@ -121,62 +122,32 @@ export function ChatPreview({
 		const shouldShow = knowledgeStatus !== "PROCESSING" && (categories.length > 0 || (isEditMode && knowledgeStatus === "APPROVED") || knowledgeStatus === "PENDING");
 		
 		const content = (
-			<div className={`flex items-start gap-3 w-full ${!standalone ? 'mt-4' : ''} ${!shouldShow ? 'hidden' : ''}`}>
-				<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-					<RiRobot2Line className="size-4" />
-				</div>
-				<div className="bg-blue-50 text-zinc-950 p-3.5 rounded-md text-sm w-full">
-					<p className="font-semibold mb-2 text-blue-900">Document Categories:</p>
-					<div className="flex flex-wrap gap-2">
-						{categories.map((c) => (
-							<div key={c} className="flex items-center gap-1 bg-white border border-blue-200 px-2 py-1 rounded-md text-xs font-medium text-blue-800 shadow-sm">
-								<span>{c}</span>
-								{(isEditMode || knowledgeStatus === "PENDING") && (
-									<button type="button" onClick={() => handleRemoveCategory(c)} className="text-blue-400 hover:text-blue-700 transition-colors">
-										<RiCloseLine className="size-3.5" />
-									</button>
-								)}
-							</div>
-						))}
-						{(isEditMode || knowledgeStatus === "PENDING") && (
-							<DropdownMenu>
-								<DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-6 text-xs px-2 gap-1 border-dashed border-blue-300 text-blue-600 hover:bg-blue-100/50 hover:text-blue-700" />}>
-									<RiAddLine className="size-3" />
-									Add Category
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="start" className="w-48 max-h-64 overflow-y-auto">
-									{availableCategories.length > 0 ? (
-										availableCategories.map((cat) => (
-											<DropdownMenuItem key={cat.id} onClick={() => handleAddCategory(cat.name)}>
-												{cat.name}
-											</DropdownMenuItem>
-										))
-									) : (
-										<DropdownMenuItem disabled>No more categories</DropdownMenuItem>
-									)}
-								</DropdownMenuContent>
-							</DropdownMenu>
-						)}
-					</div>
-				</div>
+			<div className={`flex flex-col gap-4 w-full mt-6 mb-8 ${!shouldShow ? 'hidden' : ''}`}>
+				<CategorySettings 
+					categories={categories}
+					onChangeCategories={(c) => onChangeCategories?.(c)}
+					isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+					onSave={onSave}
+					onCancel={onCancel}
+				/>
+				{visibilitySettings && onChangeVisibilitySettings && (
+					<VisibilitySettingsUI
+						settings={visibilitySettings}
+						onChange={onChangeVisibilitySettings}
+						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+						onSave={onSave}
+						onCancel={onCancel}
+					/>
+				)}
 			</div>
 		);
 
 		return standalone ? <MessageScrollerItem key="categories-block">{content}</MessageScrollerItem> : content;
 	};
 
-	const handleAddCategory = (catName: string) => {
-		if (categories.includes(catName)) return;
-		const newCategories = [...categories, catName];
-		onChangeCategories?.(newCategories);
-	};
-
-	const handleRemoveCategory = (catName: string) => {
-		const newCategories = categories.filter((c) => c !== catName);
-		onChangeCategories?.(newCategories);
-	};
-
-	const availableCategories = allCategories.filter((c) => !categories.includes(c.name));
+	// handleAddCategory and availableCategories are now handled in CategorySettings,
+	// but we keep them here if anything else uses them (though they are not used).
+	// We can safely remove them since CategorySettings manages its own local state.
 
 	const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files && e.target.files[0]) {

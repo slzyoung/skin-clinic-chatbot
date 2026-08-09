@@ -3,7 +3,7 @@ import { getErrorMessage } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { knowledgeKeys } from "../api/keys";
-import type { KnowledgeResponse, KnowledgeStatus } from "../api/types";
+import type { KnowledgeResponse, KnowledgeStatus, VisibilitySettings } from "../api/types";
 
 export const useKnowledgeBaseList = () => {
 	return useQuery({
@@ -120,7 +120,7 @@ export const useEditKnowledge = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async ({ id, data, hideToast }: { id: string; data: { summary: string; categories: string[] }; hideToast?: boolean }) => {
+		mutationFn: async ({ id, data, hideToast }: { id: string; data: { summary: string; categories: string[]; visibility_settings?: VisibilitySettings }; hideToast?: boolean }) => {
 			const response = await api.put(`/knowledge/${id}`, data);
 			return { data: response.data, hideToast };
 		},

@@ -5,13 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { RiCheckLine, RiCloseLine, RiFilePdf2Line, RiMedicineBottleLine, RiLoader4Line } from "@remixicon/react";
 import { useSession } from "@/hooks/use-session";
+import { VisibilitySettings } from "@/app/dashboard/knowledge/api/types";
 
 interface ClassificationSidebarProps {
 	knowledge?: KnowledgeResponse;
 	pendingCategories?: string[];
+	pendingVisibilitySettings?: VisibilitySettings;
 }
 
-export function ClassificationSidebar({ knowledge, pendingCategories }: ClassificationSidebarProps) {
+export function ClassificationSidebar({ knowledge, pendingCategories, pendingVisibilitySettings }: ClassificationSidebarProps) {
 	const updateStatus = useUpdateKnowledgeStatus();
 	const approveKnowledge = useApproveKnowledge();
 	const editKnowledge = useEditKnowledge();
@@ -21,8 +23,8 @@ export function ClassificationSidebar({ knowledge, pendingCategories }: Classifi
 	if (!knowledge) return null;
 
 	const handleApprove = async () => {
-		if (pendingCategories && pendingCategories.length > 0) {
-			await editKnowledge.mutateAsync({ id: knowledge.id, data: { summary: knowledge.ai_summary || "", categories: pendingCategories }, hideToast: true });
+		if ((pendingCategories && pendingCategories.length > 0) || pendingVisibilitySettings) {
+			await editKnowledge.mutateAsync({ id: knowledge.id, data: { summary: knowledge.ai_summary || "", categories: pendingCategories || [], visibility_settings: pendingVisibilitySettings }, hideToast: true });
 		}
 		approveKnowledge.mutate(knowledge.id);
 		if (typeof window !== "undefined") {

@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { use, useState } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail, useEditKnowledge } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
+import { VisibilitySettings } from "../api/types";
 
 export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
 	const router = useRouter();
@@ -24,12 +25,16 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const editKnowledge = useEditKnowledge();
 
 	const initialCategories = (data?.metadata?.categories as string[]) || (data?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
+	const initialVisibility = (data?.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
+	
 	const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
+	const [pendingVisibilitySettings, setPendingVisibilitySettings] = useState<VisibilitySettings>(initialVisibility);
 	const [prevMetadataStr, setPrevMetadataStr] = useState(JSON.stringify(data?.metadata || {}));
 
 	if (JSON.stringify(data?.metadata || {}) !== prevMetadataStr) {
 		setPrevMetadataStr(JSON.stringify(data?.metadata || {}));
 		setPendingCategories(initialCategories);
+		setPendingVisibilitySettings(initialVisibility);
 	}
 
 	const handleDelete = () => {
@@ -56,6 +61,17 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 			.replace(/\.[^/.]+$/, "") // strip extension
 			.replace(/[_-]/g, " ") // replace underscores/dashes with spaces
 			.replace(/\b\w/g, (c) => c.toUpperCase()); // title case
+	};
+
+	const handleSave = async () => {
+		await editKnowledge.mutateAsync({ id, data: { summary: data?.ai_summary || "", categories: pendingCategories, visibility_settings: pendingVisibilitySettings } });
+		setIsEditMode(false);
+	};
+
+	const handleCancel = () => {
+		setPendingCategories(initialCategories);
+		setPendingVisibilitySettings(initialVisibility);
+		setIsEditMode(false);
 	};
 
 	return (
@@ -91,11 +107,11 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 							disabled={isLoading || editKnowledge.isPending}
 							onClick={async () => {
 								if (isEditMode) {
-									await editKnowledge.mutateAsync({ id, data: { summary: data?.ai_summary || "", categories: pendingCategories } });
+									await handleSave();
 								} else {
 									toast.info("You can now edit the document categories below.");
+									setIsEditMode(true);
 								}
-								setIsEditMode(!isEditMode);
 							}}
 						>
 							{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
@@ -118,10 +134,18 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					isEditMode={isEditMode}
 					categories={pendingCategories}
 					onChangeCategories={setPendingCategories}
+					visibilitySettings={pendingVisibilitySettings}
+					onChangeVisibilitySettings={setPendingVisibilitySettings}
+					onSave={handleSave}
+					onCancel={handleCancel}
 				/>
 
 				{/* Right Column (Classification) */}
-				<ClassificationSidebar knowledge={data} pendingCategories={pendingCategories} />
+				<ClassificationSidebar 
+					knowledge={data} 
+					pendingCategories={pendingCategories} 
+					pendingVisibilitySettings={pendingVisibilitySettings}
+				/>
 			</div>
 		</div>
 	);
