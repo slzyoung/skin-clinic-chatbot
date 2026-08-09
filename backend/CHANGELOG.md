@@ -112,3 +112,6 @@ backend/app/rag/
 | **LLM Adapter** | Generic ChatOpenAI | **OpenAIAdapter** (`gpt-4o-mini`) with ground-rule prompt & citation mapping `[1]`, `[2]` |
 | **Document Review** | Direct DB insert | **HITL Staging Workflow**: AI auto-review, accuracy grading, & interactive prompt refinement |
 | **Chat Generation** | REST POST + 3-sec polling | **Real-time SSE Streaming**: Async native fetch & instant token rendering |
+| **Table Existence Check** | `:tablename::regclass` (Emits SQL `UndefinedObjectError`) | **`to_regclass(:tablename)`**: Evaluates to `NULL` without PostgreSQL error logs |
+
+

@@ -44,7 +44,7 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
                 check_table_sql = text("""
                     SELECT atttypmod 
                     FROM pg_attribute 
-                    WHERE attrelid = :tablename::regclass AND attname = 'embedding';
+                    WHERE attrelid = to_regclass(:tablename) AND attname = 'embedding';
                 """)
                 try:
                     result = conn.execute(check_table_sql, {"tablename": self.collection_name}).fetchone()
