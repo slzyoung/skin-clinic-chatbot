@@ -44,9 +44,7 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
 					let defaultTarget = "/login";
 
 					// Determine standard home
-					if (userProfile.type === "DOCTOR") {
-						defaultTarget = "/doctor";
-					} else if (userProfile.type === "STAFF") {
+					if (userProfile.type === "STAFF") {
 						defaultTarget = "/dashboard/knowledge";
 					}
 
@@ -54,8 +52,6 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
 					let target = defaultTarget;
 					if (fromParam && fromParam.startsWith("/")) {
 						if (fromParam.startsWith("/dashboard") && userProfile.type === "STAFF") {
-							target = fromParam;
-						} else if (fromParam.startsWith("/doctor") && userProfile.type === "DOCTOR") {
 							target = fromParam;
 						}
 					}
