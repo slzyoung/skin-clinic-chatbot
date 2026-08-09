@@ -1486,6 +1486,13 @@ async def chat_endpoint(
         if valid_cats:
             filter_metadata["categories"] = valid_cats
         
+    if request.user_context:
+        filter_metadata["clinics"] = request.user_context.branch_ids + ["all"]
+        filter_metadata["doctor_types"] = [request.user_context.dr_type, "all"]
+        filter_metadata["doctors"] = [request.user_context.user_id, "all"]
+        if request.user_context.excluded_categories:
+            filter_metadata["excluded_categories"] = request.user_context.excluded_categories
+
     parsed_filter = filter_metadata if filter_metadata else None
     
     try:

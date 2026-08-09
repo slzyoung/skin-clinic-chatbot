@@ -149,7 +149,12 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
                 
                 if filter_metadata:
                     for k, v in filter_metadata.items():
-                        if isinstance(v, list):
+                        if k == "excluded_categories" and isinstance(v, list):
+                            from sqlalchemy import not_
+                            for item in v:
+                                if item:
+                                    q = q.filter(not_(DocumentChunk.metadata_["categories"].astext.ilike(f"%{item}%")))
+                        elif isinstance(v, list):
                             from sqlalchemy import or_
                             or_clauses = [DocumentChunk.metadata_[k].astext.ilike(f"%{item}%") for item in v if item]
                             if or_clauses:

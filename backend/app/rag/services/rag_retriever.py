@@ -85,7 +85,21 @@ class BM25Index:
             if filter_metadata:
                 meta = chunk.get("metadata", {})
                 for k, v in filter_metadata.items():
-                    if meta.get(k) != v:
+                    if k == "excluded_categories" and isinstance(v, list):
+                        chunk_cats = meta.get("categories", [])
+                        if not isinstance(chunk_cats, list):
+                            chunk_cats = [chunk_cats] if chunk_cats else []
+                        if any(item in chunk_cats for item in v if item):
+                            match = False
+                            break
+                    elif isinstance(v, list):
+                        chunk_val = meta.get(k, [])
+                        if not isinstance(chunk_val, list):
+                            chunk_val = [chunk_val] if chunk_val else []
+                        if not any(item in chunk_val for item in v if item):
+                            match = False
+                            break
+                    elif meta.get(k) != v:
                         match = False
                         break
             if match:

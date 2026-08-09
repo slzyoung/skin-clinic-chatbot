@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from app.models.category import Category, UserCategoryExclusion
+from app.models.branch import UserBranch
+from sqlalchemy import select, and_, func
 from typing import List, Optional
 import uuid
 import json
@@ -27,7 +30,7 @@ from app.rag.router import (
     resolve_approved_file,
     chat_endpoint
 )
-from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatRequest, ChatResponse
+from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatRequest, ChatResponse, UserContext
 
 router = APIRouter(tags=["Knowledge"])
 
@@ -142,6 +145,28 @@ async def knowledge_chat(
     pipeline = Depends(get_generation_pipeline),
     agent = Depends(get_medical_agent)
 ):
+    # Fetch user branches
+    stmt_branches = select(UserBranch.branch_id).where(UserBranch.user_id == current_user.id)
+    result_branches = await db.execute(stmt_branches)
+    branch_ids = [str(b_id) for b_id in result_branches.scalars().all()]
+    
+    # Fetch excluded category names
+    stmt_exclusions = (
+        select(Category.name)
+        .join(UserCategoryExclusion, UserCategoryExclusion.category_id == Category.id)
+        .where(UserCategoryExclusion.user_id == current_user.id)
+    )
+    result_exclusions = await db.execute(stmt_exclusions)
+    excluded_cats = [name for name in result_exclusions.scalars().all()]
+
+    # Inject context
+    request.user_context = UserContext(
+        user_id=str(current_user.id),
+        dr_type=current_user.dr_type or "all",
+        branch_ids=branch_ids,
+        excluded_categories=excluded_cats
+    )
+
     return await chat_endpoint(request=request, pipeline=pipeline, agent=agent)
 
 ALLOWED_MIME_TYPES = {
@@ -260,7 +285,8 @@ async def approve_knowledge(
         k_entry.status = KnowledgeStatus.APPROVED
         k_entry.approved_by = current_user.id
         await db.commit()
-        
+
+
     return res
 
 @router.put("/{knowledge_id}")

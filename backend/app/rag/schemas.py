@@ -5,12 +5,19 @@ class ChatMessage(BaseModel):
     role: str = Field(..., description="Role of the sender ('user' or 'assistant')")
     content: str = Field(..., description="Content of the conversation message")
 
+class UserContext(BaseModel):
+    user_id: str = Field(..., description="The ID of the user requesting the chat")
+    dr_type: str = Field(..., description="The doctor type of the user")
+    branch_ids: List[str] = Field(default_factory=list, description="The branch IDs the user belongs to")
+    excluded_categories: List[str] = Field(default_factory=list, description="The names of categories excluded for this user")
+
 class ChatRequest(BaseModel):
     query: str = Field(..., description="User question or medical query string")
     categories: Optional[List[str]] = Field(default=[], description="Optional list of category filters (e.g. ['Acne Care', 'Brightening'])")
     document_type: Optional[str] = Field(None, description="Optional document category type filter ('Product', 'Treatment', or 'Promotional')")
     top_k: int = Field(8, description="Number of context passages to retrieve")
     history: List[ChatMessage] = Field(default=[], description="Multi-turn conversation chat history context")
+    user_context: Optional[UserContext] = Field(None, description="Context properties of the querying user used for visibility and exclusion filtering")
 
 class ChatResponse(BaseModel):
     query: str = Field(..., description="User query string")
