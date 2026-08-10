@@ -40,6 +40,24 @@ export const useKnowledgeDetail = (id: string) => {
 	});
 };
 
+export const useKnowledgeBatch = (batchId: string) => {
+	return useQuery({
+		queryKey: ["knowledge-batch", batchId],
+		queryFn: async (): Promise<KnowledgeResponse[]> => {
+			const response = await api.get(`/knowledge/batch/${batchId}`);
+			return response.data;
+		},
+		enabled: !!batchId,
+		refetchInterval: (query) => {
+			const data = query.state.data;
+			if (data?.some((item) => item.status === "PROCESSING")) {
+				return 2000;
+			}
+			return false;
+		},
+	});
+};
+
 export const useUploadKnowledge = () => {
 	const queryClient = useQueryClient();
 
@@ -120,7 +138,7 @@ export const useEditKnowledge = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async ({ id, data, hideToast }: { id: string; data: { summary: string; categories: string[]; visibility_settings?: VisibilitySettings }; hideToast?: boolean }) => {
+		mutationFn: async ({ id, data, hideToast }: { id: string; data: { summary: string; categories: string[]; visibility_settings?: VisibilitySettings; title?: string }; hideToast?: boolean }) => {
 			const response = await api.put(`/knowledge/${id}`, data);
 			return { data: response.data, hideToast };
 		},
@@ -130,6 +148,7 @@ export const useEditKnowledge = () => {
 			}
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to update document."));

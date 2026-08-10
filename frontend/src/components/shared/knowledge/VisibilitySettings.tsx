@@ -116,7 +116,7 @@ export function VisibilitySettings({
 	};
 
 	return (
-		<div className="bg-zinc-100/50 rounded-lg p-4 border border-zinc-200 mt-4 w-full text-zinc-950">
+		<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950">
 			<div className="flex items-center gap-2 text-blue-600 mb-2">
 				<RiEyeLine className="size-5" />
 				<h3 className="font-semibold text-sm">Visibility Settings</h3>

@@ -53,7 +53,7 @@ export function CategorySettings({
 	};
 
 	return (
-		<div className="bg-zinc-100/50 rounded-lg p-4 border border-zinc-200 w-full text-zinc-950">
+		<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950">
 			<div className="flex items-center gap-2 text-blue-600 mb-2">
 				<RiSparklingLine className="size-5" />
 				<h3 className="font-semibold text-sm">Suggested Categories</h3>
