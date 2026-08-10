@@ -16,10 +16,12 @@ interface BatchKnowledgeTabContentProps {
 	knowledgeId: string;
 	isEditMode: boolean;
 	setIsEditMode: (v: boolean) => void;
+	headerNode?: React.ReactNode;
+	preHeaderNode?: React.ReactNode;
 }
 
 export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledgeTabContentProps>(
-	({ knowledgeId, isEditMode, setIsEditMode }, ref) => {
+	({ knowledgeId, isEditMode, setIsEditMode, headerNode, preHeaderNode }, ref) => {
 		const { data, isLoading, error } = useKnowledgeDetail(knowledgeId);
 		const editKnowledge = useEditKnowledge();
 		const deleteMutation = useDeleteKnowledge();
@@ -88,7 +90,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 						knowledge={data}
 						knowledgeStatus={data?.status}
 						aiSummary={data?.ai_summary}
-						fileName={data?.file_name}
+						fileName={undefined}
 						files={(data?.metadata?.files as { file_name: string; summary: string }[]) || []}
 						isDetailLoading={isLoading}
 						isEditMode={isEditMode}
@@ -100,6 +102,8 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 						onChangeTitle={setPendingTitle}
 						onSave={handleSave}
 						onCancel={handleCancel}
+						headerNode={headerNode}
+						preHeaderNode={preHeaderNode}
 					/>
 				</div>
 			</div>

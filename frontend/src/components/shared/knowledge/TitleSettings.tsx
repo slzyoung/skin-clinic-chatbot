@@ -1,4 +1,4 @@
-import { RiBookReadLine, RiEdit2Line, RiCheckLine, RiCloseLine } from "@remixicon/react";
+import { RiBookReadLine, RiEdit2Line } from "@remixicon/react";
 import { useState, useRef, useEffect } from "react";
 
 interface TitleSettingsProps {
@@ -66,16 +66,22 @@ export function TitleSettings({ title, onChangeTitle, onSave }: TitleSettingsPro
 					</div>
 				</div>
 				<button 
-					onClick={handleSave} 
-					className="p-2 border border-emerald-200 bg-emerald-50 text-emerald-600 rounded-md hover:bg-emerald-100 transition-colors shrink-0"
+					onMouseDown={(e) => {
+						e.preventDefault();
+						handleCancel();
+					}} 
+					className="px-3 py-2 text-[13px] font-medium border border-zinc-200 bg-white text-zinc-700 rounded-md hover:bg-zinc-50 transition-colors shrink-0"
 				>
-					<RiCheckLine className="size-4" />
+					Cancel
 				</button>
 				<button 
-					onClick={handleCancel} 
-					className="p-2 border border-red-200 bg-red-50 text-red-600 rounded-md hover:bg-red-100 transition-colors shrink-0"
+					onMouseDown={(e) => {
+						e.preventDefault();
+						handleSave();
+					}} 
+					className="px-3 py-2 text-[13px] font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors shrink-0 shadow-sm"
 				>
-					<RiCloseLine className="size-4" />
+					Save
 				</button>
 			</div>
 		);

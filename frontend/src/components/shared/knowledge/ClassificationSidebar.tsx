@@ -75,7 +75,7 @@ export function ClassificationSidebar({ knowledge, pendingCategories, pendingVis
 					<Button
 						onClick={handleApprove}
 						disabled={approveKnowledge.isPending || editKnowledge.isPending}
-						className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+						className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
 					>
 						{approveKnowledge.isPending || editKnowledge.isPending ? (
 							<>

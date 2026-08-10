@@ -63,6 +63,8 @@ interface ChatPreviewProps {
 	onChangeTitle?: (title: string) => void;
 	onSave?: (newTitle?: string) => void;
 	onCancel?: () => void;
+	headerNode?: React.ReactNode;
+	preHeaderNode?: React.ReactNode;
 }
 
 interface Message {
@@ -88,6 +90,8 @@ export function ChatPreview({
 	onChangeTitle,
 	onSave,
 	onCancel,
+	headerNode,
+	preHeaderNode,
 }: ChatPreviewProps) {
 	const STORAGE_KEY = `chat_preview_${knowledgeId || "default"}`;
 
@@ -178,6 +182,7 @@ export function ChatPreview({
 					categories={categories}
 					onChangeCategories={(c) => onChangeCategories?.(c)}
 					isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+					showSaveActions={isEditMode}
 					onSave={onSave}
 					onCancel={onCancel}
 				/>
@@ -186,6 +191,7 @@ export function ChatPreview({
 						settings={visibilitySettings}
 						onChange={onChangeVisibilitySettings}
 						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+						showSaveActions={isEditMode}
 						onSave={onSave}
 						onCancel={onCancel}
 					/>
@@ -310,7 +316,7 @@ export function ChatPreview({
 		knowledgeStatus === "PROCESSING" ||
 		isLoading ||
 		isDetailLoading ||
-		(knowledgeStatus === "APPROVED" && !isEditMode);
+		((knowledgeStatus === "APPROVED" || knowledgeStatus === "PENDING") && !isEditMode);
 
 	return (
 		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
@@ -335,10 +341,17 @@ export function ChatPreview({
 							)}
 
 							{!isDetailLoading && messages.length === 0 && knowledgeStatus !== "PROCESSING" && (
-								<div className="flex flex-col items-center justify-center text-zinc-500 h-full pt-20">
-									<RiRobot2Line className="size-10 mb-4 text-zinc-300" />
-									<p>Ask anything about this document...</p>
-								</div>
+								<MessageScrollerItem>
+									<div className="flex items-start gap-3 w-full">
+										<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+											<RiRobot2Line className="size-4" />
+										</div>
+										<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full border border-blue-100 flex flex-col gap-3">
+											{headerNode}
+											<p className="text-zinc-500 italic">No summary available.</p>
+										</div>
+									</div>
+								</MessageScrollerItem>
 							)}
 
 							{!isDetailLoading && knowledgeStatus === "PROCESSING" && messages.length === 0 && (
@@ -374,6 +387,7 @@ export function ChatPreview({
 												<RiRobot2Line className="size-4" />
 											</div>
 											<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full border border-blue-100 flex flex-col gap-3">
+												{headerNode}
 												<div className="flex items-center gap-2">
 													<span className="relative flex h-3 w-3">
 														<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -459,6 +473,7 @@ export function ChatPreview({
 												<span className="truncate max-w-xs">{messages[0].attachmentName}</span>
 											</div>
 										)}
+										{preHeaderNode}
 										<div
 											className={`flex items-start gap-3 w-full ${messages[0].role === "user" ? "flex-row-reverse" : ""}`}
 										>
@@ -473,9 +488,12 @@ export function ChatPreview({
 												className={`${messages[0].role === "user" ? "bg-blue-500 text-white" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
 											>
 												{messages[0].role === "assistant" ? (
-													<ReactMarkdown remarkPlugins={[remarkGfm]}>
-														{messages[0].content}
-													</ReactMarkdown>
+													<>
+														{headerNode}
+														<ReactMarkdown remarkPlugins={[remarkGfm]}>
+															{messages[0].content}
+														</ReactMarkdown>
+													</>
 												) : (
 													messages[0].content
 												)}
@@ -577,7 +595,7 @@ export function ChatPreview({
 						placeholder={
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
-								: knowledgeStatus === "APPROVED" && !isEditMode
+								: (knowledgeStatus === "APPROVED" || knowledgeStatus === "PENDING") && !isEditMode
 									? "Click 'Edit Knowledge' to refine summary..."
 									: "Ask questions or request adjustments..."
 						}

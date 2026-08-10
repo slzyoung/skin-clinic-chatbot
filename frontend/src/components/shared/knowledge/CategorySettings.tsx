@@ -9,6 +9,7 @@ interface CategorySettingsProps {
 	categories: string[];
 	onChangeCategories: (newCategories: string[]) => void;
 	isEditMode?: boolean;
+	showSaveActions?: boolean;
 	onSave?: () => void;
 	onCancel?: () => void;
 }
@@ -17,13 +18,14 @@ export function CategorySettings({
 	categories,
 	onChangeCategories,
 	isEditMode = false,
+	showSaveActions = true,
 	onSave,
 	onCancel,
 }: CategorySettingsProps) {
 	const { data: allCategories = [] } = useCategories();
 	const [inputValue, setInputValue] = useState("");
 	const [open, setOpen] = useState(false);
-	const [isEditing, setIsEditing] = useState(true);
+	const [isEditing, setIsEditing] = useState(isEditMode);
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const [prevIsEditMode, setPrevIsEditMode] = useState(isEditMode);
@@ -137,7 +139,7 @@ export function CategorySettings({
 				</Button>
 			)}
 
-			{isEditing && (
+			{isEditing && showSaveActions && (
 				<div className="mt-6 flex flex-col gap-3">
 					<p className="text-sm text-zinc-600 font-medium">Are these categories accurate?</p>
 					<div className="flex items-center gap-2">

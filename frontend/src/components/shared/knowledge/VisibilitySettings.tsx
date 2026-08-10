@@ -11,6 +11,7 @@ interface VisibilitySettingsProps {
 	settings: IVisibilitySettings;
 	onChange: (settings: IVisibilitySettings) => void;
 	isEditMode?: boolean;
+	showSaveActions?: boolean;
 	onSave?: () => void;
 	onCancel?: () => void;
 }
@@ -19,6 +20,7 @@ export function VisibilitySettings({
 	settings,
 	onChange,
 	isEditMode = false,
+	showSaveActions = true,
 	onSave,
 	onCancel,
 }: VisibilitySettingsProps) {
@@ -33,7 +35,13 @@ export function VisibilitySettings({
 		return Array.from(types).sort();
 	}, [doctors]);
 
-	const [isEditing, setIsEditing] = useState(false);
+	const [isEditing, setIsEditing] = useState(isEditMode);
+	const [prevIsEditMode, setPrevIsEditMode] = useState(isEditMode);
+
+	if (isEditMode !== prevIsEditMode) {
+		setPrevIsEditMode(isEditMode);
+		setIsEditing(isEditMode);
+	}
 
 	// Multi-select helper handlers
 	const toggleSelection = (key: keyof IVisibilitySettings, value: string) => {
@@ -143,22 +151,24 @@ export function VisibilitySettings({
 						doctors.map((d) => ({ label: d.name, value: d.id })),
 					)}
 
-					<div className="mt-6 flex items-center justify-start gap-2">
-						<Button variant="outline" onClick={() => {
-							setIsEditing(false);
-							onCancel?.();
-						}}>Cancel</Button>
-						<Button 
-							className="bg-blue-600 hover:bg-blue-700 text-white" 
-							disabled={(settings.clinics && settings.clinics.length === 0) || (settings.doctor_types && settings.doctor_types.length === 0) || (settings.doctors && settings.doctors.length === 0)}
-							onClick={() => {
+					{showSaveActions && (
+						<div className="mt-6 flex items-center justify-start gap-2">
+							<Button variant="outline" onClick={() => {
 								setIsEditing(false);
-								onSave?.();
-							}}
-						>
-							Save Changes
-						</Button>
-					</div>
+								onCancel?.();
+							}}>Cancel</Button>
+							<Button 
+								className="bg-blue-600 hover:bg-blue-700 text-white" 
+								disabled={(settings.clinics && settings.clinics.length === 0) || (settings.doctor_types && settings.doctor_types.length === 0) || (settings.doctors && settings.doctors.length === 0)}
+								onClick={() => {
+									setIsEditing(false);
+									onSave?.();
+								}}
+							>
+								Save Changes
+							</Button>
+						</div>
+					)}
 				</div>
 			) : (
 				<div className="flex flex-col gap-3">

@@ -90,6 +90,7 @@ export const useUpdateKnowledgeStatus = () => {
 			if (variables?.id) {
 				queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
 			}
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to update status."));
@@ -109,6 +110,7 @@ export const useApproveKnowledge = () => {
 			toast.success("Document approved and indexed into AI Knowledge Base!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(id) });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to approve and index document."));
@@ -127,6 +129,7 @@ export const useDeleteKnowledge = () => {
 		onSuccess: () => {
 			toast.success("Knowledge deleted successfully!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to delete knowledge document."));
