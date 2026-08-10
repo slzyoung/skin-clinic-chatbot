@@ -76,10 +76,12 @@ class EditApprovedDocumentRequest(BaseModel):
     summary: Optional[str] = Field(None, description="Updated document summary markdown (for manual save)")
     categories: Optional[List[Any]] = Field(default=[], description="Updated list of document categories (for manual save)")
     visibility_settings: Optional[VisibilitySettings] = Field(None, description="Updated visibility settings")
+    title: Optional[str] = Field(None, description="Updated document title")
 
 class ApprovedDocumentResponse(BaseModel):
     knowledge_id: str = Field(..., description="Knowledge ID / document identifier")
     file_name: str = Field(..., description="Filename of the approved document")
+    title: Optional[str] = Field(None, description="Document title")
     status: str = Field("Approved", description="Document status")
     summary: str = Field("", description="Document summary")
     categories: List[str] = Field(default=[], description="Document categories")

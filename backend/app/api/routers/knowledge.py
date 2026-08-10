@@ -88,6 +88,7 @@ async def get_knowledge(
             doc_status = KnowledgeStatus.APPROVED if "output" in target_file else KnowledgeStatus.PENDING
             if isinstance(data, dict):
                 file_name = data.get("file_name", "document.pdf")
+                title = data.get("title", file_name)
                 summary = data.get("summary", "")
                 raw_type = str(data.get("type", "PRODUCT")).upper()
                 k_type = KnowledgeType.PRODUCT
@@ -98,7 +99,7 @@ async def get_knowledge(
 
                 return KnowledgeResponse(
                     id=knowledge_id,
-                    title=file_name,
+                    title=title,
                     content=summary,
                     file_name=file_name,
                     original_path=f"data/temp/{file_name}",
@@ -136,6 +137,43 @@ async def get_knowledge(
         created_at=now,
         updated_at=now
     )
+
+@router.get("/batch/{upload_batch_id}", response_model=List[KnowledgeResponse])
+async def get_knowledge_batch(
+    upload_batch_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:read"))
+):
+    """Fetch all knowledge documents uploaded in a specific batch."""
+    stmt = select(Knowledge).where(
+        Knowledge.metadata_.op("->>")("upload_batch_id") == upload_batch_id,
+        Knowledge.deleted_at.is_(None)
+    ).order_by(Knowledge.created_at.desc())
+    result = await db.execute(stmt)
+    docs = result.scalars().all()
+    
+    enriched_docs = []
+    for knowledge in docs:
+        try:
+            target_file = resolve_pending_file(str(knowledge.id)) or resolve_approved_file(str(knowledge.id))
+            if target_file and os.path.exists(target_file):
+                with open(target_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                latest_summary = data.get("summary", "")
+                if latest_summary and knowledge.ai_summary != latest_summary:
+                    knowledge.ai_summary = latest_summary
+                
+                knowledge_dict = KnowledgeResponse.model_validate(knowledge).model_dump(by_alias=False)
+                # Merge existing DB metadata with JSON data, JSON takes precedence for RAG fields
+                db_meta = knowledge_dict.get("metadata_") or {}
+                knowledge_dict["metadata_"] = {**db_meta, **data}
+                enriched_docs.append(knowledge_dict)
+            else:
+                enriched_docs.append(knowledge)
+        except Exception:
+            enriched_docs.append(knowledge)
+            
+    return enriched_docs
 
 @router.post("/chat", response_model=ChatResponse)
 async def knowledge_chat(
@@ -184,15 +222,17 @@ ALLOWED_MIME_TYPES = {
 async def upload_knowledge_file(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: List[UploadFile] = File(...),
     category_type: str = Form("Product"),
     prompt: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:write")),
     llm: BaseLLMAdapter = Depends(get_llm)
 ):
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(status_code=400, detail=f"File type {file.content_type} not allowed for file {file.filename}")
+    upload_list = file if isinstance(file, list) else [file]
+    for target_file in upload_list:
+        if target_file.content_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(status_code=400, detail=f"File type {target_file.content_type} not allowed for file {target_file.filename}")
         
     pipeline = get_ingestion_pipeline(request)
     
@@ -315,6 +355,33 @@ async def edit_knowledge(
             bm25=bm25,
             vector_store=vector_store
         )
+
+    # Sync updates back to the DB row
+    stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
+    db_res = await db.execute(stmt)
+    k_entry = db_res.scalar_one_or_none()
+    
+    if k_entry:
+        if payload.title:
+            k_entry.title = payload.title
+        if payload.summary:
+            k_entry.ai_summary = payload.summary
+            
+        if k_entry.metadata_ is None:
+            k_entry.metadata_ = {}
+            
+        if payload.categories is not None:
+            k_entry.metadata_["categories"] = payload.categories
+            
+        if payload.visibility_settings is not None:
+            k_entry.metadata_["visibility_settings"] = payload.visibility_settings.model_dump()
+            
+        # Ensure SQLAlchemy sees the mutation in the JSON column
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(k_entry, "metadata_")
+        
+        await db.commit()
+
     return res
 
 @router.post("/{knowledge_id}/refine")

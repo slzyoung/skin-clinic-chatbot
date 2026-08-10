@@ -378,6 +378,7 @@ async def process_ingestion_background(
                 k_entry = result.scalars().first()
                 if k_entry:
                     k_entry.status = KnowledgeStatus.PENDING
+                    k_entry.title = recommended_title
                     k_entry.ai_summary = summary
                     k_entry.ai_confidence = float(text_accuracy.replace("%", "")) if isinstance(text_accuracy, str) and "%" in text_accuracy else 95.00
                     await session.commit()
@@ -444,6 +445,8 @@ async def ingest_document(
         
         response_items = []
         os.makedirs("data/temp", exist_ok=True)
+        import uuid as _uuid
+        upload_batch_id = str(_uuid.uuid4()) if len(upload_list) > 1 else None
 
         for target_file in upload_list:
             if not target_file.filename:
@@ -529,10 +532,18 @@ async def ingest_document(
                             knowledge.original_path = file_path
                             knowledge.mime_type = target_file.content_type
                             knowledge.file_size = file_size
+                            if knowledge.metadata_ is None:
+                                knowledge.metadata_ = {}
+                            if upload_batch_id:
+                                knowledge.metadata_["upload_batch_id"] = upload_batch_id
                             await session.commit()
                             await session.refresh(knowledge)
                             k_id = str(knowledge.id)
                     else:
+                        metadata = {}
+                        if upload_batch_id:
+                            metadata["upload_batch_id"] = upload_batch_id
+                            
                         knowledge = Knowledge(
                             id=custom_uuid if custom_uuid else _uuid.uuid4(),
                             type=k_type,
@@ -544,7 +555,8 @@ async def ingest_document(
                             status=KnowledgeStatus.PROCESSING,
                             uploaded_by=user_id,
                             ai_summary="Processing...",
-                            ai_confidence=0.0
+                            ai_confidence=0.0,
+                            metadata_=metadata
                         )
                         session.add(knowledge)
                         await session.commit()
@@ -577,6 +589,7 @@ async def ingest_document(
             "status": "success",
             "message": f"Successfully queued {len(response_items)} document(s) for ingestion.",
             "total_files": len(response_items),
+            "upload_batch_id": upload_batch_id,
             "documents": response_items
         }
 
@@ -617,6 +630,7 @@ async def get_pending_details(knowledge_id: str):
                     return {
                         "knowledge_id": str(k_doc.id),
                         "file_name": k_doc.file_name,
+                        "title": k_doc.title,
                         "type": raw_type.capitalize() if raw_type else "Product",
                         "status": "PROCESSING",
                         "summary": "Document processing in progress...",
@@ -640,6 +654,8 @@ async def get_pending_details(knowledge_id: str):
                 data["type"] = "Product"
             if "status" not in data or not data["status"]:
                 data["status"] = "Approved" if "output" in target_file else "On review"
+            if "title" not in data or not data["title"]:
+                data["title"] = data.get("file_name", "document.pdf")
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read document details: {e}")
@@ -924,6 +940,7 @@ async def get_approved_document_details(knowledge_id: str):
             if chunks and isinstance(chunks[0], dict):
                 first_meta = chunks[0].get("metadata", {})
                 file_name = first_meta.get("source_file", knowledge_id)
+                title = first_meta.get("title", file_name)
                 summary = first_meta.get("summary", "")
                 cat = first_meta.get("document_type")
                 if cat:
@@ -938,6 +955,7 @@ async def get_approved_document_details(knowledge_id: str):
         return ApprovedDocumentResponse(
             knowledge_id=knowledge_id,
             file_name=file_name,
+            title=title,
             status="Approved",
             summary=summary,
             categories=categories,
@@ -973,8 +991,8 @@ async def edit_approved_document(
 
         updated_summary = request.summary if request.summary is not None else existing_doc.get("summary", "")
         updated_categories = request.categories if (request.categories is not None and len(request.categories) > 0) else existing_doc.get("categories", [])
+        updated_title = request.title if request.title is not None else existing_doc.get("file_name", knowledge_id)
         updated_chunks = existing_doc.get("chunks", [])
-        file_name = existing_doc.get("file_name", knowledge_id)
 
         primary_cat = updated_categories[0] if updated_categories else None
         for chunk in updated_chunks:
@@ -982,6 +1000,7 @@ async def edit_approved_document(
                 if "metadata" not in chunk:
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = knowledge_id
+                chunk["metadata"]["source_file"] = updated_title
                 if primary_cat:
                     chunk["metadata"]["document_type"] = primary_cat
                 if updated_categories:
@@ -991,7 +1010,8 @@ async def edit_approved_document(
 
         approved_doc_structure = {
             "knowledge_id": knowledge_id,
-            "file_name": file_name,
+            "file_name": existing_doc.get("file_name", ""),
+            "title": updated_title,
             "status": "Approved",
             "summary": updated_summary,
             "categories": updated_categories,
@@ -1015,7 +1035,7 @@ async def edit_approved_document(
         if target_store and hasattr(target_store, "upsert_knowledge_category"):
             target_store.upsert_knowledge_category(
                 knowledge_id=knowledge_id,
-                file_name=file_name,
+                file_name=updated_title,
                 categories=updated_categories,
                 summary=updated_summary
             )
@@ -1046,6 +1066,7 @@ async def edit_pending_document(
 
         updated_summary = request.summary if request.summary is not None else existing_doc.get("summary", "")
         updated_categories = request.categories if (request.categories is not None and len(request.categories) > 0) else existing_doc.get("suggested_categories", [])
+        updated_title = request.title if request.title is not None else existing_doc.get("file_name", existing_doc.get("title", knowledge_id))
 
         # Normalize suggested_categories to list of dicts for pending json
         normalized_categories = []
@@ -1056,6 +1077,7 @@ async def edit_pending_document(
                 normalized_categories = updated_categories
                 
         existing_doc["summary"] = updated_summary
+        existing_doc["title"] = updated_title
         if updated_categories is not None and len(updated_categories) > 0:
             existing_doc["suggested_categories"] = normalized_categories
             
@@ -1252,13 +1274,14 @@ async def approve_document(
             chunks = data.get("chunks", []) if isinstance(data, dict) else data
             k_id = data.get("knowledge_id", target_id) if isinstance(data, dict) else target_id
             file_name = data.get("file_name", target_id) if isinstance(data, dict) else target_id
+            doc_title = data.get("title", file_name) if isinstance(data, dict) else file_name
             
             for chunk in chunks:
                 if isinstance(chunk, dict):
                     if "metadata" not in chunk:
                         chunk["metadata"] = {}
                     chunk["metadata"]["knowledge_id"] = k_id
-                    chunk["metadata"]["source_file"] = file_name
+                    chunk["metadata"]["source_file"] = doc_title
                     
                     # Ensure categories are preserved
                     cats = data.get("suggested_categories", data.get("categories", []))
@@ -1299,6 +1322,7 @@ async def approve_document(
             approved_doc_structure = {
                 "knowledge_id": k_id,
                 "file_name": file_name,
+                "title": doc_title,
                 "type": data.get("type", "Product") if isinstance(data, dict) else "Product",
                 "document_type": data.get("document_type", "product") if isinstance(data, dict) else "product",
                 "status": "Approved",
