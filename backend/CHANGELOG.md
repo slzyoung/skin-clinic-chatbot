@@ -112,6 +112,9 @@ backend/app/rag/
 | **LLM Adapter** | Generic ChatOpenAI | **OpenAIAdapter** (`gpt-4o-mini`) with ground-rule prompt & citation mapping `[1]`, `[2]` |
 | **Document Review** | Direct DB insert | **HITL Staging Workflow**: AI auto-review, accuracy grading, & interactive prompt refinement |
 | **Chat Generation** | REST POST + 3-sec polling | **Real-time SSE Streaming**: Async native fetch & instant token rendering |
+| **Access Control (ABAC)** | Static/Unfiltered vector search | **Dynamic Visibility Filtering**: Branch/Role-based exclusions built into PGVector search |
+| **Ingestion Pipeline** | Single file tracking | **Multi-File Batch Sync**: Returns `batch_id` & explicit parsed `title`s (not just filename) |
+| **Prompt Engineering** | Unstructured prompts | **XML Structured Prompts**: With native tool calling & strict LLM adherence |
 | **Table Existence Check** | `:tablename::regclass` (Emits SQL `UndefinedObjectError`) | **`to_regclass(:tablename)`**: Evaluates to `NULL` without PostgreSQL error logs |
 
 
