@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, 
 from fastapi.responses import StreamingResponse
 from fastapi.sse import EventSourceResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, update
 from typing import List, Optional
 import uuid
 try:
@@ -15,15 +15,64 @@ from app.models.branch import Branch
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
-from app.models.user import User, UserType
-from app.models.chat import ChatSession, ChatMessage
+from app.models.user import User, UserType, UserTokenUsage
+from app.models.chat import ChatSession, ChatMessage, ChatStatus
 from app.schemas.chat import (
     ChatSessionCreate, ChatSessionUpdate, ChatSessionResponse,
     ChatHistoryResponse, ChatMessageCreate, ChatMessageResponse
 )
 from app.models.config import AppConfig
+from datetime import datetime, timezone, timedelta
 
 router = APIRouter(tags=["Chats"])
+
+async def summarize_chat_session(session_id: uuid.UUID):
+    """Background task to generate a summary for a closed chat session."""
+    try:
+        from app.rag.services.factory import AdapterFactory
+    except ImportError as e:
+        logger.error(f"Cannot summarize, AI dependencies missing: {e}")
+        return
+
+    async with AsyncSessionLocal() as db:
+        try:
+            # Check if session exists and has no summary
+            stmt_session = select(ChatSession).where(ChatSession.id == session_id)
+            result_session = await db.execute(stmt_session)
+            chat_session = result_session.scalar_one_or_none()
+            
+            if not chat_session or chat_session.summary or chat_session.status != ChatStatus.CLOSED:
+                return
+
+            # Fetch messages
+            stmt_msg = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+            result_msg = await db.execute(stmt_msg)
+            messages = result_msg.scalars().all()
+            
+            if not messages:
+                return
+                
+            transcript = ""
+            for msg in messages:
+                role = "Doctor" if msg.role.value == "USER" else "Assistant"
+                transcript += f"{role}: {msg.content}\n\n"
+                
+            prompt = (
+                "You are an AI summarizing a medical support chat. "
+                "Provide a brief, 1-2 sentence summary of the main topic and resolution of the following conversation.\n\n"
+                f"Transcript:\n{transcript}\n\nSummary:"
+            )
+            
+            llm_adapter = await AdapterFactory.get_dynamic_llm(db)
+            summary = llm_adapter.generate(prompt)
+            
+            chat_session.summary = summary.strip()
+            db.add(chat_session)
+            await db.commit()
+            logger.info(f"Successfully generated summary for session {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to summarize chat session {session_id}: {e}")
 
 async def process_ai_response(session_id: uuid.UUID, user_query: str):
     """
@@ -102,6 +151,8 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
         "summary": session.summary,
         "rating": session.rating,
         "feedback": session.feedback,
+        "has_data_issue": session.has_data_issue,
+        "is_feedback_read": session.is_feedback_read,
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "query": "",
@@ -132,6 +183,52 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
     
     return session_dict
 
+@router.get("/feedback", response_model=List[ChatHistoryResponse])
+async def list_chat_feedbacks(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Enforce access - usually only staff/admin should see this
+    if not await has_chats_read_access(current_user, db):
+        raise HTTPException(status_code=403, detail="Not authorized to view feedbacks")
+        
+    stmt = select(ChatSession).where(
+        or_(
+            ChatSession.feedback.is_not(None),
+            ChatSession.has_data_issue == True
+        )
+    ).order_by(ChatSession.updated_at.desc())
+    
+    result = await db.execute(stmt)
+    sessions = result.scalars().all()
+    
+    return [await _hydrate_chat_session(s, db) for s in sessions]
+
+from pydantic import BaseModel
+class MarkFeedbackReadRequest(BaseModel):
+    session_ids: List[uuid.UUID]
+
+@router.put("/feedback/read", status_code=status.HTTP_200_OK)
+async def mark_feedback_read(
+    req: MarkFeedbackReadRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not await has_chats_read_access(current_user, db):
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    if not req.session_ids:
+        return {"status": "ok", "marked": 0}
+        
+    stmt = (
+        update(ChatSession)
+        .where(ChatSession.id.in_(req.session_ids))
+        .values(is_feedback_read=True)
+    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"status": "ok", "marked": result.rowcount}
+
 @router.get("/", response_model=List[ChatHistoryResponse])
 async def list_chat_sessions(
     db: AsyncSession = Depends(get_db),
@@ -148,12 +245,63 @@ async def list_chat_sessions(
 @router.post("/", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_chat_session(
     session_in: ChatSessionCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    branch_id = session_in.branch_id
+    
+    if session_in.cis_branch_id:
+        stmt = select(Branch.id).where(Branch.external_id == session_in.cis_branch_id)
+        result = await db.execute(stmt)
+        resolved_id = result.scalar_one_or_none()
+        if not resolved_id:
+            raise HTTPException(status_code=404, detail=f"Branch with external CIS ID '{session_in.cis_branch_id}' not found")
+        branch_id = resolved_id
+        
+    if not branch_id:
+        raise HTTPException(status_code=400, detail="Either branch_id or cis_branch_id must be provided")
+
+    # Fetch configured time limit
+    stmt_config = select(AppConfig.value).where(AppConfig.key == "TIME_LIMIT_PER_SESSION")
+    result_config = await db.execute(stmt_config)
+    time_limit_str = result_config.scalar_one_or_none()
+    try:
+        time_limit_minutes = int(time_limit_str) if time_limit_str else 5
+    except ValueError:
+        time_limit_minutes = 5
+
+    # Look for existing active session
+    stmt_active = select(ChatSession).where(
+        ChatSession.user_id == current_user.id,
+        ChatSession.branch_id == branch_id,
+        ChatSession.status == ChatStatus.ACTIVE
+    ).order_by(ChatSession.updated_at.desc())
+    result_active = await db.execute(stmt_active)
+    active_sessions = result_active.scalars().all()
+
+    valid_session = None
+    now = datetime.now(timezone.utc)
+
+    for sess in active_sessions:
+        session_updated_at = sess.updated_at.replace(tzinfo=timezone.utc) if sess.updated_at.tzinfo is None else sess.updated_at
+        
+        # If we haven't found a valid session yet, and this one is not expired, keep it
+        if not valid_session and (now - session_updated_at <= timedelta(minutes=time_limit_minutes)):
+            valid_session = sess
+        else:
+            # Otherwise, close it (it's either expired, or a duplicate older active session)
+            sess.status = ChatStatus.CLOSED
+            db.add(sess)
+            background_tasks.add_task(summarize_chat_session, sess.id)
+
+    if valid_session:
+        await db.commit()
+        return valid_session
+
     session = ChatSession(
         user_id=current_user.id,
-        branch_id=session_in.branch_id
+        branch_id=branch_id
     )
     db.add(session)
     await db.commit()
@@ -164,6 +312,7 @@ async def create_chat_session(
 async def update_chat_session(
     session_id: uuid.UUID,
     session_in: ChatSessionUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -178,11 +327,24 @@ async def update_chat_session(
         raise HTTPException(status_code=404, detail="Chat session not found")
         
     update_data = session_in.model_dump(exclude_unset=True)
+    status_changed_to_closed = False
+    
     for field, value in update_data.items():
+        if field == "status" and value == ChatStatus.CLOSED and session.status != ChatStatus.CLOSED:
+            status_changed_to_closed = True
         setattr(session, field, value)
         
     await db.commit()
     await db.refresh(session)
+    
+    if status_changed_to_closed:
+        background_tasks.add_task(summarize_chat_session, session.id)
+        
+    # Broadcast event if feedback was provided
+    if session_in.feedback:
+        from app.core.broadcaster import broadcaster
+        await broadcaster.publish("feedback_submitted")
+        
     return session
 
 @router.get("/{session_id}/messages", response_model=List[ChatMessageResponse])
@@ -222,6 +384,7 @@ ALLOWED_MIME_TYPES = {
 @router.post("/{session_id}/messages", status_code=status.HTTP_201_CREATED)
 async def create_chat_message(
     session_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     role: str = Form(...),
     content: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
@@ -234,8 +397,32 @@ async def create_chat_message(
         stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
     
     result_session = await db.execute(stmt_session)
-    if not result_session.scalar_one_or_none():
+    chat_session = result_session.scalar_one_or_none()
+    if not chat_session:
         raise HTTPException(status_code=404, detail="Chat session not found")
+        
+    if chat_session.status == ChatStatus.CLOSED:
+        raise HTTPException(status_code=403, detail="Chat session is closed")
+
+    # Enforce time limit
+    stmt_config = select(AppConfig.value).where(AppConfig.key == "TIME_LIMIT_PER_SESSION")
+    result_config = await db.execute(stmt_config)
+    time_limit_str = result_config.scalar_one_or_none()
+    time_limit_minutes = int(time_limit_str) if time_limit_str and time_limit_str.isdigit() else 5
+
+    now = datetime.now(timezone.utc)
+    session_updated_at = chat_session.updated_at.replace(tzinfo=timezone.utc) if chat_session.updated_at.tzinfo is None else chat_session.updated_at
+    
+    if now - session_updated_at > timedelta(minutes=time_limit_minutes):
+        chat_session.status = ChatStatus.CLOSED
+        db.add(chat_session)
+        await db.commit()
+        background_tasks.add_task(summarize_chat_session, chat_session.id)
+        raise HTTPException(status_code=403, detail="Session expired")
+
+    # Update session activity
+    chat_session.updated_at = now
+    db.add(chat_session)
         
     attachments = None
     if files:
@@ -322,6 +509,29 @@ async def create_chat_message(
                     content=ai_response_text
                 )
                 session.add(ai_msg)
+                
+                # Update Token Usage
+                if current_user.token_limit is not None:
+                    estimated_tokens = int(len(ai_response_text) * 1.3)
+                    now_ym = datetime.now(timezone.utc).strftime("%Y-%m")
+                    
+                    stmt_usage = select(UserTokenUsage).where(
+                        UserTokenUsage.user_id == current_user.id,
+                        UserTokenUsage.year_month == now_ym
+                    )
+                    result_usage = await session.execute(stmt_usage)
+                    usage_record = result_usage.scalar_one_or_none()
+                    
+                    if usage_record:
+                        usage_record.tokens_used += estimated_tokens
+                    else:
+                        usage_record = UserTokenUsage(
+                            user_id=current_user.id,
+                            year_month=now_ym,
+                            tokens_used=estimated_tokens
+                        )
+                        session.add(usage_record)
+                
                 await session.commit()
                 
             except Exception as e:
@@ -336,10 +546,11 @@ async def create_chat_message(
                 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
-@router.post("/{session_id}/messages/stream", status_code=status.HTTP_201_CREATED)
-async def create_chat_message_stream(
+@router.post("/{session_id}/messages/stream")
+async def stream_chat_message(
     session_id: uuid.UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     role: str = Form(...),
     content: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
@@ -352,8 +563,32 @@ async def create_chat_message_stream(
         stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
     
     result_session = await db.execute(stmt_session)
-    if not result_session.scalar_one_or_none():
+    chat_session = result_session.scalar_one_or_none()
+    if not chat_session:
         raise HTTPException(status_code=404, detail="Chat session not found")
+        
+    if chat_session.status == ChatStatus.CLOSED:
+        raise HTTPException(status_code=403, detail="Chat session is closed")
+
+    # Enforce time limit
+    stmt_config = select(AppConfig.value).where(AppConfig.key == "TIME_LIMIT_PER_SESSION")
+    result_config = await db.execute(stmt_config)
+    time_limit_str = result_config.scalar_one_or_none()
+    time_limit_minutes = int(time_limit_str) if time_limit_str and time_limit_str.isdigit() else 5
+
+    now = datetime.now(timezone.utc)
+    session_updated_at = chat_session.updated_at.replace(tzinfo=timezone.utc) if chat_session.updated_at.tzinfo is None else chat_session.updated_at
+    
+    if now - session_updated_at > timedelta(minutes=time_limit_minutes):
+        chat_session.status = ChatStatus.CLOSED
+        db.add(chat_session)
+        await db.commit()
+        background_tasks.add_task(summarize_chat_session, chat_session.id)
+        raise HTTPException(status_code=403, detail="Session expired")
+
+    # Update session activity
+    chat_session.updated_at = now
+    db.add(chat_session)
         
     attachments = None
     if files:
@@ -377,6 +612,20 @@ async def create_chat_message_stream(
         from fastapi.encoders import jsonable_encoder
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=status.HTTP_201_CREATED, content=jsonable_encoder(message))
+
+    # Token pre-check
+    if current_user.token_limit is not None:
+        now_ym = datetime.now(timezone.utc).strftime("%Y-%m")
+        stmt_usage = select(UserTokenUsage).where(
+            UserTokenUsage.user_id == current_user.id,
+            UserTokenUsage.year_month == now_ym
+        )
+        result_usage = await db.execute(stmt_usage)
+        usage = result_usage.scalar_one_or_none()
+        
+        tokens_used = usage.tokens_used if usage else 0
+        if tokens_used >= current_user.token_limit:
+            raise HTTPException(status_code=403, detail="Token limit exceeded for this month")
 
     async def sse_generator():
         try:
