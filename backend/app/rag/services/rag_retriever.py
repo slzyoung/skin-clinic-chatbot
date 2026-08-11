@@ -230,10 +230,14 @@ class Reranker:
             
             scores = self.model.predict(pairs, batch_size=32, show_progress_bar=False)
             
+            import math
             reranked_hits = []
-            for hit, score in zip(hits, scores):
+            for hit, raw_score in zip(hits, scores):
                 updated_hit = hit.copy()
-                updated_hit["rerank_score"] = float(score)
+                val = float(raw_score)
+                # Normalize raw Cross-Encoder logit to [0, 1] probability range via Sigmoid
+                norm_score = 1.0 / (1.0 + math.exp(-val)) if -700 <= val <= 700 else (1.0 if val > 700 else 0.0)
+                updated_hit["rerank_score"] = norm_score
                 reranked_hits.append(updated_hit)
                 
             sorted_hits = sorted(reranked_hits, key=lambda h: h["rerank_score"], reverse=True)
