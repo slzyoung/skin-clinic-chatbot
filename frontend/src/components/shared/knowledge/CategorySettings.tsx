@@ -9,6 +9,7 @@ interface CategorySettingsProps {
 	categories: string[];
 	onChangeCategories: (newCategories: string[]) => void;
 	isEditMode?: boolean;
+	showSaveActions?: boolean;
 	onSave?: () => void;
 	onCancel?: () => void;
 }
@@ -17,13 +18,14 @@ export function CategorySettings({
 	categories,
 	onChangeCategories,
 	isEditMode = false,
+	showSaveActions = true,
 	onSave,
 	onCancel,
 }: CategorySettingsProps) {
 	const { data: allCategories = [] } = useCategories();
 	const [inputValue, setInputValue] = useState("");
 	const [open, setOpen] = useState(false);
-	const [isEditing, setIsEditing] = useState(true);
+	const [isEditing, setIsEditing] = useState(isEditMode);
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const [prevIsEditMode, setPrevIsEditMode] = useState(isEditMode);
@@ -53,7 +55,7 @@ export function CategorySettings({
 	};
 
 	return (
-		<div className="bg-zinc-100/50 rounded-lg p-4 border border-zinc-200 w-full text-zinc-950">
+		<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950">
 			<div className="flex items-center gap-2 text-blue-600 mb-2">
 				<RiSparklingLine className="size-5" />
 				<h3 className="font-semibold text-sm">Suggested Categories</h3>
@@ -137,7 +139,7 @@ export function CategorySettings({
 				</Button>
 			)}
 
-			{isEditing && (
+			{isEditing && showSaveActions && (
 				<div className="mt-6 flex flex-col gap-3">
 					<p className="text-sm text-zinc-600 font-medium">Are these categories accurate?</p>
 					<div className="flex items-center gap-2">

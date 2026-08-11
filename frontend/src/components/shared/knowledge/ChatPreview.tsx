@@ -23,33 +23,48 @@ import {
 	RiCloseLine,
 	RiCornerDownLeftLine,
 	RiFilePdf2Line,
+	RiFileWord2Line,
+	RiFileExcel2Line,
+	RiImage2Line,
 	RiFileTextLine,
 	RiLoader4Line,
 	RiRobot2Line,
 	RiUser3Line,
 } from "@remixicon/react";
 import { useQueryClient } from "@tanstack/react-query";
-import React, { useRef, useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 import { VisibilitySettings as VisibilitySettingsUI } from "./VisibilitySettings";
-import { VisibilitySettings as IVisibilitySettings } from "@/app/dashboard/knowledge/api/types";
+import {
+	VisibilitySettings as IVisibilitySettings,
+	KnowledgeResponse,
+} from "@/app/dashboard/knowledge/api/types";
 import { CategorySettings } from "./CategorySettings";
+import { ClassificationSidebar } from "./ClassificationSidebar";
+import { TitleSettings } from "./TitleSettings";
 
 interface ChatPreviewProps {
 	knowledgeId?: string;
+	knowledge?: KnowledgeResponse;
 	knowledgeStatus?: string;
 	aiSummary?: string | null;
 	fileName?: string | null;
+	files?: { file_name: string; summary: string; [key: string]: unknown }[];
 	isDetailLoading?: boolean;
 	isEditMode?: boolean;
 	categories?: string[];
 	onChangeCategories?: (newCategories: string[]) => void;
 	visibilitySettings?: IVisibilitySettings;
 	onChangeVisibilitySettings?: (settings: IVisibilitySettings) => void;
-	onSave?: () => void;
+	title?: string;
+	onChangeTitle?: (title: string) => void;
+	onSave?: (newTitle?: string) => void;
 	onCancel?: () => void;
+	headerNode?: React.ReactNode;
+	preHeaderNode?: React.ReactNode;
 }
 
 interface Message {
@@ -60,19 +75,25 @@ interface Message {
 
 export function ChatPreview({
 	knowledgeId,
+	knowledge,
 	knowledgeStatus,
 	aiSummary,
 	fileName,
+	files = [],
 	isDetailLoading = false,
 	isEditMode = false,
 	categories = [],
 	onChangeCategories,
 	visibilitySettings,
 	onChangeVisibilitySettings,
+	title,
+	onChangeTitle,
 	onSave,
 	onCancel,
+	headerNode,
+	preHeaderNode,
 }: ChatPreviewProps) {
-	const STORAGE_KEY = `chat_preview_${knowledgeId || 'default'}`;
+	const STORAGE_KEY = `chat_preview_${knowledgeId || "default"}`;
 
 	const [userChatMessages, setUserChatMessages] = useState<Message[]>(() => {
 		if (typeof window !== "undefined") {
@@ -88,9 +109,39 @@ export function ChatPreview({
 		return [];
 	});
 
+	const getFileIconAndColor = (filename?: string | null) => {
+		if (!filename)
+			return { Icon: RiFileTextLine, bgColor: "bg-blue-50", textColor: "text-blue-600" };
+		const ext = filename.split(".").pop()?.toLowerCase() || "";
+		switch (ext) {
+			case "pdf":
+				return { Icon: RiFilePdf2Line, bgColor: "bg-red-50", textColor: "text-red-600" };
+			case "doc":
+			case "docx":
+				return { Icon: RiFileWord2Line, bgColor: "bg-blue-50", textColor: "text-blue-600" };
+			case "xls":
+			case "xlsx":
+			case "csv":
+				return { Icon: RiFileExcel2Line, bgColor: "bg-emerald-50", textColor: "text-emerald-600" };
+			case "png":
+			case "jpg":
+			case "jpeg":
+			case "gif":
+				return { Icon: RiImage2Line, bgColor: "bg-purple-50", textColor: "text-purple-600" };
+			case "txt":
+			default:
+				return { Icon: RiFileTextLine, bgColor: "bg-blue-50", textColor: "text-blue-600" };
+		}
+	};
+
 	const [input, setInput] = useState("");
 	const [attachedFile, setAttachedFile] = useState<File | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
+	const [activeTab, setActiveTab] = useState<string | null>(null);
+
+	const currentTab =
+		activeTab || (files && files.length > 0 ? (files[0].file_name as string) : null);
+
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const queryClient = useQueryClient();
 
@@ -119,14 +170,19 @@ export function ChatPreview({
 	}
 
 	const renderCategoriesBlock = (standalone = false) => {
-		const shouldShow = knowledgeStatus !== "PROCESSING" && (categories.length > 0 || (isEditMode && knowledgeStatus === "APPROVED") || knowledgeStatus === "PENDING");
-		
+		const shouldShow =
+			knowledgeStatus !== "PROCESSING" &&
+			(categories.length > 0 ||
+				(isEditMode && knowledgeStatus === "APPROVED") ||
+				knowledgeStatus === "PENDING");
+
 		const content = (
-			<div className={`flex flex-col gap-4 w-full mt-6 mb-8 ${!shouldShow ? 'hidden' : ''}`}>
-				<CategorySettings 
+			<div className={`flex flex-col gap-4 w-full mt-4 ${!shouldShow ? "hidden" : ""}`}>
+				<CategorySettings
 					categories={categories}
 					onChangeCategories={(c) => onChangeCategories?.(c)}
 					isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+					showSaveActions={isEditMode}
 					onSave={onSave}
 					onCancel={onCancel}
 				/>
@@ -135,14 +191,61 @@ export function ChatPreview({
 						settings={visibilitySettings}
 						onChange={onChangeVisibilitySettings}
 						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+						showSaveActions={isEditMode}
 						onSave={onSave}
 						onCancel={onCancel}
 					/>
 				)}
+
+				{knowledge && (
+					<ClassificationSidebar
+						knowledge={knowledge}
+						pendingCategories={categories}
+						pendingVisibilitySettings={visibilitySettings}
+						pendingTitle={title}
+					/>
+				)}
+				{files && files.length > 0 && (
+					<div className="mt-8 border rounded-lg overflow-hidden bg-zinc-50 border-zinc-200">
+						<div className="flex border-b border-zinc-200 bg-white overflow-x-auto scrollbar-hide">
+							{files.map((f, i) => (
+								<button
+									key={i}
+									onClick={() => setActiveTab(f.file_name as string)}
+									className={`px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors ${
+										currentTab === f.file_name
+											? "border-b-2 border-blue-600 text-blue-700 bg-blue-50/50"
+											: "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-50"
+									}`}
+								>
+									<RiFileTextLine className="inline-block w-4 h-4 mr-2 align-text-bottom" />
+									{f.file_name as string}
+								</button>
+							))}
+						</div>
+						<div className="p-5 max-h-100 overflow-y-auto prose prose-sm max-w-none text-zinc-700">
+							{files.find((f) => f.file_name === currentTab) ? (
+								<div>
+									<h4 className="text-zinc-900 font-semibold mb-3">Individual Summary</h4>
+									<ReactMarkdown remarkPlugins={[remarkGfm]}>
+										{(files.find((f) => f.file_name === currentTab)?.summary as string) ||
+											"No summary available."}
+									</ReactMarkdown>
+								</div>
+							) : (
+								<p className="text-zinc-500 italic">Select a document to view its details.</p>
+							)}
+						</div>
+					</div>
+				)}
 			</div>
 		);
 
-		return standalone ? <MessageScrollerItem key="categories-block">{content}</MessageScrollerItem> : content;
+		return standalone ? (
+			<MessageScrollerItem key="categories-block">{content}</MessageScrollerItem>
+		) : (
+			content
+		);
 	};
 
 	// handleAddCategory and availableCategories are now handled in CategorySettings,
@@ -170,9 +273,12 @@ export function ChatPreview({
 		setIsLoading(true);
 
 		try {
-			if ((knowledgeStatus === "PENDING" || (knowledgeStatus === "APPROVED" && isEditMode)) && knowledgeId) {
+			if (
+				(knowledgeStatus === "PENDING" || (knowledgeStatus === "APPROVED" && isEditMode)) &&
+				knowledgeId
+			) {
 				const endpoint = `/knowledge/${knowledgeId}/refine`;
-					
+
 				const response = await api.post(endpoint, {
 					prompt: userMsg.content,
 					history: [...messages, userMsg],
@@ -184,6 +290,8 @@ export function ChatPreview({
 
 				if (knowledgeId) {
 					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(knowledgeId) });
+					queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+					queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 				}
 			} else {
 				const response = await api.post("/knowledge/chat", {
@@ -204,7 +312,11 @@ export function ChatPreview({
 		}
 	};
 
-	const isInputDisabled = knowledgeStatus === "PROCESSING" || isLoading || isDetailLoading || (knowledgeStatus === "APPROVED" && !isEditMode);
+	const isInputDisabled =
+		knowledgeStatus === "PROCESSING" ||
+		isLoading ||
+		isDetailLoading ||
+		(knowledgeStatus === "APPROVED" && !isEditMode);
 
 	return (
 		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
@@ -229,37 +341,53 @@ export function ChatPreview({
 							)}
 
 							{!isDetailLoading && messages.length === 0 && knowledgeStatus !== "PROCESSING" && (
-								<div className="flex flex-col items-center justify-center text-zinc-500 h-full pt-20">
-									<RiRobot2Line className="size-10 mb-4 text-zinc-300" />
-									<p>Ask anything about this document...</p>
-								</div>
+								<MessageScrollerItem>
+									<div className="flex items-start gap-3 w-full">
+										<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+											<RiRobot2Line className="size-4" />
+										</div>
+										<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full border border-blue-100 flex flex-col gap-3">
+											{headerNode}
+											<p className="text-zinc-500 italic">No summary available.</p>
+										</div>
+									</div>
+								</MessageScrollerItem>
 							)}
 
 							{!isDetailLoading && knowledgeStatus === "PROCESSING" && messages.length === 0 && (
 								<MessageScrollerItem>
 									<div className="flex flex-col w-full items-start">
 										{/* Attached Document Badge OUTSIDE & ABOVE bubble */}
-										{fileName && (
-											<Attachment className="bg-white border-border shadow-sm p-1.5 w-fit min-w-40 max-w-sm mb-2">
-												<AttachmentMedia className="bg-blue-50 text-blue-600 shrink-0">
-													<RiFilePdf2Line className="size-5" />
-												</AttachmentMedia>
-												<AttachmentContent className="overflow-hidden">
-													<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate">
-														{fileName}
-													</AttachmentTitle>
-													<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
-														DOCUMENT
-													</AttachmentDescription>
-												</AttachmentContent>
-											</Attachment>
-										)}
+										{fileName &&
+											(() => {
+												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
+												return (
+													<div className="flex flex-col gap-2 mb-4 self-end">
+														<Attachment className="bg-white border border-zinc-200 shadow-none p-1.5 w-fit min-w-40 max-w-sm rounded-lg">
+															<AttachmentMedia
+																className={`${bgColor} ${textColor} shrink-0 rounded-lg p-2`}
+															>
+																<Icon className="size-5" />
+															</AttachmentMedia>
+															<AttachmentContent className="overflow-hidden min-w-0 pr-2">
+																<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
+																	{fileName}
+																</AttachmentTitle>
+																<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+																	DOCUMENT
+																</AttachmentDescription>
+															</AttachmentContent>
+														</Attachment>
+													</div>
+												);
+											})()}
 
 										<div className="flex items-start gap-3 w-full">
 											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
 												<RiRobot2Line className="size-4" />
 											</div>
 											<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full border border-blue-100 flex flex-col gap-3">
+												{headerNode}
 												<div className="flex items-center gap-2">
 													<span className="relative flex h-3 w-3">
 														<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -301,40 +429,78 @@ export function ChatPreview({
 
 							{messages.length > 0 && (
 								<MessageScrollerItem key="msg-0" scrollAnchor={messages.length === 1 && !isLoading}>
-									<div className={`flex flex-col w-full ${messages[0].role === "user" ? "items-end" : "items-start"}`}>
-										{fileName && messages[0].role === "assistant" && (
-											<div className="flex flex-col gap-2 mb-2">
-												<Attachment className="bg-white border-border shadow-sm p-1.5 w-fit min-w-40 max-w-sm">
-													<AttachmentMedia className="bg-blue-50 text-blue-600 shrink-0">
-														<RiFilePdf2Line className="size-5" />
-													</AttachmentMedia>
-													<AttachmentContent className="overflow-hidden">
-														<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate">
-															{fileName}
-														</AttachmentTitle>
-														<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
-															DOCUMENT
-														</AttachmentDescription>
-													</AttachmentContent>
-												</Attachment>
+									<div
+										className={`flex flex-col w-full ${messages[0].role === "user" ? "items-end" : "items-start"}`}
+									>
+										{title !== undefined && onChangeTitle && messages[0].role === "assistant" && (
+											<div className="flex justify-center w-full mb-4">
+												<div className="w-fit max-w-lg">
+													<TitleSettings
+														title={title}
+														onChangeTitle={onChangeTitle}
+														onSave={onSave}
+													/>
+												</div>
 											</div>
 										)}
+										{fileName &&
+											messages[0].role === "assistant" &&
+											(() => {
+												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
+												return (
+													<div className="flex flex-col gap-2 mb-4 self-end">
+														<Attachment className="bg-white border border-zinc-200 shadow-none p-1.5 w-fit min-w-40 max-w-sm rounded-lg">
+															<AttachmentMedia
+																className={`${bgColor} ${textColor} shrink-0 rounded-lg p-2`}
+															>
+																<Icon className="size-5" />
+															</AttachmentMedia>
+															<AttachmentContent className="overflow-hidden min-w-0 pr-2">
+																<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
+																	{fileName}
+																</AttachmentTitle>
+																<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+																	DOCUMENT
+																</AttachmentDescription>
+															</AttachmentContent>
+														</Attachment>
+													</div>
+												);
+											})()}
 										{messages[0].attachmentName && (
-											<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
+											<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-none">
 												<RiFileTextLine className="size-3.5 text-blue-600 shrink-0" />
 												<span className="truncate max-w-xs">{messages[0].attachmentName}</span>
 											</div>
 										)}
-										<div className={`flex items-start gap-3 w-full ${messages[0].role === "user" ? "flex-row-reverse" : ""}`}>
+										{preHeaderNode}
+										<div
+											className={`flex items-start gap-3 w-full ${messages[0].role === "user" ? "flex-row-reverse" : ""}`}
+										>
 											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-												{messages[0].role === "user" ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
+												{messages[0].role === "user" ? (
+													<RiUser3Line className="size-4" />
+												) : (
+													<RiRobot2Line className="size-4" />
+												)}
 											</div>
-											<div className={`${messages[0].role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}>
-												{messages[0].role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{messages[0].content}</ReactMarkdown> : messages[0].content}
+											<div
+												className={`${messages[0].role === "user" ? "bg-blue-500 text-white" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
+											>
+												{messages[0].role === "assistant" ? (
+													<>
+														{headerNode}
+														<ReactMarkdown remarkPlugins={[remarkGfm]}>
+															{messages[0].content}
+														</ReactMarkdown>
+													</>
+												) : (
+													messages[0].content
+												)}
+												{/* Inject Categories below initial summary if it's the latest assistant message */}
+												{0 === lastAssistantIndex && renderCategoriesBlock()}
 											</div>
 										</div>
-										{/* Inject Categories below initial summary if it's the latest assistant message */}
-										{0 === lastAssistantIndex && renderCategoriesBlock()}
 									</div>
 								</MessageScrollerItem>
 							)}
@@ -346,26 +512,43 @@ export function ChatPreview({
 							{messages.slice(1).map((msg, sliceIndex) => {
 								const actualIndex = sliceIndex + 1;
 								return (
-									<MessageScrollerItem key={`msg-${actualIndex}`} scrollAnchor={actualIndex === messages.length - 1 && !isLoading}>
-										<div className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}>
+									<MessageScrollerItem
+										key={`msg-${actualIndex}`}
+										scrollAnchor={actualIndex === messages.length - 1 && !isLoading}
+									>
+										<div
+											className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}
+										>
 											{msg.attachmentName && (
-												<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-2xs">
+												<div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 w-fit mb-2 shadow-none">
 													<RiFileTextLine className="size-3.5 text-blue-600 shrink-0" />
 													<span className="truncate max-w-xs">{msg.attachmentName}</span>
 												</div>
 											)}
-											<div className={`flex items-start gap-3 w-full ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+											<div
+												className={`flex items-start gap-3 w-full ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+											>
 												<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-													{msg.role === "user" ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
+													{msg.role === "user" ? (
+														<RiUser3Line className="size-4" />
+													) : (
+														<RiRobot2Line className="size-4" />
+													)}
 												</div>
-											<div className={`${msg.role === "user" ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}>
-												{msg.role === "assistant" ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown> : msg.content}
+												<div
+													className={`${msg.role === "user" ? "bg-blue-500 text-white" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
+												>
+													{msg.role === "assistant" ? (
+														<ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+													) : (
+														msg.content
+													)}
+													{/* Inject Categories below this AI message if it's the latest assistant message */}
+													{actualIndex === lastAssistantIndex && renderCategoriesBlock()}
+												</div>
 											</div>
 										</div>
-										{/* Inject Categories below this AI message if it's the latest assistant message */}
-										{actualIndex === lastAssistantIndex && renderCategoriesBlock()}
-									</div>
-								</MessageScrollerItem>
+									</MessageScrollerItem>
 								);
 							})}
 
@@ -413,8 +596,8 @@ export function ChatPreview({
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
 								: knowledgeStatus === "APPROVED" && !isEditMode
-								? "Click 'Edit Knowledge' to refine summary..."
-								: "Ask questions or request adjustments..."
+									? "Click 'Edit Knowledge' to refine summary..."
+									: "Ask questions or request adjustments..."
 						}
 						disabled={isInputDisabled}
 						className="w-full bg-transparent border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-gray-700 placeholder:text-gray-500"

@@ -321,7 +321,7 @@ class GenerationPipeline:
         context = retrieval_response.get("context", "")
 
         # Send initial context metadata block so frontend knows sources immediately
-        yield json.dumps({"type": "context", "results": results}) + "\n"
+        yield json.dumps({"type": "context", "results": results})
 
         is_context_empty = (
             not results 

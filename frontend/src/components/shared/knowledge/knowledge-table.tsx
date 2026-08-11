@@ -28,6 +28,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useKnowledgeBaseList } from "../../../app/dashboard/knowledge/hooks/use-knowledge";
+import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
 
 export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const router = useRouter();
@@ -37,6 +38,14 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const { data: knowledgeList, isLoading, isError } = useKnowledgeBaseList();
 
 	const basePath = "/dashboard/knowledge";
+
+	const handleRowClick = (row: KnowledgeResponse) => {
+		if (row.metadata?.upload_batch_id) {
+			router.push(`${basePath}/batch/${row.metadata.upload_batch_id}`);
+		} else {
+			router.push(`${basePath}/${row.id}`);
+		}
+	};
 
 	const filteredList = knowledgeList
 		?.filter((item) => (type ? item.type === type : true))
@@ -206,7 +215,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 								<TableRow
 									key={row.id}
 									className="hover:bg-gray-50/60 cursor-pointer"
-									onClick={() => router.push(`${basePath}/${row.id}`)}
+									onClick={() => handleRowClick(row)}
 								>
 									<TableCell>
 										<div className="flex items-center gap-3">
@@ -220,9 +229,8 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 													{row.type?.substring(0, 2) || "KB"}
 												</AvatarFallback>
 											</Avatar>
-											<div className="flex flex-col">
-												<span className="font-medium text-gray-900 line-clamp-1">{row.title}</span>
-												<span className="text-xs text-gray-500">{row.file_name}</span>
+											<div className="flex flex-col min-w-0 w-full max-w-50 sm:max-w-62.5">
+												<span className="font-medium text-gray-900 truncate" title={row.title || undefined}>{row.title}</span>
 											</div>
 										</div>
 									</TableCell>
@@ -235,7 +243,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 										</Badge>
 									</TableCell>
 									<TableCell className="max-w-xl">
-										<p className="text-sm text-gray-600 line-clamp-3 leading-relaxed">
+										<p className="text-sm text-gray-600 truncate" title={row.ai_summary || row.content || undefined}>
 											{row.ai_summary || row.content || "No description available."}
 										</p>
 									</TableCell>
@@ -243,7 +251,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 									<TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
 										<div className="flex justify-end gap-2">
 											<Button
-												onClick={() => router.push(`${basePath}/${row.id}`)}
+												onClick={() => handleRowClick(row)}
 												variant="outline"
 												size="md"
 												className="border-gray-200 font-medium"

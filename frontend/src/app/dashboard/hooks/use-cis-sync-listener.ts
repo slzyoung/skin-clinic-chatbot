@@ -23,6 +23,11 @@ export function useCisSyncListener() {
 				queryClient.invalidateQueries({ queryKey: userKeys.all });
 				queryClient.invalidateQueries({ queryKey: branchKeys.lists() });
 				toast.info("Data refreshed from CIS sync.");
+			} else if (event.data === "feedback_submitted") {
+				// We must import NOTIFICATION_KEYS from the right place, wait!
+				// Since we might not have NOTIFICATION_KEYS imported, let's just use the exact array key
+				queryClient.invalidateQueries({ queryKey: ["feedbacks", "list"] });
+				toast.info("New feedback received.");
 			}
 		};
 
