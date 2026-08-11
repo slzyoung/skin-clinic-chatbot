@@ -3,6 +3,7 @@ import re
 import pickle
 from typing import List, Dict, Any, Optional
 from loguru import logger
+# pyrefly: ignore [missing-import]
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 

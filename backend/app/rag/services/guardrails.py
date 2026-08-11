@@ -51,7 +51,6 @@ _MEDICAL_DERMA_KEYWORDS: list[str] = [
     "halo", "selamat pagi", "selamat siang", "selamat sore", "selamat malam",
     "hai", "hi", "hello", "terima kasih", "thanks", "thank you",
     "rekomendasi", "recommend", "saran", "suggest", "cara pakai", "how to use",
-    "apa", "bagaimana", "kenapa", "kapan", "dimana", "berapa",
     "jadwal", "cabang", "branch", "promo", "diskon", "harga",
 ]
 
@@ -128,11 +127,11 @@ class InputGuard:
         if len(query_lower.split()) <= 3:
             return True, None
 
-        # Check if clearly off-topic
-        offtopic_score = sum(1 for kw in _OFFTOPIC_KEYWORDS if kw in query_lower)
-        medical_score = sum(1 for kw in _MEDICAL_DERMA_KEYWORDS if kw in query_lower)
+        # Check if clearly off-topic using word boundaries to prevent substring false positives (e.g. 'aha' in 'saham')
+        offtopic_score = sum(1 for kw in _OFFTOPIC_KEYWORDS if re.search(r'\b' + re.escape(kw) + r'\b', query_lower))
+        medical_score = sum(1 for kw in _MEDICAL_DERMA_KEYWORDS if re.search(r'\b' + re.escape(kw) + r'\b', query_lower))
 
-        if offtopic_score >= 2 and medical_score == 0:
+        if offtopic_score >= 1 and medical_score == 0:
             logger.info(f"Off-topic query blocked: {query[:100]}... (offtopic={offtopic_score}, medical={medical_score})")
             return False, (
                 "Maaf, saya adalah CHAT AI ERHA yang dirancang khusus untuk membantu "
