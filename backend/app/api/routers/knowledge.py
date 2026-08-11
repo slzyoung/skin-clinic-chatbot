@@ -39,9 +39,102 @@ async def list_knowledge(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:read"))
 ):
+    # 1. Fetch DB records
     stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None)).order_by(Knowledge.created_at.desc())
     result = await db.execute(stmt)
-    return result.scalars().all()
+    db_items = list(result.scalars().all())
+
+    # 2. Out-of-band sync DB items with RAG staging files (data/pending or data/output)
+    db_by_id = {str(item.id): item for item in db_items}
+    updated_db = False
+
+    for item in db_items:
+        k_id_str = str(item.id)
+        target_file = resolve_pending_file(k_id_str) or resolve_approved_file(k_id_str)
+        if target_file and os.path.exists(target_file):
+            try:
+                with open(target_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    new_status = KnowledgeStatus.APPROVED if "output" in target_file else KnowledgeStatus.PENDING
+                    if item.status != new_status and item.status != KnowledgeStatus.APPROVED:
+                        item.status = new_status
+                        updated_db = True
+                    latest_summary = data.get("summary", "")
+                    if latest_summary and item.ai_summary != latest_summary:
+                        item.ai_summary = latest_summary
+                        updated_db = True
+                    latest_title = data.get("title", "")
+                    if latest_title and item.title != latest_title:
+                        item.title = latest_title
+                        updated_db = True
+            except Exception as e:
+                pass
+
+    if updated_db:
+        try:
+            await db.commit()
+        except Exception:
+            pass
+
+    # 3. Fallback scan: Include any staged JSON files from data/pending or data/output missing in DB
+    now = datetime.now(timezone.utc)
+    seen_ids = set(db_by_id.keys())
+    staged_responses = []
+
+    for folder in ["data/pending", "data/output"]:
+        if os.path.exists(folder):
+            for f in os.listdir(folder):
+                if f.endswith(".json"):
+                    file_path = os.path.join(folder, f)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as fp:
+                            data = json.load(fp)
+                        if isinstance(data, dict):
+                            raw_id = data.get("knowledge_id") or f.replace("_parsed.json", "").replace(".json", "")
+                            if str(raw_id) not in seen_ids:
+                                seen_ids.add(str(raw_id))
+                                try:
+                                    k_uuid = uuid.UUID(str(raw_id))
+                                except ValueError:
+                                    k_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(raw_id))
+
+                                file_name = data.get("file_name", f)
+                                title = data.get("title", file_name)
+                                summary = data.get("summary", "")
+                                raw_type = str(data.get("type", "PRODUCT")).upper()
+                                k_type = KnowledgeType.PRODUCT
+                                if "TREATMENT" in raw_type:
+                                    k_type = KnowledgeType.TREATMENT
+                                elif "PROMO" in raw_type:
+                                    k_type = KnowledgeType.PROMOTIONAL
+                                elif "OTHER" in raw_type or "LAIN" in raw_type:
+                                    k_type = KnowledgeType.GENERAL
+
+                                doc_status = KnowledgeStatus.APPROVED if "output" in folder else KnowledgeStatus.PENDING
+
+                                staged_responses.append(KnowledgeResponse(
+                                    id=k_uuid,
+                                    title=title,
+                                    content=summary,
+                                    file_name=file_name,
+                                    original_path=f"data/temp/{file_name}",
+                                    mime_type="application/pdf",
+                                    file_size=None,
+                                    type=k_type,
+                                    status=doc_status,
+                                    ai_summary=summary,
+                                    ai_confidence=95.0,
+                                    uploaded_by=current_user.id,
+                                    approved_by=None,
+                                    metadata_=data,
+                                    created_at=now,
+                                    updated_at=now
+                                ))
+                    except Exception as err:
+                        pass
+
+    return list(db_items) + staged_responses
 
 @router.get("/{knowledge_id}", response_model=KnowledgeResponse)
 async def get_knowledge(

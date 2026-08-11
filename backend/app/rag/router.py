@@ -432,9 +432,15 @@ async def process_ingestion_background(
             from app.core.database import AsyncSessionLocal
             from app.models.knowledge import Knowledge, KnowledgeStatus
             from sqlalchemy import select
+            import uuid as _uuid
 
             async with AsyncSessionLocal() as session:
-                result = await session.execute(select(Knowledge).where(Knowledge.id == knowledge_id))
+                try:
+                    k_uuid = _uuid.UUID(str(knowledge_id))
+                except ValueError:
+                    k_uuid = knowledge_id
+
+                result = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
                 k_entry = result.scalars().first()
                 if k_entry:
                     k_entry.status = KnowledgeStatus.PENDING
