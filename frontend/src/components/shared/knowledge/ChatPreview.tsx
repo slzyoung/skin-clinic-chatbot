@@ -316,7 +316,7 @@ export function ChatPreview({
 		knowledgeStatus === "PROCESSING" ||
 		isLoading ||
 		isDetailLoading ||
-		((knowledgeStatus === "APPROVED" || knowledgeStatus === "PENDING") && !isEditMode);
+		(knowledgeStatus === "APPROVED" && !isEditMode);
 
 	return (
 		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
@@ -595,7 +595,7 @@ export function ChatPreview({
 						placeholder={
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
-								: (knowledgeStatus === "APPROVED" || knowledgeStatus === "PENDING") && !isEditMode
+								: knowledgeStatus === "APPROVED" && !isEditMode
 									? "Click 'Edit Knowledge' to refine summary..."
 									: "Ask questions or request adjustments..."
 						}
