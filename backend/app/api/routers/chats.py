@@ -340,8 +340,8 @@ async def update_chat_session(
     if status_changed_to_closed:
         background_tasks.add_task(summarize_chat_session, session.id)
         
-    # Broadcast event if feedback was provided
-    if session_in.feedback:
+    # Broadcast event if any feedback, rating, or issue is provided
+    if session_in.feedback or session_in.rating or session_in.has_data_issue:
         from app.core.broadcaster import broadcaster
         await broadcaster.publish("feedback_submitted")
         
