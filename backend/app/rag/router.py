@@ -329,17 +329,18 @@ async def process_ingestion_background(
                 corrected_chunks = parsed_review.get("corrected_chunks", [])
                 
                 # Apply corrected chunks & granular chunk categories back to enriched_chunks
-                if len(corrected_chunks) == len(enriched_chunks):
+                if corrected_chunks:
                     for idx, c_item in enumerate(corrected_chunks):
-                        if isinstance(c_item, dict):
-                            c_txt = c_item.get("text", "")
-                            c_cat = c_item.get("category") or c_item.get("category_name")
-                            if c_txt:
-                                enriched_chunks[idx]["text"] = c_txt
-                            if c_cat:
-                                enriched_chunks[idx]["chunk_category"] = c_cat
-                        elif isinstance(c_item, str):
-                            enriched_chunks[idx]["text"] = c_item
+                        if idx < len(enriched_chunks):
+                            if isinstance(c_item, dict):
+                                c_txt = c_item.get("text", "")
+                                c_cat = c_item.get("category") or c_item.get("category_name")
+                                if c_txt:
+                                    enriched_chunks[idx]["text"] = c_txt
+                                if c_cat:
+                                    enriched_chunks[idx]["chunk_category"] = c_cat
+                            elif isinstance(c_item, str):
+                                enriched_chunks[idx]["text"] = c_item
                         
             except Exception as llm_err:
                 logger.error(f"Failed to process AI review: {llm_err}")
@@ -370,8 +371,15 @@ async def process_ingestion_background(
                 chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
                 chunk["metadata"]["doctors"] = visibility_settings["doctors"]
                 
-                # Chunk-level category priority, falling back to document-level categories
+                # Chunk-level category priority, falling back to smart content matching or document-level categories
                 chunk_specific_cat = chunk.get("chunk_category")
+                if not chunk_specific_cat and cat_names:
+                    chunk_txt_lower = (chunk.get("text", "") + " " + str(chunk.get("metadata", {}).get("section", ""))).lower()
+                    for cat_candidate in cat_names:
+                        if cat_candidate.lower() in chunk_txt_lower:
+                            chunk_specific_cat = cat_candidate
+                            break
+
                 if chunk_specific_cat:
                     chunk["metadata"]["category"] = chunk_specific_cat
                     chunk["metadata"]["categories"] = [chunk_specific_cat] + [c for c in cat_names if c != chunk_specific_cat]
