@@ -37,6 +37,26 @@ from app.rag.deps import (
 from app.rag.services.interfaces import BaseLLMAdapter, BaseVectorStoreAdapter
 
 
+def safe_json_loads(json_str: str) -> dict:
+    """Parses JSON safely, handling unescaped control characters and markdown code blocks."""
+    clean = (json_str or "").strip()
+    if clean.startswith("```"):
+        lines = clean.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        clean = "\n".join(lines).strip()
+
+    try:
+        return json.loads(clean, strict=False)
+    except Exception:
+        # Sanitize unescaped control characters like raw newlines inside JSON strings
+        import re
+        sanitized = re.sub(r'[\r\n\t]', ' ', clean)
+        return json.loads(sanitized, strict=False)
+
+
 router = APIRouter()
 
 def resolve_pending_file(knowledge_id: str) -> Optional[str]:
@@ -93,6 +113,43 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
                 pass
     return None
 
+def check_sha256_duplicate(file_hash: str, file_name: str) -> Optional[str]:
+    """
+    Checks whether a document with identical SHA-256 content hash already exists in data/output or data/pending.
+    Returns the existing file_name if a 100% content match is found, else None.
+    """
+    if not file_hash:
+        return None
+
+    for folder in ["data/output", "data/pending"]:
+        if not os.path.exists(folder):
+            continue
+        for f in os.listdir(folder):
+            if f.endswith(".json"):
+                full_path = os.path.join(folder, f)
+                try:
+                    with open(full_path, "r", encoding="utf-8") as fp:
+                        data = json.load(fp)
+                    existing_hash = None
+                    existing_name = None
+                    if isinstance(data, dict):
+                        existing_hash = data.get("file_hash")
+                        existing_name = data.get("file_name")
+                        if not existing_hash:
+                            chunks = data.get("chunks", [])
+                            if chunks and isinstance(chunks[0], dict):
+                                existing_hash = chunks[0].get("metadata", {}).get("file_hash")
+                    elif isinstance(data, list) and data:
+                        meta = data[0].get("metadata", {})
+                        existing_hash = meta.get("file_hash")
+                        existing_name = meta.get("source_file")
+
+                    if existing_hash and existing_hash == file_hash and existing_name != file_name:
+                        return existing_name or f
+                except Exception:
+                    pass
+    return None
+
 async def process_ingestion_background(
     knowledge_id: str,
     file_path: str,
@@ -100,7 +157,8 @@ async def process_ingestion_background(
     pipeline: IngestionPipeline,
     llm: BaseLLMAdapter,
     doc_type_display: str = "Product",
-    user_prompt: Optional[str] = None
+    user_prompt: Optional[str] = None,
+    file_hash: Optional[str] = None
 ):
     try:
         # Temporarily configure pipeline to stage file in data/pending without indexing
@@ -147,12 +205,15 @@ async def process_ingestion_background(
 
         full_extracted_text = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
 
+        clean_title_fallback = os.path.splitext(file_name)[0]
+
         # Write initial pending state IMMEDIATELY (0.5s) so GET /pending and GET /documents work instantly
         os.makedirs("data/pending", exist_ok=True)
         pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
         initial_staged_doc = {
             "knowledge_id": knowledge_id,
             "file_name": file_name,
+            "title": clean_title_fallback,
             "type": doc_type_display,
             "status": "On review",
             "summary": full_extracted_text,
@@ -257,19 +318,10 @@ async def process_ingestion_background(
                 }}
                 """
                 llm_response = await asyncio.to_thread(llm.generate, review_prompt)
-                
-                # Clean markdown formatting if present
-                llm_response_clean = llm_response.strip()
-                if llm_response_clean.startswith("```"):
-                    lines = llm_response_clean.split("\n")
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    llm_response_clean = "\n".join(lines).strip()
-                    
-                parsed_review = json.loads(llm_response_clean)
-                recommended_title = parsed_review.get("title", f"Knowledge Ingestment {file_name}")
+                parsed_review = safe_json_loads(llm_response)
+                recommended_title = parsed_review.get("title") or clean_title_fallback
+                if recommended_title and any(recommended_title.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
+                    recommended_title = os.path.splitext(recommended_title)[0]
                 summary = parsed_review.get("summary", summary)
                 text_accuracy = parsed_review.get("text_accuracy", "100%")
                 feedback = parsed_review.get("feedback", feedback)
@@ -277,17 +329,18 @@ async def process_ingestion_background(
                 corrected_chunks = parsed_review.get("corrected_chunks", [])
                 
                 # Apply corrected chunks & granular chunk categories back to enriched_chunks
-                if len(corrected_chunks) == len(enriched_chunks):
+                if corrected_chunks:
                     for idx, c_item in enumerate(corrected_chunks):
-                        if isinstance(c_item, dict):
-                            c_txt = c_item.get("text", "")
-                            c_cat = c_item.get("category") or c_item.get("category_name")
-                            if c_txt:
-                                enriched_chunks[idx]["text"] = c_txt
-                            if c_cat:
-                                enriched_chunks[idx]["chunk_category"] = c_cat
-                        elif isinstance(c_item, str):
-                            enriched_chunks[idx]["text"] = c_item
+                        if idx < len(enriched_chunks):
+                            if isinstance(c_item, dict):
+                                c_txt = c_item.get("text", "")
+                                c_cat = c_item.get("category") or c_item.get("category_name")
+                                if c_txt:
+                                    enriched_chunks[idx]["text"] = c_txt
+                                if c_cat:
+                                    enriched_chunks[idx]["chunk_category"] = c_cat
+                            elif isinstance(c_item, str):
+                                enriched_chunks[idx]["text"] = c_item
                         
             except Exception as llm_err:
                 logger.error(f"Failed to process AI review: {llm_err}")
@@ -318,8 +371,15 @@ async def process_ingestion_background(
                 chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
                 chunk["metadata"]["doctors"] = visibility_settings["doctors"]
                 
-                # Chunk-level category priority, falling back to document-level categories
+                # Chunk-level category priority, falling back to smart content matching or document-level categories
                 chunk_specific_cat = chunk.get("chunk_category")
+                if not chunk_specific_cat and cat_names:
+                    chunk_txt_lower = (chunk.get("text", "") + " " + str(chunk.get("metadata", {}).get("section", ""))).lower()
+                    for cat_candidate in cat_names:
+                        if cat_candidate.lower() in chunk_txt_lower:
+                            chunk_specific_cat = cat_candidate
+                            break
+
                 if chunk_specific_cat:
                     chunk["metadata"]["category"] = chunk_specific_cat
                     chunk["metadata"]["categories"] = [chunk_specific_cat] + [c for c in cat_names if c != chunk_specific_cat]
@@ -479,9 +539,20 @@ async def ingest_document(
                     k_type = KnowledgeType.GENERAL
                     doc_type_display = "Other"
 
+            file_bytes = await target_file.read()
+            import hashlib
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
+
+            duplicate_match = check_sha256_duplicate(file_hash, target_file.filename)
+            if duplicate_match:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Dokumen dengan isi konten identik 100% sudah terdaftar di sistem dengan nama '{duplicate_match}' (SHA-256 Checksum Match). Upload dibatalkan untuk mencegah duplikasi data."
+                )
+
             file_path = f"data/temp/{target_file.filename}"
             with open(file_path, "wb") as f_out:
-                f_out.write(await target_file.read())
+                f_out.write(file_bytes)
 
             file_size = os.path.getsize(file_path)
 
@@ -502,11 +573,23 @@ async def ingest_document(
                         select(Knowledge).where(Knowledge.file_name == target_file.filename).order_by(Knowledge.created_at.desc())
                     )
                     existing_doc = res.scalars().first()
-                    if existing_doc:
+                    if existing_doc and existing_doc.status == KnowledgeStatus.APPROVED:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Dokumen '{target_file.filename}' sudah terpublikasi (APPROVED). Jika ingin merevisi isi dokumen, silakan gunakan menu 'Edit Knowledge' di UI atau hapus dokumen lama terlebih dahulu."
+                        )
+                    elif existing_doc:
                         k_id = str(existing_doc.id)
 
+                    approved_file_check = resolve_approved_file(target_file.filename)
+                    if approved_file_check and os.path.exists(approved_file_check):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Dokumen '{target_file.filename}' sudah terpublikasi (APPROVED). Jika ingin merevisi isi dokumen, silakan gunakan menu 'Edit Knowledge' di UI atau hapus dokumen lama terlebih dahulu."
+                        )
+
                     if not k_id:
-                        pf = resolve_pending_file(target_file.filename) or resolve_approved_file(target_file.filename)
+                        pf = resolve_pending_file(target_file.filename)
                         if pf and os.path.exists(pf):
                             try:
                                 with open(pf, "r", encoding="utf-8") as fp:
@@ -575,7 +658,8 @@ async def ingest_document(
                 pipeline,
                 llm,
                 doc_type_display,
-                prompt
+                prompt,
+                file_hash
             )
 
             response_items.append({
@@ -771,17 +855,7 @@ async def refine_pending_document(
         
         llm_response = await asyncio.to_thread(llm.generate, refine_prompt)
         
-        # Clean markdown formatting if present
-        llm_response_clean = llm_response.strip()
-        if llm_response_clean.startswith("```"):
-            lines = llm_response_clean.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].startswith("```"):
-                lines = lines[:-1]
-            llm_response_clean = "\n".join(lines).strip()
-            
-        updated_data = json.loads(llm_response_clean)
+        updated_data = safe_json_loads(llm_response)
 
         k_id = staged_data.get("knowledge_id", knowledge_id)
         updated_data["knowledge_id"] = k_id
@@ -820,12 +894,13 @@ async def refine_pending_document(
 @router.get("/ingest/documents", tags=["Ingestion"], response_model=List[DocumentListItem])
 async def list_all_documents():
     """
-    List all documents in the system with their status ('Approved' or 'On review') and basic metadata.
+    List all documents in the system with their status ('Approved', 'On review', or 'Processing') and basic metadata.
     """
     pending_dir = "data/pending"
     approved_dir = "data/output"
     
     docs = []
+    seen_ids = set()
     
     # 1. Scan pending (which are nested object schemas)
     if os.path.exists(pending_dir):
@@ -839,7 +914,7 @@ async def list_all_documents():
                         chunks = data.get("chunks", [])
                         first_chunk_meta = chunks[0].get("metadata", {}) if chunks and isinstance(chunks[0], dict) else {}
                         fallback_id = f.replace("_parsed.json", "").replace(".json", "")
-                        k_id = data.get("knowledge_id", first_chunk_meta.get("knowledge_id", fallback_id))
+                        k_id = str(data.get("knowledge_id", first_chunk_meta.get("knowledge_id", fallback_id)))
 
                         doc_type = data.get("type") or first_chunk_meta.get("type") or first_chunk_meta.get("document_type") or "Product"
                         if doc_type:
@@ -854,6 +929,7 @@ async def list_all_documents():
                             processed_at=first_chunk_meta.get("processed_at"),
                             chunks_count=len(chunks)
                         ))
+                        seen_ids.add(k_id)
                 except Exception as err:
                     logger.warning(f"Error parsing pending metadata for {f}: {err}")
                     
@@ -875,7 +951,7 @@ async def list_all_documents():
                     chunks = []
                     
                     if isinstance(data, dict):
-                        k_id = data.get("knowledge_id", k_id)
+                        k_id = str(data.get("knowledge_id", k_id))
                         file_name = data.get("file_name", file_name)
                         doc_type = data.get("type") or doc_type
                         chunks = data.get("chunks", [])
@@ -888,7 +964,7 @@ async def list_all_documents():
                         chunks = data
                         if chunks and isinstance(chunks[0], dict):
                             first_meta = chunks[0].get("metadata", {})
-                            k_id = first_meta.get("knowledge_id", k_id)
+                            k_id = str(first_meta.get("knowledge_id", k_id))
                             file_name = first_meta.get("source_file", file_name)
                             product_name = first_meta.get("product_name")
                             doc_type = first_meta.get("type") or first_meta.get("document_type") or doc_type
@@ -897,18 +973,51 @@ async def list_all_documents():
                     if doc_type:
                         doc_type = doc_type.capitalize()
 
-                    docs.append(DocumentListItem(
-                        knowledge_id=k_id,
-                        file_name=file_name,
-                        product_name=product_name,
-                        type=doc_type,
-                        status="Approved",
-                        processed_at=processed_at,
-                        chunks_count=len(chunks)
-                    ))
+                    if k_id not in seen_ids:
+                        docs.append(DocumentListItem(
+                            knowledge_id=k_id,
+                            file_name=file_name,
+                            product_name=product_name,
+                            type=doc_type,
+                            status="Approved",
+                            processed_at=processed_at,
+                            chunks_count=len(chunks)
+                        ))
+                        seen_ids.add(k_id)
                 except Exception as err:
                     logger.warning(f"Error parsing approved metadata for {f}: {err}")
+
+    # 3. Fallback DB sync: Include records from PostgreSQL Knowledge table that aren't in JSON files yet
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.models.knowledge import Knowledge
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as session:
+            stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None)).order_by(Knowledge.created_at.desc())
+            res = await session.execute(stmt)
+            k_records = res.scalars().all()
+            
+            for k in k_records:
+                str_id = str(k.id)
+                if str_id not in seen_ids:
+                    st_val = k.status.value if hasattr(k.status, "value") else str(k.status)
+                    status_display = "Approved" if st_val.upper() == "APPROVED" else ("On review" if st_val.upper() in ("PENDING", "PROCESSING") else "On review")
+                    raw_type = k.type.value if hasattr(k.type, "value") else str(k.type)
                     
+                    docs.append(DocumentListItem(
+                        knowledge_id=str_id,
+                        file_name=k.file_name or k.title or "Untitled Document",
+                        product_name=k.title,
+                        type=raw_type.capitalize() if raw_type else "Product",
+                        status=status_display,
+                        processed_at=k.created_at.strftime("%Y-%m-%d %H:%M:%S") if k.created_at else None,
+                        chunks_count=0
+                    ))
+                    seen_ids.add(str_id)
+    except Exception as db_err:
+        logger.warning(f"DB fallback query in list_all_documents failed: {db_err}")
+
     return docs
 
 
@@ -917,9 +1026,12 @@ async def get_approved_document_details(knowledge_id: str):
     """
     Retrieves detail data (chunks, summary, categories) of an approved document for frontend edit form rendering.
     """
-    approved_file = resolve_approved_file(knowledge_id) or resolve_pending_file(knowledge_id)
+    approved_file = resolve_approved_file(knowledge_id)
     if not approved_file:
-        raise HTTPException(status_code=404, detail=f"Document '{knowledge_id}' not found.")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Document '{knowledge_id}' is not approved yet (currently in 'On review' status). Use GET /api/ai/ingest/pending/{knowledge_id} instead."
+        )
         
     try:
         with open(approved_file, "r", encoding="utf-8") as f:
@@ -994,6 +1106,12 @@ async def edit_approved_document(
         updated_title = request.title if request.title is not None else existing_doc.get("file_name", knowledge_id)
         updated_chunks = existing_doc.get("chunks", [])
 
+        vis_settings = request.visibility_settings.model_dump() if request.visibility_settings else existing_doc.get("visibility_settings", {
+            "clinics": ["all"],
+            "doctor_types": ["all"],
+            "doctors": ["all"]
+        })
+
         primary_cat = updated_categories[0] if updated_categories else None
         for chunk in updated_chunks:
             if isinstance(chunk, dict):
@@ -1007,6 +1125,10 @@ async def edit_approved_document(
                     chunk["metadata"]["categories"] = updated_categories
                 if updated_summary:
                     chunk["metadata"]["summary"] = updated_summary
+                if vis_settings:
+                    chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
+                    chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
+                    chunk["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
 
         approved_doc_structure = {
             "knowledge_id": knowledge_id,
@@ -1015,6 +1137,7 @@ async def edit_approved_document(
             "status": "Approved",
             "summary": updated_summary,
             "categories": updated_categories,
+            "visibility_settings": vis_settings,
             "chunks": updated_chunks
         }
         with open(approved_file, "w", encoding="utf-8") as f:
@@ -1378,44 +1501,97 @@ async def delete_document_endpoint(
 ):
     """
     Deletes document(s) across all statuses (Pending or Approved).
-    Supports single ID or comma-separated list of IDs (e.g. 'id1,id2,id3').
-    Removes physical JSON files, PGVector embeddings, BM25 indices, and performs soft-delete (deleted_at) in PostgreSQL.
+    Supports single ID, comma-separated IDs (e.g. 'id1,id2,id3'), filename, or 'all'.
+    Removes physical JSON files, PGVector embeddings, BM25 indices, and performs soft-delete in PostgreSQL.
     """
-    targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() not in ("string", "all")]
-    if not targets:
+    raw_targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() != "string"]
+    if not raw_targets:
         raise HTTPException(status_code=400, detail="At least one valid knowledge_id must be provided.")
 
     target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
     deleted_ids = []
 
-    for k_id in targets:
-        # 1. Check in Pending
-        pending_file = resolve_pending_file(k_id)
-        if pending_file and os.path.exists(pending_file):
-            try:
-                os.remove(pending_file)
-                if target_store and hasattr(target_store, "soft_delete_document"):
-                    target_store.soft_delete_document(k_id)
-                deleted_ids.append(k_id)
-                continue
-            except Exception as e:
-                logger.error(f"Failed to delete pending document '{k_id}': {e}")
+    # If user passes 'all', delegate to reset
+    if any(t.lower() == "all" for t in raw_targets):
+        await reset_database(vector_store=target_store, bm25=bm25)
+        return {"status": "success", "message": "Successfully deleted all documents.", "deleted_ids": ["all"]}
 
-        # 2. Check in Approved
-        approved_file = resolve_approved_file(k_id)
-        if approved_file and os.path.exists(approved_file):
-            try:
-                if target_store:
-                    target_store.delete_document(k_id)
-                if bm25:
-                    bm25.remove_file_chunks(k_id)
-                    bm25.save(settings.bm25_index_path)
-                os.remove(approved_file)
-                if target_store and hasattr(target_store, "soft_delete_document"):
-                    target_store.soft_delete_document(k_id)
-                deleted_ids.append(k_id)
-            except Exception as e:
-                logger.error(f"Failed to delete approved document '{k_id}': {e}")
+    pending_dir = "data/pending"
+    approved_dir = "data/output"
+
+    for k_id in raw_targets:
+        was_deleted = False
+
+        # 1. Scan JSON files in pending and output by knowledge_id OR file_name
+        for folder in [pending_dir, approved_dir]:
+            if os.path.exists(folder):
+                for f in os.listdir(folder):
+                    if f.endswith(".json"):
+                        f_path = os.path.join(folder, f)
+                        try:
+                            with open(f_path, "r", encoding="utf-8") as fp:
+                                f_data = json.load(fp)
+                            doc_id = str(f_data.get("knowledge_id", "")) if isinstance(f_data, dict) else ""
+                            doc_name = str(f_data.get("file_name", "")) if isinstance(f_data, dict) else ""
+                            f_no_ext = f.replace(".json", "").replace("_parsed", "")
+
+                            if k_id in (doc_id, doc_name, f_no_ext, f) or k_id.lower() in doc_name.lower():
+                                os.remove(f_path)
+                                if target_store:
+                                    target_store.delete_document(doc_id or f_no_ext)
+                                if bm25:
+                                    bm25.remove_file_chunks(doc_id or f_no_ext)
+                                    bm25.save(settings.bm25_index_path)
+                                was_deleted = True
+                                logger.info(f"Deleted JSON file and vectors for '{k_id}' ({f_path})")
+                        except Exception as file_err:
+                            logger.warning(f"Error checking/deleting file {f}: {file_err}")
+
+        # 2. Soft-delete in PostgreSQL Knowledge DB table
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge
+            from sqlalchemy import select, func, or_
+            import uuid as _uuid
+
+            async with AsyncSessionLocal() as session:
+                custom_uuid = None
+                try:
+                    custom_uuid = _uuid.UUID(k_id)
+                except ValueError:
+                    pass
+
+                if custom_uuid:
+                    stmt = select(Knowledge).where(
+                        or_(Knowledge.id == custom_uuid, Knowledge.file_name.ilike(f"%{k_id}%")),
+                        Knowledge.deleted_at.is_(None)
+                    )
+                else:
+                    stmt = select(Knowledge).where(
+                        or_(Knowledge.file_name.ilike(f"%{k_id}%"), Knowledge.title.ilike(f"%{k_id}%")),
+                        Knowledge.deleted_at.is_(None)
+                    )
+
+                res = await session.execute(stmt)
+                db_docs = res.scalars().all()
+                
+                # Fallback: scan all non-deleted records if still not found
+                if not db_docs:
+                    all_res = await session.execute(select(Knowledge).where(Knowledge.deleted_at.is_(None)))
+                    all_docs = all_res.scalars().all()
+                    db_docs = [d for d in all_docs if str(d.id).lower() == k_id.lower() or (d.file_name and k_id.lower() in d.file_name.lower())]
+
+                for d_doc in db_docs:
+                    d_doc.deleted_at = func.now()
+                if db_docs:
+                    await session.commit()
+                    was_deleted = True
+                    logger.info(f"Soft-deleted {len(db_docs)} record(s) in PostgreSQL Knowledge DB for '{k_id}'")
+        except Exception as db_err:
+            logger.warning(f"Could not soft-delete Knowledge DB record for '{k_id}': {db_err}")
+
+        if was_deleted:
+            deleted_ids.append(k_id)
 
     return {"status": "success", "message": f"Successfully deleted {len(deleted_ids)} document(s).", "deleted_ids": deleted_ids}
 
@@ -1570,18 +1746,84 @@ async def reset_database(
             bm25.clear()
             bm25.save(settings.bm25_index_path)
             
-        # 3. Clean files in data/pending/ and data/output/
-        for folder in ["data/pending", "data/output"]:
+        # 3. Clean files in data/pending/ and data/output/ (delete all .json staged/approved documents)
+        for folder in ["data/pending", "data/output", "data/temp"]:
             if os.path.exists(folder):
                 for f in os.listdir(folder):
-                    if f.endswith("_parsed.json"):
+                    if f.endswith(".json") or f.endswith(".pdf") or f.endswith(".docx") or f.endswith(".txt") or f.endswith(".xlsx") or f.endswith(".csv"):
                         try:
                             os.remove(os.path.join(folder, f))
                         except Exception as file_err:
                             logger.warning(f"Could not remove file {f}: {file_err}")
+
+        # 4. Soft-delete all records in PostgreSQL Knowledge table
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge
+            from sqlalchemy import select, func
+
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(select(Knowledge).where(Knowledge.deleted_at.is_(None)))
+                k_records = res.scalars().all()
+                for k in k_records:
+                    k.deleted_at = func.now()
+                if k_records:
+                    await session.commit()
+                    logger.info(f"Soft-deleted {len(k_records)} Knowledge records in PostgreSQL DB.")
+        except Exception as db_err:
+            logger.warning(f"Could not clear Knowledge table in DB during reset: {db_err}")
                             
-        return {"status": "success", "message": "Knowledge base (PGVector, BM25, and staged/approved files) has been successfully cleared."}
+        return {"status": "success", "message": "Knowledge base (PGVector, BM25, staged/approved files, and PostgreSQL Knowledge DB) has been successfully cleared."}
     except Exception as e:
         logger.error(f"Reset database failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/evaluation", 
+    tags=["Evaluation"], 
+    response_model=RAGEvaluationResponse,
+    summary="Run RAG Evaluation Benchmark"
+)
+async def run_rag_evaluation(
+    dataset: List[RAGEvaluationItem] = Body(
+        ..., 
+        description="Dataset queries and expected source files for accuracy evaluation benchmark"
+    ),
+    top_k: int = Query(5, description="Number of retrieved passages to evaluate"),
+    retriever: HybridRetriever = Depends(get_hybrid_retriever),
+    generation_pipeline: GenerationPipeline = Depends(get_generation_pipeline),
+    llm: BaseLLMAdapter = Depends(get_llm)
+):
+    """
+    Runs automated RAG evaluation benchmark measuring Hit Rate@K, MRR@K, Faithfulness, and Accuracy Percentage.
+    """
+    if not dataset:
+        raise HTTPException(status_code=400, detail="Dataset must contain at least 1 evaluation item.")
+
+    formatted_dataset = []
+    for item in dataset:
+        gt = {"source_file": item.expected_file}
+        formatted_dataset.append({
+            "query": item.query,
+            "ground_truth": gt,
+            "expected_answer": item.expected_answer
+        })
+
+    eval_results = RAGEvaluator.evaluate_full(
+        retriever=retriever,
+        generation_pipeline=generation_pipeline,
+        llm_adapter=llm,
+        dataset=formatted_dataset,
+        top_k=top_k,
+        evaluate_generation=False
+    )
+
+    return RAGEvaluationResponse(
+        hit_rate=round(eval_results["hit_rate"], 4),
+        mrr=round(eval_results["mrr"], 4),
+        faithfulness=eval_results.get("faithfulness"),
+        answer_relevance=eval_results.get("answer_relevance"),
+        total_queries=eval_results["total_queries"]
+    )
 

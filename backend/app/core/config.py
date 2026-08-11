@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     LLM_MODEL_NAME: str = "gpt-4o-mini"
     OPENAI_API_KEY: Optional[str] = None
 
+    # MinIO / S3 Object Storage Settings
+    S3_ENDPOINT_URL: str = "http://localhost:9000"
+    S3_ACCESS_KEY: str = "minioadmin"
+    S3_SECRET_KEY: str = "minioadmin"
+    S3_BUCKET: str = "erha-knowledge-assets"
+    S3_REGION: str = "us-east-1"
+    S3_USE_PATH_STYLE: bool = True
+
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
     def validate_security(self):

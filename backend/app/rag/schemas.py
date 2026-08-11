@@ -70,13 +70,35 @@ class PendingDocumentResponse(BaseModel):
 class RefineRequest(BaseModel):
     prompt: str = Field(..., description="Instructions to refine the document summary or text content")
     history: Optional[List[ChatMessage]] = Field(default=[], description="Multi-turn conversation history for refine editing")
-    visibility_settings: Optional[VisibilitySettings] = Field(None, description="Optional visibility settings update")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "prompt": "Tolong terjemahkan bagian dosis ke Bahasa Indonesia dan buatkan kesimpulan",
+                "history": []
+            }
+        }
+    }
 
 class EditApprovedDocumentRequest(BaseModel):
     summary: Optional[str] = Field(None, description="Updated document summary markdown (for manual save)")
     categories: Optional[List[Any]] = Field(default=[], description="Updated list of document categories (for manual save)")
-    visibility_settings: Optional[VisibilitySettings] = Field(None, description="Updated visibility settings")
+    visibility_settings: Optional[VisibilitySettings] = Field(None, description="Updated visibility settings (Clinics, Doctor Types, Doctors)")
     title: Optional[str] = Field(None, description="Updated document title")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "summary": "### Ringkasan Dokumen Produk\n\nProduk ini digunakan untuk merawat kulit jerawat dan menyamarkan noda hitam.",
+                "categories": ["Acne Care", "Dark Spot"],
+                "visibility_settings": {
+                    "clinics": ["all"],
+                    "doctor_types": ["all"],
+                    "doctors": ["all"]
+                }
+            }
+        }
+    }
 
 class ApprovedDocumentResponse(BaseModel):
     knowledge_id: str = Field(..., description="Knowledge ID / document identifier")

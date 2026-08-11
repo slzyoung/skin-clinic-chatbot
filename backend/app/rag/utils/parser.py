@@ -142,13 +142,106 @@ class DocumentParser:
             )
             return None  # Signal to use Docling OCR
 
+        # Try to extract embedded images from PDF pages and upload to MinIO
+        try:
+            import fitz  # PyMuPDF
+            from app.services.storage import upload_image
+            doc = fitz.open(file_path)
+            for i, page in enumerate(doc):
+                img_list = page.get_images()
+                img_markdowns = []
+                for img_idx, img_info in enumerate(img_list[:3]):
+                    xref = img_info[0]
+                    base_img = doc.extract_image(xref)
+                    img_bytes = base_img.get("image")
+                    img_ext = base_img.get("ext", "png")
+                    if img_bytes:
+                        fname = f"pdf_p{i+1}_img{img_idx+1}.{img_ext}"
+                        upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
+                        img_url = upload_res.get("image_url")
+                        if img_url:
+                            img_markdowns.append(f"![{fname}]({img_url})")
+                if img_markdowns and i < len(pages):
+                    pages[i]["text"] += "\n\n" + "\n".join(img_markdowns)
+                    pages[i]["image_url"] = upload_res.get("image_url")
+        except Exception as img_err:
+            logger.debug(f"PDF embedded image extraction skipped/optional: {img_err}")
+
         return ParseResult(pages=pages, method="fast")
 
     # -------------------------------------------------------------------------
-    # DOCLING OCR FALLBACK (Heavy)
+    # FAST EXTRACTION: EXCEL & CSV (.xlsx, .xls, .csv)
+    # -------------------------------------------------------------------------
+    def _parse_excel_fast(self, file_path: str) -> ParseResult:
+        """Extract text and markdown tables from .xlsx, .xls, and .csv files using pandas."""
+        import pandas as pd
+
+        ext = os.path.splitext(file_path)[1].lower()
+        pages = []
+
+        try:
+            if ext == ".csv":
+                df = pd.read_csv(file_path)
+                df = df.dropna(how="all")
+                md_table = df.to_markdown(index=False)
+                pages.append({
+                    "page": 1,
+                    "text": f"### CSV Data Table\n\n{md_table}"
+                })
+            else:
+                with pd.ExcelFile(file_path) as excel_file:
+                    for page_idx, sheet_name in enumerate(excel_file.sheet_names, start=1):
+                        df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                        if df.empty:
+                            continue
+                        df = df.dropna(how="all")
+                        md_table = df.to_markdown(index=False)
+                        sheet_text = f"### Sheet: {sheet_name}\n\n{md_table}"
+                        pages.append({
+                            "page": page_idx,
+                            "text": sheet_text
+                        })
+
+            if not pages:
+                pages = [{"page": 1, "text": "Dokumen spreadsheet kosong."}]
+
+            return ParseResult(pages=pages, method="fast")
+        except Exception as e:
+            logger.warning(f"Fast pandas Excel parse failed for {file_path}: {e}. Falling back to text extraction...")
+            return ParseResult(pages=[{"page": 1, "text": f"Error parsing spreadsheet: {e}"}], method="fast")
+
+    def _parse_standalone_image(self, file_path: str) -> ParseResult:
+        """Uploads standalone image file to MinIO S3 and returns ParseResult with Markdown image link."""
+        from app.services.storage import upload_image
+
+        file_name = os.path.basename(file_path)
+        ext = os.path.splitext(file_path)[1].lower().replace(".", "")
+        content_type = f"image/{ext}" if ext in ["png", "jpg", "jpeg", "webp"] else "image/png"
+
+        try:
+            with open(file_path, "rb") as f:
+                image_bytes = f.read()
+
+            upload_res = upload_image(image_bytes, file_name, content_type=content_type)
+            image_url = upload_res.get("image_url", "")
+            
+            markdown_text = f"### Asset Gambar: {file_name}\n\n![{file_name}]({image_url})"
+            pages = [{
+                "page": 1,
+                "text": markdown_text,
+                "image_url": image_url
+            }]
+            logger.info(f"🖼️ Standalone image '{file_name}' uploaded to MinIO: {image_url}")
+            return ParseResult(pages=pages, method="fast")
+        except Exception as e:
+            logger.warning(f"Standalone image upload to MinIO failed for {file_path}: {e}")
+            return self._parse_with_docling(file_path)
+
+    # -------------------------------------------------------------------------
+    # DOCLING OCR FALLBACK (Heavy / Scanned PDFs & Standalone Images)
     # -------------------------------------------------------------------------
     def _parse_with_docling(self, file_path: str) -> Optional[ParseResult]:
-        """Full Docling OCR parse for scanned/image PDFs."""
+        """Full Docling OCR parse for scanned/image PDFs and standalone images."""
         import io
         from docling_core.types.io import DocumentStream
 
@@ -170,7 +263,8 @@ class DocumentParser:
     # -------------------------------------------------------------------------
     def parse_file(self, file_path: str) -> Optional[ParseResult]:
         """
-        Smart parse: tries fast extraction first, falls back to Docling OCR for scanned PDFs.
+        Smart parse: tries fast extraction first for docx, txt, pdf, xlsx, csv.
+        Falls back to Docling OCR for scanned PDFs & image files.
         Returns a ParseResult object.
         """
         if not os.path.exists(file_path):
@@ -189,6 +283,10 @@ class DocumentParser:
                 logger.info(f"⚡ Fast TXT extraction: {file_path}")
                 result = self._parse_txt_fast(file_path)
 
+            elif ext in [".xlsx", ".xls", ".csv"]:
+                logger.info(f"📊 Fast Excel/CSV extraction: {file_path}")
+                result = self._parse_excel_fast(file_path)
+
             elif ext == ".pdf":
                 logger.info(f"⚡ Attempting fast PDF extraction: {file_path}")
                 result = self._parse_pdf_fast(file_path)
@@ -197,6 +295,9 @@ class DocumentParser:
                     # Scanned PDF detected → Docling OCR fallback
                     logger.info(f"🔬 Docling OCR fallback for scanned PDF: {file_path}")
                     result = self._parse_with_docling(file_path)
+            elif ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                logger.info(f"🖼️ Standalone image extraction & MinIO upload: {file_path}")
+                result = self._parse_standalone_image(file_path)
             else:
                 # Unknown extension → try Docling as universal fallback
                 logger.info(f"🔬 Docling universal parse for {ext}: {file_path}")

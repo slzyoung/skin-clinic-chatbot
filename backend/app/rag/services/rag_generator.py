@@ -166,8 +166,21 @@ class GenerationPipeline:
     ) -> Dict[str, Any]:
         """
         Retrieves relevant context, compiles prompt, and generates grounded response.
-        Includes intent classification, dynamic top_k boosting, and debug logging.
+        Includes intent classification, dynamic top_k boosting, guardrails, and debug logging.
         """
+        from app.rag.services.guardrails import GuardrailsPipeline
+
+        # 0. Input Guardrails Validation (Prompt Injection & Topicality)
+        is_safe, rejection_msg = GuardrailsPipeline.validate_input(query)
+        if not is_safe:
+            logger.warning(f"Query blocked by Guardrails: '{query[:80]}...'")
+            return {
+                "query": query,
+                "answer": rejection_msg or "Maaf, permintaan Anda tidak dapat diproses.",
+                "context": "Blocked by security guardrails.",
+                "results": []
+            }
+
         # 1. Query Intent Detection
         intent, intent_rules = QueryIntentDetector.detect(query)
 
@@ -231,6 +244,9 @@ class GenerationPipeline:
             logger.error(f"LLM generation failed: {e}")
             answer = "Maaf, terjadi kesalahan teknis pada pemrosesan LLM. Silakan coba beberapa saat lagi."
 
+        # 6. Output Guardrails Processing (PII Redaction & Medical Disclaimer)
+        answer = GuardrailsPipeline.process_output(answer)
+
         # --- DEBUG LOGGING ---
         scores_summary = []
         for i, res in enumerate(results, 1):
@@ -272,6 +288,14 @@ class GenerationPipeline:
         Then yields text tokens.
         """
         import json
+        from app.rag.services.guardrails import GuardrailsPipeline
+
+        # 0. Input Guardrails Validation
+        is_safe, rejection_msg = GuardrailsPipeline.validate_input(query)
+        if not is_safe:
+            yield json.dumps({"type": "context", "results": []}) + "\n"
+            yield rejection_msg or "Maaf, permintaan Anda tidak dapat diproses."
+            return
         
         intent, intent_rules = QueryIntentDetector.detect(query)
 
