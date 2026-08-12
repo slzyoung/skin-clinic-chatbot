@@ -132,16 +132,18 @@ export default function FloatingChatbot({
 		setIsLoading(true);
 
 		try {
-			const formData = new FormData();
-			formData.append("role", "user");
-			formData.append("content", userMessage.content);
+			const payload = JSON.stringify({
+				role: "user",
+				content: userMessage.content
+			});
 
 			const res = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages/stream`, {
 				method: "POST",
 				headers: {
+					"Content-Type": "application/json",
 					Authorization: `Bearer ${token}`,
 				},
-				body: formData,
+				body: payload,
 			});
 
 			if (!res.ok) {

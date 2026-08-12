@@ -54,7 +54,7 @@ export default function Dashboard() {
         token={localStorage.getItem('cis_token')}
         doctorName={doctor ? doctor.name : 'Unknown'}
         branchId="838" // Mock CIS internal ID
-        apiBaseUrl="http://localhost:8000"
+        apiBaseUrl="http://localhost:8001"
       />
     </div>
   )
