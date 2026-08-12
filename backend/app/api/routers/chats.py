@@ -14,7 +14,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.branch import Branch
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, get_current_user_from_proxy, get_current_user_flexible
 from app.models.user import User, UserType, UserTokenUsage
 from app.models.chat import ChatSession, ChatMessage, ChatStatus
 from app.schemas.chat import (
@@ -186,7 +186,7 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
 @router.get("/feedback", response_model=List[ChatHistoryResponse])
 async def list_chat_feedbacks(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     # Enforce access - usually only staff/admin should see this
     if not await has_chats_read_access(current_user, db):
@@ -212,7 +212,7 @@ class MarkFeedbackReadRequest(BaseModel):
 async def mark_feedback_read(
     req: MarkFeedbackReadRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     if not await has_chats_read_access(current_user, db):
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -232,7 +232,7 @@ async def mark_feedback_read(
 @router.get("/", response_model=List[ChatHistoryResponse])
 async def list_chat_sessions(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     stmt = select(ChatSession)
     if not await has_chats_read_access(current_user, db):
@@ -247,7 +247,7 @@ async def create_chat_session(
     session_in: ChatSessionCreate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     branch_id = session_in.branch_id
     
@@ -314,7 +314,7 @@ async def update_chat_session(
     session_in: ChatSessionUpdate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     if not await has_chats_read_access(current_user, db):
@@ -351,7 +351,7 @@ async def update_chat_session(
 async def list_chat_messages(
     session_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
@@ -385,11 +385,12 @@ ALLOWED_MIME_TYPES = {
 async def create_chat_message(
     session_id: uuid.UUID,
     background_tasks: BackgroundTasks,
+    request: Request,
     role: str = Form(...),
     content: str = Form(...),
     files: Optional[List[UploadFile]] = File(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
@@ -551,12 +552,24 @@ async def stream_chat_message(
     session_id: uuid.UUID,
     request: Request,
     background_tasks: BackgroundTasks,
-    role: str = Form(...),
-    content: str = Form(...),
-    files: Optional[List[UploadFile]] = File(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_flexible)
 ):
+    import json
+    body_bytes = await request.body()
+    try:
+        data = json.loads(body_bytes)
+        role = data.get("role")
+        content = data.get("content")
+        files = None
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON body")
+        
+    if not role or not content:
+        raise HTTPException(status_code=422, detail="Missing role or content")
+    
+    role = role.lower()
+
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)
     if not await has_chats_read_access(current_user, db):
