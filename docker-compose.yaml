@@ -64,6 +64,8 @@ services:
     command: [ "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "/app" ]
     volumes:
       - ./mock-cis/main.py:/app/main.py
+      - ./mock-cis/keys:/app/keys
+      - ./mock-cis/frontend/dist:/app/frontend/dist
     depends_on:
       backend:
         condition: service_healthy

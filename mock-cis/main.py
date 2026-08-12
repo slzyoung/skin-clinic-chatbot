@@ -6,10 +6,10 @@ import httpx
 import jwt
 import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from cryptography.hazmat.primitives import hashes
@@ -34,6 +34,16 @@ def sign_payload_bytes(payload_bytes: bytes) -> str:
     private_key = load_private_key()
     signature = private_key.sign(
         payload_bytes,
+        padding.PKCS1v15(),
+        hashes.SHA256()
+    )
+    return base64.b64encode(signature).decode("utf-8")
+
+def sign_proxy_payload(body_bytes: bytes, user_id: str) -> str:
+    private_key = load_private_key()
+    payload_to_sign = user_id.encode("utf-8") + b":" + body_bytes
+    signature = private_key.sign(
+        payload_to_sign,
         padding.PKCS1v15(),
         hashes.SHA256()
     )
@@ -250,6 +260,91 @@ async def trigger_push_all(webhook_url: Optional[str] = None):
         }
     }
     return await send_signed_webhook(payload, webhook_url)
+
+async def forward_to_backend(request: Request, method: str, path: str):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, options={"verify_signature": False})
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    body_bytes = await request.body()
+    signature = sign_proxy_payload(body_bytes, user_id)
+
+    target_url = f"http://backend:8000{path}"
+    
+    headers = {
+        "X-Signature": signature,
+        "X-User-Id": user_id,
+        "Content-Type": request.headers.get("content-type") or "application/json"
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.request(method, target_url, content=body_bytes, headers=headers)
+        from fastapi.responses import Response
+        # Filter out hop-by-hop headers and transfer-encoding before returning
+        filtered_headers = {k: v for k, v in resp.headers.items() if k.lower() not in ["transfer-encoding", "content-length"]}
+        return Response(content=resp.content, status_code=resp.status_code, headers=filtered_headers)
+
+@app.get("/api/chats/")
+async def proxy_get_chats(request: Request):
+    return await forward_to_backend(request, "GET", "/api/chats/")
+
+@app.post("/api/chats/")
+async def proxy_post_chats(request: Request):
+    return await forward_to_backend(request, "POST", "/api/chats/")
+
+@app.get("/api/chats/{session_id}/messages")
+async def proxy_get_chat_messages(session_id: str, request: Request):
+    return await forward_to_backend(request, "GET", f"/api/chats/{session_id}/messages")
+
+@app.post("/api/chats/{session_id}/messages/stream")
+async def proxy_chat_stream(session_id: str, request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, options={"verify_signature": False})
+        user_id = payload.get("sub")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    body_bytes = await request.body()
+    print(f"DEBUG PROXY BODY: {body_bytes}")
+    signature = sign_proxy_payload(body_bytes, user_id)
+
+    target_url = f"http://backend:8000/api/chats/{session_id}/messages/stream"
+    
+    headers = {
+        "X-Signature": signature,
+        "X-User-Id": user_id,
+        "Content-Type": request.headers.get("content-type") or "application/json"
+    }
+
+    client = httpx.AsyncClient(timeout=300.0)
+    
+    async def sse_generator():
+        try:
+            async with client.stream("POST", target_url, content=body_bytes, headers=headers) as response:
+                if response.status_code != 200:
+                    err_body = await response.aread()
+                    yield f"data: {json.dumps({'error': 'Backend error', 'status': response.status_code, 'detail': err_body.decode('utf-8')})}\n\n"
+                    return
+                async for chunk in response.aiter_raw():
+                    yield chunk
+        finally:
+            await client.aclose()
+
+    return StreamingResponse(sse_generator(), media_type="text/event-stream")
 
 # Serve static files from React build (dist folder)
 frontend_dist = os.path.join(os.path.dirname(__file__), "frontend", "dist")
