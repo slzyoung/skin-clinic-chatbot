@@ -9,7 +9,7 @@ class Branch(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "branches"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    external_id: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True)
+    external_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True, nullable=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     code: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     ecosystem: Mapped[str] = mapped_column(String, default="Erha", server_default="Erha", nullable=False)

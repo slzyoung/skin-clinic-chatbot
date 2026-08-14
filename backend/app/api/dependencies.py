@@ -39,7 +39,11 @@ async def get_current_user(
             user_cis_id = payload.get("sub")
             if not user_cis_id:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-            stmt = select(User).where(User.cis_id == user_cis_id, User.deleted_at.is_(None))
+            try:
+                cis_int = int(user_cis_id)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid doctor ID in token")
+            stmt = select(User).where(User.cis_id == cis_int, User.deleted_at.is_(None))
         else:
             # This is a backend-signed token
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
@@ -96,7 +100,11 @@ async def get_current_user_from_proxy(
     user_id: str = Depends(verify_cis_proxy_signature),
     db: AsyncSession = Depends(get_db)
 ) -> User:
-    stmt = select(User).where(User.cis_id == user_id, User.deleted_at.is_(None))
+    try:
+        cis_int = int(user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user ID in header")
+    stmt = select(User).where(User.cis_id == cis_int, User.deleted_at.is_(None))
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
     
@@ -119,7 +127,11 @@ async def get_current_user_flexible(
             request.headers.get("x-signature"), 
             request.headers.get("x-user-id")
         )
-        stmt = select(User).where(User.cis_id == user_id, User.deleted_at.is_(None))
+        try:
+            cis_int = int(user_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user ID in header")
+        stmt = select(User).where(User.cis_id == cis_int, User.deleted_at.is_(None))
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
         

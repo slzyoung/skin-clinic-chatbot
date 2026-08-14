@@ -1,12 +1,12 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from uuid import UUID
 from datetime import datetime
 from app.models.chat import ChatStatus, ChatRole, ChatRating
 
 class ChatSessionCreate(BaseModel):
     branch_id: Optional[UUID] = None
-    cis_branch_id: Optional[str] = None
+    cis_branch_id: Optional[Union[int, str]] = None
 
 class ChatSessionUpdate(BaseModel):
     status: Optional[ChatStatus] = None

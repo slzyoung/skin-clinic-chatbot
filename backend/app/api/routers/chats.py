@@ -251,8 +251,12 @@ async def create_chat_session(
 ):
     branch_id = session_in.branch_id
     
-    if session_in.cis_branch_id:
-        stmt = select(Branch.id).where(Branch.external_id == session_in.cis_branch_id)
+    if session_in.cis_branch_id is not None:
+        try:
+            ext_id = int(session_in.cis_branch_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid CIS branch ID format")
+        stmt = select(Branch.id).where(Branch.external_id == ext_id)
         result = await db.execute(stmt)
         resolved_id = result.scalar_one_or_none()
         if not resolved_id:

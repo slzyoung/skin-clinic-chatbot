@@ -17,7 +17,10 @@ router = APIRouter(tags=["Branches"])
 async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
     branch_dict = {
         "id": branch.id,
+        "external_id": branch.external_id,
         "name": branch.name,
+        "code": branch.code,
+        "ecosystem": branch.ecosystem,
         "token_limit": branch.token_limit,
         "created_at": branch.created_at,
         "updated_at": branch.updated_at,
@@ -67,7 +70,11 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
             "speciality": speciality,
             "tokensLeft": tokens_left,
             "status": status,
-            "maxTokens": doc.token_limit or 0
+            "maxTokens": doc.token_limit or 0,
+            "employee_id": doc.employee_id,
+            "dr_type": doc.dr_type,
+            "user_type_code": doc.user_type_code,
+            "ecosystem": doc.ecosystem
         })
         
     branch_dict["used"] = branch_used

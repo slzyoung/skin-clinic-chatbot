@@ -21,11 +21,18 @@ class BranchDoctorResponse(BaseModel):
     tokensLeft: int = 0
     status: str = "Active"
     maxTokens: int = 0
+    employee_id: Optional[str] = None
+    dr_type: Optional[str] = None
+    user_type_code: Optional[str] = None
+    ecosystem: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
 
 class BranchResponse(BranchBase):
     id: UUID
+    external_id: Optional[int] = None
+    code: Optional[str] = None
+    ecosystem: str = "Erha"
     created_at: datetime
     updated_at: datetime
     
