@@ -5,6 +5,7 @@ from datetime import datetime
 from app.models.chat import ChatStatus, ChatRole, ChatRating
 
 class ChatSessionCreate(BaseModel):
+    branch_code: Optional[str] = None
     branch_id: Optional[UUID] = None
     cis_branch_id: Optional[Union[int, str]] = None
 

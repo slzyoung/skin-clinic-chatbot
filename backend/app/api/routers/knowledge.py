@@ -300,8 +300,12 @@ async def knowledge_chat(
     pipeline = Depends(get_generation_pipeline),
     agent = Depends(get_medical_agent)
 ):
-    # Fetch user branches
-    stmt_branches = select(UserBranch.branch_id).where(UserBranch.user_id == current_user.id)
+    # Fetch user branches (active connections only)
+    stmt_branches = select(UserBranch.branch_id).where(
+        UserBranch.user_id == current_user.id,
+        UserBranch.status == 1,
+        UserBranch.deleted_at.is_(None)
+    )
     result_branches = await db.execute(stmt_branches)
     branch_ids = [str(b_id) for b_id in result_branches.scalars().all()]
     

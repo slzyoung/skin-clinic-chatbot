@@ -29,8 +29,18 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
         "doctors": []
     }
     
-    # Get doctors assigned to this branch
-    stmt = select(User).join(UserBranch, UserBranch.user_id == User.id).where(UserBranch.branch_id == branch.id, User.type == UserType.DOCTOR, User.deleted_at.is_(None))
+    # Get doctors assigned to this branch (active connections only)
+    stmt = (
+        select(User)
+        .join(UserBranch, UserBranch.user_id == User.id)
+        .where(
+            UserBranch.branch_id == branch.id,
+            UserBranch.status == 1,
+            UserBranch.deleted_at.is_(None),
+            User.type == UserType.DOCTOR,
+            User.deleted_at.is_(None)
+        )
+    )
     result = await db.execute(stmt)
     doctors = result.scalars().all()
     

@@ -4,7 +4,7 @@ import uuid
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from cryptography.hazmat.primitives import serialization
 
 from app.models.user import User, UserType
@@ -49,7 +49,10 @@ async def upsert_branch_payload(db: AsyncSession, data: Dict[str, Any]) -> Branc
     ecosystem = data.get("ecosystem", "Erha")
     status = str(data.get("status", "1"))
     
-    stmt = select(Branch).where(Branch.external_id == external_id)
+    stmt = select(Branch).where(
+        func.lower(Branch.ecosystem) == ecosystem.lower(),
+        Branch.external_id == external_id
+    )
     branch = (await db.execute(stmt)).scalar_one_or_none()
     
     is_inactive = (status == "0")
@@ -76,10 +79,12 @@ async def upsert_branch_payload(db: AsyncSession, data: Dict[str, Any]) -> Branc
     await db.flush()
     return branch
 
-async def delete_branch_payload(db: AsyncSession, branch_id: Any):
+async def delete_branch_payload(db: AsyncSession, branch_id: Any, ecosystem: Optional[str] = None):
     """Soft delete a branch record."""
     external_id = int(branch_id)
     stmt = select(Branch).where(Branch.external_id == external_id)
+    if ecosystem:
+        stmt = stmt.where(func.lower(Branch.ecosystem) == ecosystem.lower())
     branch = (await db.execute(stmt)).scalar_one_or_none()
     if branch:
         branch.deleted_at = datetime.now(timezone.utc)
@@ -145,11 +150,18 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
             b_status = str(item.get("status", "1"))
             
             branch = None
-            if b_raw_id is not None:
-                b_stmt = select(Branch).where(Branch.external_id == int(b_raw_id))
+            if b_code:
+                b_stmt = select(Branch).where(
+                    func.lower(Branch.ecosystem) == user.ecosystem.lower(),
+                    Branch.code == b_code
+                )
                 branch = (await db.execute(b_stmt)).scalar_one_or_none()
-            elif b_code:
-                b_stmt = select(Branch).where(Branch.code == b_code)
+            
+            if not branch and b_raw_id is not None:
+                b_stmt = select(Branch).where(
+                    func.lower(Branch.ecosystem) == user.ecosystem.lower(),
+                    Branch.external_id == int(b_raw_id)
+                )
                 branch = (await db.execute(b_stmt)).scalar_one_or_none()
 
             if not branch:
@@ -159,12 +171,22 @@ async def upsert_doctor_payload(db: AsyncSession, data: Dict[str, Any]) -> User:
             ub_stmt = select(UserBranch).where(UserBranch.user_id == user.id, UserBranch.branch_id == branch.id)
             ub = (await db.execute(ub_stmt)).scalar_one_or_none()
             
-            if b_status == "1":
-                if not ub:
-                    db.add(UserBranch(user_id=user.id, branch_id=branch.id))
-            elif b_status == "0":
-                if ub:
-                    await db.delete(ub)
+            try:
+                status_val = int(b_status)
+            except (ValueError, TypeError):
+                status_val = 1
+
+            if not ub:
+                ub = UserBranch(user_id=user.id, branch_id=branch.id, status=status_val)
+                if status_val == 0:
+                    ub.deleted_at = datetime.now(timezone.utc)
+                db.add(ub)
+            else:
+                ub.status = status_val
+                if status_val == 0:
+                    ub.deleted_at = datetime.now(timezone.utc)
+                else:
+                    ub.deleted_at = None
                     
         await db.flush()
 
@@ -175,34 +197,61 @@ async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str,
     for item in data_list:
         raw_user_id = item.get("user_id")
         raw_branch_id = item.get("branch_id")
+        branch_code = item.get("branch_code")
         status = str(item.get("status", "1"))
         
-        if raw_user_id is None or raw_branch_id is None:
-            logger.warning(f"Skipping user_branch mapping, missing user_id or branch_id: {item}")
+        if raw_user_id is None or (raw_branch_id is None and not branch_code):
+            logger.warning(f"Skipping user_branch mapping, missing user_id or branch info: {item}")
             continue
             
         user_cis_id = int(raw_user_id)
-        branch_external_id = int(raw_branch_id)
         
         u_stmt = select(User).where(User.cis_id == user_cis_id)
         user = (await db.execute(u_stmt)).scalar_one_or_none()
         
-        b_stmt = select(Branch).where(Branch.external_id == branch_external_id)
-        branch = (await db.execute(b_stmt)).scalar_one_or_none()
+        if not user:
+            logger.warning(f"Skipping user_branch mapping, user ({user_cis_id}) not found")
+            continue
+
+        branch = None
+        if branch_code:
+            b_stmt = select(Branch).where(
+                func.lower(Branch.ecosystem) == user.ecosystem.lower(),
+                Branch.code == branch_code
+            )
+            branch = (await db.execute(b_stmt)).scalar_one_or_none()
+            
+        if not branch and raw_branch_id is not None:
+            branch_external_id = int(raw_branch_id)
+            b_stmt = select(Branch).where(
+                func.lower(Branch.ecosystem) == user.ecosystem.lower(),
+                Branch.external_id == branch_external_id
+            )
+            branch = (await db.execute(b_stmt)).scalar_one_or_none()
         
-        if not user or not branch:
-            logger.warning(f"Skipping user_branch mapping, user ({user_cis_id}) or branch ({branch_external_id}) not found")
+        if not branch:
+            logger.warning(f"Skipping user_branch mapping, branch not found for user ({user_cis_id}): {item}")
             continue
             
         ub_stmt = select(UserBranch).where(UserBranch.user_id == user.id, UserBranch.branch_id == branch.id)
         ub = (await db.execute(ub_stmt)).scalar_one_or_none()
         
-        if status == "1":
-            if not ub:
-                db.add(UserBranch(user_id=user.id, branch_id=branch.id))
-        elif status == "0":
-            if ub:
-                await db.delete(ub)
+        try:
+            status_val = int(status)
+        except (ValueError, TypeError):
+            status_val = 1
+            
+        if not ub:
+            ub = UserBranch(user_id=user.id, branch_id=branch.id, status=status_val)
+            if status_val == 0:
+                ub.deleted_at = datetime.now(timezone.utc)
+            db.add(ub)
+        else:
+            ub.status = status_val
+            if status_val == 0:
+                ub.deleted_at = datetime.now(timezone.utc)
+            else:
+                ub.deleted_at = None
                 
     await db.flush()
 
@@ -221,17 +270,17 @@ async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]):
     doctors_data = data.get("users", [])
     user_branches_data = data.get("user_branches", [])
     
-    pulled_branch_ids = set()
+    pulled_branch_keys = set()
     for b_data in branches_data:
         branch = await upsert_branch_payload(db, b_data)
         if branch.external_id is not None:
-            pulled_branch_ids.add(branch.external_id)
+            pulled_branch_keys.add((branch.ecosystem.lower(), branch.external_id))
         
     # Soft delete local branches omitted from full sync
     all_b_stmt = select(Branch).where(Branch.deleted_at.is_(None))
     all_branches = (await db.execute(all_b_stmt)).scalars().all()
     for b in all_branches:
-        if b.external_id is not None and b.external_id not in pulled_branch_ids:
+        if b.external_id is not None and (b.ecosystem.lower(), b.external_id) not in pulled_branch_keys:
             b.deleted_at = datetime.now(timezone.utc)
             
     pulled_doc_cis_ids = set()

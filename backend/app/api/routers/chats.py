@@ -251,20 +251,43 @@ async def create_chat_session(
 ):
     branch_id = session_in.branch_id
     
-    if session_in.cis_branch_id is not None:
+    if session_in.branch_code:
+        stmt = select(Branch.id).where(
+            Branch.code == session_in.branch_code,
+            Branch.deleted_at.is_(None)
+        )
+        if current_user.ecosystem:
+            stmt = stmt.where(func.lower(Branch.ecosystem) == current_user.ecosystem.lower())
+        result = await db.execute(stmt)
+        resolved_id = result.scalar_one_or_none()
+        if not resolved_id:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Branch with code '{session_in.branch_code}' not found in ecosystem '{current_user.ecosystem or 'default'}'"
+            )
+        branch_id = resolved_id
+    elif session_in.cis_branch_id is not None:
         try:
             ext_id = int(session_in.cis_branch_id)
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="Invalid CIS branch ID format")
-        stmt = select(Branch.id).where(Branch.external_id == ext_id)
+        stmt = select(Branch.id).where(
+            Branch.external_id == ext_id,
+            Branch.deleted_at.is_(None)
+        )
+        if current_user.ecosystem:
+            stmt = stmt.where(func.lower(Branch.ecosystem) == current_user.ecosystem.lower())
         result = await db.execute(stmt)
         resolved_id = result.scalar_one_or_none()
         if not resolved_id:
-            raise HTTPException(status_code=404, detail=f"Branch with external CIS ID '{session_in.cis_branch_id}' not found")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Branch with external CIS ID '{session_in.cis_branch_id}' not found in ecosystem '{current_user.ecosystem or 'default'}'"
+            )
         branch_id = resolved_id
         
     if not branch_id:
-        raise HTTPException(status_code=400, detail="Either branch_id or cis_branch_id must be provided")
+        raise HTTPException(status_code=400, detail="Either branch_code, cis_branch_id, or branch_id must be provided")
 
     # Fetch configured time limit
     stmt_config = select(AppConfig.value).where(AppConfig.key == "TIME_LIMIT_PER_SESSION")
@@ -516,7 +539,7 @@ async def create_chat_message(
                 session.add(ai_msg)
                 
                 # Update Token Usage
-                if current_user.token_limit is not None:
+                if current_user.token_limit is not None and current_user.token_limit > 0:
                     estimated_tokens = int(len(ai_response_text) * 1.3)
                     now_ym = datetime.now(timezone.utc).strftime("%Y-%m")
                     
@@ -631,7 +654,7 @@ async def stream_chat_message(
         return JSONResponse(status_code=status.HTTP_201_CREATED, content=jsonable_encoder(message))
 
     # Token pre-check
-    if current_user.token_limit is not None:
+    if current_user.token_limit is not None and current_user.token_limit > 0:
         now_ym = datetime.now(timezone.utc).strftime("%Y-%m")
         stmt_usage = select(UserTokenUsage).where(
             UserTokenUsage.user_id == current_user.id,

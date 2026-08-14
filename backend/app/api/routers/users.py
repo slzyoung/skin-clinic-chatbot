@@ -57,7 +57,16 @@ async def _hydrate_user(user: User, db: AsyncSession) -> dict:
         user_dict["accesses"] = list(result_acc.scalars().all())
         
     elif user.type == UserType.DOCTOR:
-        stmt_branch = select(Branch).join(UserBranch, UserBranch.branch_id == Branch.id).where(UserBranch.user_id == user.id)
+        stmt_branch = (
+            select(Branch)
+            .join(UserBranch, UserBranch.branch_id == Branch.id)
+            .where(
+                UserBranch.user_id == user.id,
+                UserBranch.status == 1,
+                UserBranch.deleted_at.is_(None),
+                Branch.deleted_at.is_(None)
+            )
+        )
         result_branch = await db.execute(stmt_branch)
         branches = result_branch.scalars().all()
         user_dict["branches"] = [
@@ -181,7 +190,16 @@ async def update_user(
     if user.type == UserType.DOCTOR:
         update_data = DoctorUpdate(**user_in).model_dump(exclude_unset=True)
         if "token_limit" in update_data and update_data["token_limit"] is not None:
-            stmt_branch = select(Branch).join(UserBranch, UserBranch.branch_id == Branch.id).where(UserBranch.user_id == user.id)
+            stmt_branch = (
+                select(Branch)
+                .join(UserBranch, UserBranch.branch_id == Branch.id)
+                .where(
+                    UserBranch.user_id == user.id,
+                    UserBranch.status == 1,
+                    UserBranch.deleted_at.is_(None),
+                    Branch.deleted_at.is_(None)
+                )
+            )
             result_branch = await db.execute(stmt_branch)
             user_branches = result_branch.scalars().all()
             
