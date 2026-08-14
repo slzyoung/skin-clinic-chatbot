@@ -1,4 +1,4 @@
-export type KnowledgeType = "PRODUCT" | "TREATMENT" | "PROMOTIONAL";
+export type KnowledgeType = "PRODUCT" | "TREATMENT" | "PROMOTIONAL" | "GENERAL" | "OTHER";
 export type KnowledgeStatus = "PENDING" | "PROCESSING" | "APPROVED" | "REJECTED";
 
 export interface KnowledgeCreate {

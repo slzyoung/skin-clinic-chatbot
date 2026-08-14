@@ -47,8 +47,19 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 		}
 	};
 
+	const isTypeMatch = (itemType?: string, filterType?: string) => {
+		if (!filterType || filterType === "ALL") return true;
+		const normItem = itemType?.toUpperCase();
+		const normFilter = filterType?.toUpperCase();
+		if (normItem === normFilter) return true;
+		if ((normFilter === "OTHER" || normFilter === "GENERAL") && (normItem === "OTHER" || normItem === "GENERAL")) {
+			return true;
+		}
+		return false;
+	};
+
 	const filteredList = knowledgeList
-		?.filter((item) => (type ? item.type === type : true))
+		?.filter((item) => isTypeMatch(item.type, type))
 		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
 		// We'll leave categoryFilter as a visual stub for now until dynamic categories are fully wired
 		?.filter(
@@ -177,6 +188,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 						<TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
 							<TableHead className="w-62.5 font-medium text-gray-700">Knowledge Title</TableHead>
 							<TableHead className="w-37.5 font-medium text-gray-700">Category</TableHead>
+							<TableHead className="w-35 font-medium text-gray-700">Date</TableHead>
 							<TableHead className="font-medium text-gray-700">Description</TableHead>
 							<TableHead className="w-30 font-medium text-gray-700">Status</TableHead>
 							<TableHead className="w-30 font-medium text-gray-700 text-right">Actions</TableHead>
@@ -185,7 +197,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 					<TableBody>
 						{isLoading && (
 							<TableRow>
-								<TableCell colSpan={5} className="text-center py-8 text-gray-500">
+								<TableCell colSpan={6} className="text-center py-8 text-gray-500">
 									<div className="flex items-center justify-center">
 										<RiLoader4Line className="w-5 h-5 animate-spin mr-2" />
 										Loading knowledge base...
@@ -196,7 +208,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 
 						{isError && (
 							<TableRow>
-								<TableCell colSpan={5} className="text-center py-8 text-red-500">
+								<TableCell colSpan={6} className="text-center py-8 text-red-500">
 									Failed to load knowledge base documents.
 								</TableCell>
 							</TableRow>
@@ -204,7 +216,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 
 						{!isLoading && !isError && filteredList?.length === 0 && (
 							<TableRow>
-								<TableCell colSpan={5} className="text-center py-8 text-gray-500">
+								<TableCell colSpan={6} className="text-center py-8 text-gray-500">
 									No knowledge base documents found.
 								</TableCell>
 							</TableRow>
@@ -239,8 +251,17 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 											variant="secondary"
 											className="bg-gray-100 text-gray-700 hover:bg-gray-100"
 										>
-											{row.type}
+											{row.type === "GENERAL" ? "OTHER" : row.type}
 										</Badge>
+									</TableCell>
+									<TableCell className="whitespace-nowrap text-sm text-gray-500">
+										{row.created_at
+											? new Date(row.created_at).toLocaleDateString("en-GB", {
+													day: "2-digit",
+													month: "short",
+													year: "numeric",
+											  })
+											: "-"}
 									</TableCell>
 									<TableCell className="max-w-xl">
 										<p className="text-sm text-gray-600 truncate" title={row.ai_summary || row.content || undefined}>
