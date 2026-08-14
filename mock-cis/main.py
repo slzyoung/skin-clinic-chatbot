@@ -52,26 +52,24 @@ def sign_proxy_payload(body_bytes: bytes, user_id: str) -> str:
 # Mock Master Data
 MOCK_BRANCHES = [
     {
-        "id": "838",
+        "id": 838,
         "name": "Klinik Utama Erha Ultimate BSD",
         "code": "011",
         "ecosystem": "Erha",
-        "status": "1",
-        "image_url": "https://example.com/branch/838.png"
+        "status": "1"
     },
     {
-        "id": "847",
+        "id": 847,
         "name": "Klinik Utama Dermies BSD",
         "code": "034",
         "ecosystem": "Dermies",
-        "status": "1",
-        "image_url": "https://example.com/branch/847.png"
+        "status": "1"
     }
 ]
 
 MOCK_DOCTORS = [
     {
-        "id": "1",
+        "id": 1,
         "name": "dr Sulistyo SpKK",
         "user_type": "1",
         "user_type_name": "Doctor SpKK",
@@ -79,32 +77,49 @@ MOCK_DOCTORS = [
         "email": "drkk11@gmail.com",
         "ecosystem": "Erha",
         "status": "1",
-        "image_url": "https://example.com/doctor/1.png"
+        "user_branchs": [
+            {
+                "branch_id": 838,
+                "branch_code": "011",
+                "status": "1"
+            },
+            {
+                "branch_id": 847,
+                "branch_code": "034",
+                "status": "0"
+            }
+        ]
     },
     {
-        "id": "2",
+        "id": 2,
         "name": "dr Budi Santoso",
-        "user_type": "2",
+        "user_type": "173",
         "user_type_name": "Doctor gp",
         "nik": "dr00456",
         "email": "drbudi@gmail.com",
         "ecosystem": "Dermies",
         "status": "1",
-        "image_url": "https://example.com/doctor/2.png"
+        "user_branchs": [
+            {
+                "branch_id": 847,
+                "branch_code": "034",
+                "status": "1"
+            }
+        ]
     }
 ]
 
 MOCK_USER_BRANCHES = [
     {
-        "user_id": "1",
-        "branch_id": "838",
+        "user_id": 1,
+        "branch_id": 838,
         "branch_code": "011",
         "status": "1",
         "ecosystem": "Erha"
     },
     {
-        "user_id": "2",
-        "branch_id": "847",
+        "user_id": 2,
+        "branch_id": 847,
         "branch_code": "034",
         "status": "1",
         "ecosystem": "Dermies"
@@ -191,17 +206,16 @@ async def get_doctors():
     return MOCK_DOCTORS
 
 class LoginRequest(BaseModel):
-    cis_id: str
+    cis_id: Any
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
-    doctor = next((d for d in MOCK_DOCTORS if d.get("id") == req.cis_id or d.get("cis_id") == req.cis_id), None)
+    doctor = next((d for d in MOCK_DOCTORS if str(d.get("id")) == str(req.cis_id) or str(d.get("cis_id")) == str(req.cis_id)), None)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
         
     private_key = load_private_key()
-    # Support both id and cis_id for backwards compatibility with mock frontend
-    user_id = doctor.get("id") or doctor.get("cis_id")
+    user_id = str(doctor.get("id") or doctor.get("cis_id"))
     payload = {
         "sub": user_id,
         "iat": datetime.datetime.now(datetime.timezone.utc),
