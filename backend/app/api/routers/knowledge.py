@@ -47,10 +47,13 @@ async def list_knowledge(
     # 2. Out-of-band sync DB items with RAG staging files (data/pending or data/output)
     db_by_id = {str(item.id): item for item in db_items}
     updated_db = False
+    db_responses: List[KnowledgeResponse] = []
 
     for item in db_items:
         k_id_str = str(item.id)
         target_file = resolve_pending_file(k_id_str) or resolve_approved_file(k_id_str)
+        item_metadata = dict(item.metadata_) if isinstance(item.metadata_, dict) else {}
+
         if target_file and os.path.exists(target_file):
             try:
                 with open(target_file, "r", encoding="utf-8") as f:
@@ -68,8 +71,29 @@ async def list_knowledge(
                     if latest_title and item.title != latest_title:
                         item.title = latest_title
                         updated_db = True
+                    item_metadata = {**item_metadata, **data}
             except Exception as e:
                 pass
+
+        # Build KnowledgeResponse before any commit to prevent MissingGreenlet from expired attributes
+        db_responses.append(KnowledgeResponse(
+            id=item.id,
+            title=item.title,
+            content=item.content,
+            file_name=item.file_name,
+            original_path=item.original_path,
+            mime_type=item.mime_type,
+            file_size=item.file_size,
+            type=item.type,
+            status=item.status,
+            ai_summary=item.ai_summary,
+            ai_confidence=item.ai_confidence,
+            uploaded_by=item.uploaded_by,
+            approved_by=item.approved_by,
+            metadata_=item_metadata,
+            created_at=item.created_at,
+            updated_at=item.updated_at
+        ))
 
     if updated_db:
         try:
@@ -134,7 +158,7 @@ async def list_knowledge(
                     except Exception as err:
                         pass
 
-    return list(db_items) + staged_responses
+    return db_responses + staged_responses
 
 @router.get("/{knowledge_id}", response_model=KnowledgeResponse)
 async def get_knowledge(
