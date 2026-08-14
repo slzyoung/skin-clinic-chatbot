@@ -1,3 +1,4 @@
+from loguru import logger
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -28,6 +29,7 @@ from app.rag.router import (
     delete_document_endpoint,
     resolve_pending_file,
     resolve_approved_file,
+    synthesize_batch_executive_summary,
     chat_endpoint
 )
 from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatRequest, ChatResponse, UserContext
@@ -255,22 +257,29 @@ async def get_knowledge(
         updated_at=now
     )
 
-@router.get("/batch/{upload_batch_id}", response_model=List[KnowledgeResponse])
+@router.get("/batch/{batch_id}", response_model=List[KnowledgeResponse])
 async def get_knowledge_batch(
-    upload_batch_id: str,
+    batch_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(RequireAccess("knowledge:read"))
+    current_user: User = Depends(RequireAccess("knowledge:read")),
+    llm: BaseLLMAdapter = Depends(get_llm)
 ):
     """Fetch all knowledge documents uploaded in a specific batch."""
+    from sqlalchemy import or_
     stmt = select(Knowledge).where(
-        Knowledge.metadata_.op("->>")("upload_batch_id") == upload_batch_id,
-        Knowledge.deleted_at.is_(None)
+        or_(
+            Knowledge.metadata_.op("->>")("batch_id") == batch_id,
+            Knowledge.metadata_.op("->>")("upload_batch_id") == batch_id
+        )
     ).order_by(Knowledge.created_at.desc())
     result = await db.execute(stmt)
-    docs = result.scalars().all()
+    docs = list(result.scalars().all())
     
     enriched_docs = []
+    seen_ids = set()
+
     for knowledge in docs:
+        seen_ids.add(str(knowledge.id))
         try:
             target_file = resolve_pending_file(str(knowledge.id)) or resolve_approved_file(str(knowledge.id))
             if target_file and os.path.exists(target_file):
@@ -290,6 +299,87 @@ async def get_knowledge_batch(
         except Exception:
             enriched_docs.append(knowledge)
             
+    # Also scan data/pending and data/output for any staged JSON files matching this batch
+    now = datetime.now(timezone.utc)
+    for folder in ["data/pending", "data/output"]:
+        if os.path.exists(folder):
+            for f in os.listdir(folder):
+                if f.endswith(".json") and f != "bm25_index.pkl":
+                    file_path = os.path.join(folder, f)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as fp:
+                            data = json.load(fp)
+                        if isinstance(data, dict):
+                            doc_batch = data.get("batch_id") or data.get("upload_batch_id")
+                            if not doc_batch and data.get("chunks"):
+                                doc_batch = data["chunks"][0].get("metadata", {}).get("batch_id") or data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+
+                            if doc_batch == batch_id:
+                                raw_id = data.get("knowledge_id") or f.replace("_parsed.json", "").replace(".json", "")
+                                if str(raw_id) not in seen_ids:
+                                    seen_ids.add(str(raw_id))
+                                    try:
+                                        k_uuid = uuid.UUID(str(raw_id))
+                                    except ValueError:
+                                        k_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(raw_id))
+
+                                    file_name = data.get("file_name", f)
+                                    title = data.get("title", file_name)
+                                    summary = data.get("summary", "")
+                                    raw_type = str(data.get("type", "PRODUCT")).upper()
+                                    k_type = KnowledgeType.PRODUCT
+                                    if "TREATMENT" in raw_type:
+                                        k_type = KnowledgeType.TREATMENT
+                                    elif "PROMO" in raw_type:
+                                        k_type = KnowledgeType.PROMOTIONAL
+                                    elif "OTHER" in raw_type or "LAIN" in raw_type:
+                                        k_type = KnowledgeType.GENERAL
+
+                                    doc_status = KnowledgeStatus.APPROVED if "output" in folder else KnowledgeStatus.PENDING
+
+                                    enriched_docs.append(KnowledgeResponse(
+                                        id=k_uuid,
+                                        title=title,
+                                        content=summary,
+                                        file_name=file_name,
+                                        original_path=f"data/temp/{file_name}",
+                                        mime_type="application/pdf",
+                                        file_size=None,
+                                        type=k_type,
+                                        status=doc_status,
+                                        ai_summary=summary,
+                                        ai_confidence=95.0,
+                                        uploaded_by=current_user.id,
+                                        approved_by=None,
+                                        metadata_=data,
+                                        created_at=now,
+                                        updated_at=now
+                                    ))
+                    except Exception:
+                        pass
+
+    # Synthesize unified batch executive summary if multiple documents and not yet generated
+    if len(enriched_docs) >= 2 and llm:
+        has_batch_summary = any(
+            (doc.get("metadata_") if isinstance(doc, dict) else (doc.metadata_ or {})).get("batch_summary")
+            for doc in enriched_docs
+        )
+        if not has_batch_summary:
+            try:
+                gen_summary = await synthesize_batch_executive_summary(batch_id, llm)
+                if gen_summary:
+                    for doc in enriched_docs:
+                        if isinstance(doc, dict):
+                            if "metadata_" not in doc or not doc["metadata_"]:
+                                doc["metadata_"] = {}
+                            doc["metadata_"]["batch_summary"] = gen_summary
+                        elif hasattr(doc, "metadata_"):
+                            if not doc.metadata_:
+                                doc.metadata_ = {}
+                            doc.metadata_["batch_summary"] = gen_summary
+            except Exception as e:
+                logger.warning(f"On-the-fly batch summary synthesis skipped: {e}")
+
     return enriched_docs
 
 @router.post("/chat", response_model=ChatResponse)

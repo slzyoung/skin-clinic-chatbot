@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from loguru import logger
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Path, Body
 
@@ -80,6 +80,10 @@ def resolve_pending_file(knowledge_id: str) -> Optional[str]:
                     data = json.load(fp)
                 if isinstance(data, dict) and (data.get("knowledge_id") == knowledge_id or data.get("file_name") == knowledge_id):
                     return full_p
+                elif isinstance(data, list) and data and isinstance(data[0], dict):
+                    meta = data[0].get("metadata", {})
+                    if meta.get("knowledge_id") == knowledge_id or meta.get("source_file") == knowledge_id:
+                        return full_p
             except Exception:
                 pass
     return None
@@ -113,41 +117,98 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
                 pass
     return None
 
-def check_sha256_duplicate(file_hash: str, file_name: str) -> Optional[str]:
+def detect_duplicate_lifecycle(file_hash: str, file_name: str) -> Dict[str, Any]:
     """
-    Checks whether a document with identical SHA-256 content hash already exists in data/output or data/pending.
-    Returns the existing file_name if a 100% content match is found, else None.
+    Evaluates the duplicate status of an uploaded file across the entire Knowledge Base:
+    - State 1: PUBLISHED (in data/output or KnowledgeStatus.APPROVED) -> BLOCK
+    - State 2: PENDING (in data/pending or KnowledgeStatus.PENDING/ON_REVIEW) -> ASK ADMIN (Keep/Replace)
+    - State 3: NEW -> Ingest
     """
-    if not file_hash:
-        return None
+    clean_name = file_name.strip().lower()
 
-    for folder in ["data/output", "data/pending"]:
-        if not os.path.exists(folder):
-            continue
-        for f in os.listdir(folder):
-            if f.endswith(".json"):
-                full_path = os.path.join(folder, f)
+    # 1. Check PUBLISHED / APPROVED (data/output)
+    approved_dir = "data/output"
+    if os.path.exists(approved_dir):
+        for f in os.listdir(approved_dir):
+            if f.endswith(".json") and f != "bm25_index.pkl":
+                full_path = os.path.join(approved_dir, f)
                 try:
                     with open(full_path, "r", encoding="utf-8") as fp:
                         data = json.load(fp)
-                    existing_hash = None
-                    existing_name = None
+                    ex_hash = None
+                    ex_name = None
+                    k_id = None
                     if isinstance(data, dict):
-                        existing_hash = data.get("file_hash")
-                        existing_name = data.get("file_name")
-                        if not existing_hash:
-                            chunks = data.get("chunks", [])
-                            if chunks and isinstance(chunks[0], dict):
-                                existing_hash = chunks[0].get("metadata", {}).get("file_hash")
+                        ex_hash = data.get("file_hash")
+                        ex_name = data.get("file_name")
+                        k_id = data.get("knowledge_id")
+                        if not ex_hash and data.get("chunks"):
+                            ex_hash = data["chunks"][0].get("metadata", {}).get("file_hash")
                     elif isinstance(data, list) and data:
                         meta = data[0].get("metadata", {})
-                        existing_hash = meta.get("file_hash")
-                        existing_name = meta.get("source_file")
+                        ex_hash = meta.get("file_hash")
+                        ex_name = meta.get("source_file")
+                        k_id = meta.get("knowledge_id")
 
-                    if existing_hash and existing_hash == file_hash and existing_name != file_name:
-                        return existing_name or f
+                    is_hash_match = bool(file_hash and ex_hash and file_hash == ex_hash)
+                    is_name_match = bool(ex_name and ex_name.strip().lower() == clean_name)
+
+                    if is_hash_match or is_name_match:
+                        match_reason = "SHA-256 Checksum Match" if is_hash_match else "Filename Match"
+                        return {
+                            "status": "PUBLISHED",
+                            "existing_file": ex_name or f,
+                            "knowledge_id": k_id or f[:-5],
+                            "match_reason": match_reason
+                        }
                 except Exception:
                     pass
+
+    # 2. Check PENDING / ON REVIEW (data/pending)
+    pending_dir = "data/pending"
+    if os.path.exists(pending_dir):
+        for f in os.listdir(pending_dir):
+            if f.endswith(".json"):
+                full_path = os.path.join(pending_dir, f)
+                try:
+                    with open(full_path, "r", encoding="utf-8") as fp:
+                        data = json.load(fp)
+                    ex_hash = None
+                    ex_name = None
+                    k_id = None
+                    if isinstance(data, dict):
+                        ex_hash = data.get("file_hash")
+                        ex_name = data.get("file_name")
+                        k_id = data.get("knowledge_id")
+                        if not ex_hash and data.get("chunks"):
+                            ex_hash = data["chunks"][0].get("metadata", {}).get("file_hash")
+                    elif isinstance(data, list) and data:
+                        meta = data[0].get("metadata", {})
+                        ex_hash = meta.get("file_hash")
+                        ex_name = meta.get("source_file")
+                        k_id = meta.get("knowledge_id")
+
+                    is_hash_match = bool(file_hash and ex_hash and file_hash == ex_hash)
+                    is_name_match = bool(ex_name and ex_name.strip().lower() == clean_name)
+
+                    if is_hash_match or is_name_match:
+                        match_reason = "SHA-256 Checksum Match" if is_hash_match else "Filename Match"
+                        return {
+                            "status": "PENDING",
+                            "existing_file": ex_name or f,
+                            "knowledge_id": k_id or f[:-5],
+                            "match_reason": match_reason
+                        }
+                except Exception:
+                    pass
+
+    return {"status": "NEW"}
+
+def check_sha256_duplicate(file_hash: str, file_name: str) -> Optional[str]:
+    """Backward-compatible helper returning duplicate filename if PUBLISHED duplicate is found."""
+    res = detect_duplicate_lifecycle(file_hash, file_name)
+    if res.get("status") == "PUBLISHED":
+        return res.get("existing_file")
     return None
 
 async def process_ingestion_background(
@@ -158,7 +219,8 @@ async def process_ingestion_background(
     llm: BaseLLMAdapter,
     doc_type_display: str = "Product",
     user_prompt: Optional[str] = None,
-    file_hash: Optional[str] = None
+    file_hash: Optional[str] = None,
+    batch_id: Optional[str] = None
 ):
     try:
         # Temporarily configure pipeline to stage file in data/pending without indexing
@@ -198,6 +260,8 @@ async def process_ingestion_background(
                 if "metadata" not in chunk:
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = knowledge_id
+                chunk["metadata"]["batch_id"] = batch_id
+                chunk["metadata"]["file_hash"] = file_hash
                 chunk["metadata"]["source_file"] = file_name
                 chunk["metadata"]["type"] = doc_type_display.lower()
                 chunk["metadata"].pop("suggested_categories", None)
@@ -208,20 +272,39 @@ async def process_ingestion_background(
         clean_title_fallback = os.path.splitext(file_name)[0]
 
         # Write initial pending state IMMEDIATELY (0.5s) so GET /pending and GET /documents work instantly
+        init_image_url = None
+        for c in enriched_chunks:
+            if isinstance(c, dict) and c.get("metadata", {}).get("image_url"):
+                init_image_url = c["metadata"]["image_url"]
+                break
+
         os.makedirs("data/pending", exist_ok=True)
         pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
         initial_staged_doc = {
             "knowledge_id": knowledge_id,
+            "batch_id": batch_id,
             "file_name": file_name,
+            "file_hash": file_hash,
             "title": clean_title_fallback,
             "type": doc_type_display,
             "status": "On review",
-            "summary": full_extracted_text,
             "text_accuracy": "100%",
+            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+            "summary": full_extracted_text,
             "feedback": f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan.",
+            "batch_summary": None,
             "suggested_categories": [],
+            "visibility_settings": {
+                "clinics": ["all"],
+                "doctor_types": ["all"],
+                "doctors": ["all"]
+            },
+            "history": [],
             "chunks": enriched_chunks
         }
+        if init_image_url:
+            initial_staged_doc["image_url"] = init_image_url
+
         with open(pending_file_path, 'w', encoding='utf-8') as f:
             json.dump(initial_staged_doc, f, indent=4, ensure_ascii=False)
             
@@ -268,8 +351,8 @@ async def process_ingestion_background(
                 """ if user_prompt and str(user_prompt).strip() else ""
 
                 review_prompt = f"""
-                You are a world-class AI Medical Aesthetic Specialist & Knowledge Engineer for ERHA (PT Arya Noble) knowledge base.
-                Your task is to refine, validate, and structure the extracted document content to production-grade quality matching ChatGPT / Claude standards.
+                You are a world-class AI Knowledge Engineer and Specialist for ERHA (PT Arya Noble) knowledge base.
+                Your task is to refine, validate, and structure the extracted document content into clean, comprehensive, production-grade Markdown matching ChatGPT / Claude standards.
 
                 Extracted Document Content:
                 {full_extracted_text}
@@ -279,25 +362,30 @@ async def process_ingestion_background(
 
                 {user_instruction_block}
 
-                PRODUCTION-GRADE QUALITY RULES:
-                - Output MUST be beautifully formatted in clean standard Markdown with clear titles (`#`), section headers (`##`), bold highlights (`**`), bullet points (`-`), and crisp tables (`| Col 1 | Col 2 |`).
-                - Fix any typos, grammar errors, OCR misreadings, or awkward phrasing while retaining 100% factual and clinical accuracy.
-                - Preserve all medical details, active ingredients, dosage, usage guidelines, indications, contraindications, and patient safety notes.
-                - Do NOT include any generic AI intros like "Here is the summary" or "AI Executive Overview". The `summary` MUST start directly with `# [Document Title]`.
+                FLEXIBLE & COMPREHENSIVE STRUCTURING GUIDELINES:
+                1. **Adaptive Structure for Any Document Type**:
+                   - Documents can be of ANY nature (e.g. Skincare/Cosmetics, Treatment Protocols, SOP / Clinic Guidelines, Training Slides / Presentations, Research / Clinical Literature, Price Lists, FAQ, Device/Equipment Guides, etc.).
+                   - Dynamically structure the Markdown using clear hierarchical headers (`# [Document Title]`, `## Section`, `### Subsection`), bold key terms (`**`), structured bullet points (`-`), and crisp Markdown tables (`| Col 1 | Col 2 |`) tailored to the document's actual topic.
+                2. **100% Content & Information Preservation**:
+                   - ALL key points, steps, specifications, numbers, ingredients/substances, parameters, tables, questions/answers, and details present in the raw text MUST be fully retained and organized.
+                   - DO NOT omit, over-condense, or skip substantive sections. Ensure all factual information from the uploaded file is thoroughly represented.
+                3. **Professional Markdown Formatting**:
+                   - Fix any OCR noise, broken line breaks, or formatting typos while preserving 100% factual accuracy.
+                   - Start directly with `# [Document Title]`. Do NOT add meta introductions like "Here is the summary".
 
                 Perform the following tasks:
-                1. **AI Recommended Title (`title`)**: Provide a short, professional title for the knowledge header (e.g. "Knowledge Ingestment Brightener Product" or "Knowledge Ingestment ERHA Acne Spot Gel Protocol").
-                2. **Elaborated Full Document Markdown (`summary`)**: Present the ENTIRE document content in production-ready Markdown starting directly with `# Document Title`. Fulfill any user custom instructions if provided.
+                1. **AI Recommended Title (`title`)**: Provide a clean, short, professional document title WITHOUT any prefixes like "Knowledge Ingestment" or "Knowledge Base" (e.g. "Standard Operating Procedure (SOP) Brightening Center" or "ERHA Acne Spot Gel Protocol").
+                2. **Structured Full Document Markdown (`summary`)**: Present the complete content in beautifully organized Markdown matching the document's domain.
                 3. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
-                4. **Dynamic Content Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary explaining EXACTLY what this specific document covers in Indonesian, including key product/treatment names and clinical focus. DO NOT use generic boilerplate text like "Document successfully validated and restructured into production-grade Markdown". Example: "Dokumen ini memuat panduan 5 prosedur klinik estetika ERHA, mencakup protokol Chemical Peeling, Microdermabrasion, dan Laser Therapy beserta instruksi perawatan pasca-tindakan."
+                4. **Dynamic Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary in Indonesian explaining exactly what this specific document covers and its main points.
                 5. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
-                6. **Granular Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count. For each chunk, provide an object with "text" and "category" (matching the single most relevant category name from Available System Categories for that specific chunk).
+                6. **Granular Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count with "text" and "category".
 
-                Return a valid JSON object ONLY (do not wrap in markdown block code like ```json):
+                Return a valid JSON object ONLY:
                 {{
-                    "title": "Knowledge Ingestment ERHA Acne Spot Gel Protocol",
-                    "summary": "# ERHA Product / Protocol Title\\n\\nContent...",
-                    "feedback": "Dokumen ini memuat panduan 5 prosedur klinik estetika ERHA, mencakup protokol Chemical Peeling, Microdermabrasion, dan Laser Therapy beserta instruksi perawatan pasca-tindakan.",
+                    "title": "Standard Operating Procedure (SOP) Brightening Center",
+                    "summary": "# Document Title\\n\\n## 1. Section 1\\n- Content...",
+                    "feedback": "Dokumen ini memuat panduan lengkap mengenai [topik dokumen], mencakup [poin-poin utama yang dibahas].",
                     "text_accuracy": "100%",
                     "suggested_categories": [
                         {{
@@ -309,19 +397,31 @@ async def process_ingestion_background(
                         {{
                             "text": "Corrected chunk 1 text...",
                             "category": "Acne Care"
-                        }},
-                        {{
-                            "text": "Corrected chunk 2 text...",
-                            "category": "Brightening"
                         }}
                     ]
                 }}
                 """
                 llm_response = await asyncio.to_thread(llm.generate, review_prompt)
                 parsed_review = safe_json_loads(llm_response)
-                recommended_title = parsed_review.get("title") or clean_title_fallback
-                if recommended_title and any(recommended_title.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
-                    recommended_title = os.path.splitext(recommended_title)[0]
+                raw_title = parsed_review.get("title") or clean_title_fallback
+
+                # Strip unwanted prefixes from title
+                prefixes_to_strip = [
+                    "knowledge ingestment", "knowledge ingestion", "knowledge ingest",
+                    "ingestment", "ingestion", "knowledge base", "knowledge"
+                ]
+                recommended_title = raw_title.strip()
+                for p in prefixes_to_strip:
+                    if recommended_title.lower().startswith(p):
+                        recommended_title = recommended_title[len(p):].lstrip(" :-_#\t")
+
+                for ext in [".pdf", ".docx", ".xlsx", ".csv", ".pptx", ".ppt", ".doc", ".txt"]:
+                    if recommended_title.lower().endswith(ext):
+                        recommended_title = recommended_title[:-len(ext)].strip()
+
+                if not recommended_title:
+                    recommended_title = clean_title_fallback
+
                 summary = parsed_review.get("summary", summary)
                 text_accuracy = parsed_review.get("text_accuracy", "100%")
                 feedback = parsed_review.get("feedback", feedback)
@@ -344,7 +444,7 @@ async def process_ingestion_background(
                         
             except Exception as llm_err:
                 logger.error(f"Failed to process AI review: {llm_err}")
-                recommended_title = f"Knowledge Ingestment {file_name}"
+                recommended_title = clean_title_fallback
                 if not summary or summary == "":
                     summary = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
                 if not suggested_categories and db_categories:
@@ -391,6 +491,30 @@ async def process_ingestion_background(
                 chunk["metadata"].pop("suggested_categories", None)
                 chunk["metadata"].pop("document_type", None)
 
+        # Preserve image_url, s3_key, storage_key and prepend visual image tag if present
+        doc_image_url = None
+        doc_s3_key = None
+        for c in enriched_chunks:
+            if isinstance(c, dict) and c.get("metadata"):
+                m = c["metadata"]
+                if m.get("image_url") and not doc_image_url:
+                    doc_image_url = m["image_url"]
+                if m.get("s3_key") and not doc_s3_key:
+                    doc_s3_key = m["s3_key"]
+                elif m.get("storage_key") and not doc_s3_key:
+                    doc_s3_key = m["storage_key"]
+
+        if doc_image_url:
+            if doc_image_url not in summary:
+                summary = f"![{recommended_title}]({doc_image_url})\n\n{summary}"
+            if enriched_chunks and isinstance(enriched_chunks[0], dict):
+                if doc_image_url not in enriched_chunks[0].get("text", ""):
+                    enriched_chunks[0]["text"] = f"![{recommended_title}]({doc_image_url})\n\n{enriched_chunks[0].get('text', '')}"
+                enriched_chunks[0]["metadata"]["image_url"] = doc_image_url
+                if doc_s3_key:
+                    enriched_chunks[0]["metadata"]["s3_key"] = doc_s3_key
+                    enriched_chunks[0]["metadata"]["storage_key"] = doc_s3_key
+
         history_list = []
         if user_prompt and str(user_prompt).strip():
             history_list = [
@@ -398,22 +522,30 @@ async def process_ingestion_background(
                 {"role": "assistant", "content": summary}
             ]
 
-        # Structure the final pending document state
+        # Structure the final pending document state in exact requested order
         staged_document = {
             "knowledge_id": knowledge_id,
+            "batch_id": batch_id,
             "file_name": file_name,
+            "file_hash": file_hash,
             "title": recommended_title,
             "type": doc_type_display,
             "status": "On review",
-            "summary": summary,
             "text_accuracy": text_accuracy,
+            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+            "summary": summary,
             "feedback": feedback,
+            "batch_summary": None,
             "suggested_categories": suggested_categories,
             "visibility_settings": visibility_settings,
-            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
             "history": history_list,
             "chunks": enriched_chunks
         }
+        if doc_image_url:
+            staged_document["image_url"] = doc_image_url
+        if doc_s3_key:
+            staged_document["s3_key"] = doc_s3_key
+            staged_document["storage_key"] = doc_s3_key
         
         # Save back to pending folder using knowledge_id in filename
         pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
@@ -427,6 +559,13 @@ async def process_ingestion_background(
             except Exception:
                 pass
             
+        # If this document is part of a multi-file batch, synthesize a unified Batch Executive Summary
+        if batch_id and llm:
+            try:
+                await synthesize_batch_executive_summary(batch_id, llm)
+            except Exception as batch_summary_err:
+                logger.warning(f"Could not synthesize batch summary: {batch_summary_err}")
+
         # Update Knowledge DB table status to PENDING
         try:
             from app.core.database import AsyncSessionLocal
@@ -454,6 +593,89 @@ async def process_ingestion_background(
     except Exception as e:
         logger.error(f"Failed background processing for document: {e}")
 
+async def synthesize_batch_executive_summary(batch_id: str, llm: BaseLLMAdapter) -> Optional[str]:
+    """
+    Synthesizes multiple uploaded document feedbacks/summaries into a concise, unified Executive Summary paragraph.
+    Identifies whether documents are clinically/operationally interrelated or independent.
+    Updates all JSON documents in data/pending for this batch.
+    """
+    if not batch_id or not llm:
+        return None
+
+    pending_dir = "data/pending"
+    if not os.path.exists(pending_dir):
+        return None
+
+    batch_docs = []
+    batch_file_paths = []
+
+    for f in os.listdir(pending_dir):
+        if f.endswith(".json"):
+            fp = os.path.join(pending_dir, f)
+            try:
+                with open(fp, "r", encoding="utf-8") as f_json:
+                    data = json.load(f_json)
+                if isinstance(data, dict) and data.get("batch_id") == batch_id:
+                    batch_docs.append(data)
+                    batch_file_paths.append(fp)
+            except Exception:
+                pass
+
+    if len(batch_docs) < 2:
+        return None
+
+    docs_text = "\n\n".join([
+        f"- Dokumen {i+1} ('{d.get('file_name', '')}' - {d.get('title', '')}):\n  Tipe/Kategori: {d.get('type', 'General')}\n  Deskripsi/Poin Utama: {d.get('feedback', '') or d.get('summary', '')[:250]}"
+        for i, d in enumerate(batch_docs)
+    ])
+
+    batch_prompt = f"""
+Anda adalah AI Knowledge Specialist untuk klinik ERHA (PT Arya Noble).
+Pengguna baru saja mengunggah {len(batch_docs)} dokumen sekaligus dalam satu batch ingest.
+
+Berikut rincian dokumen yang diunggah dalam batch ini:
+{docs_text}
+
+Tugas Anda:
+Buatlah SATU paragraf "Executive Summary" (Bahasa Indonesia) yang singkat, padat, profesional, dan jelas (3-5 kalimat).
+Ketentuan Wajib:
+1. Rangkum topik utama dari seluruh dokumen yang diunggah dalam batch ini.
+2. Analisis hubungan antar dokumen:
+   - Jika dokumen saling berhubungan (misal: SOP treatment + katalog produk pendukung, atau protokol jerawat aktif + dark spot enhancer), jelaskan keterkaitan alur klinis/fungsionalnya.
+   - Jika dokumen tidak berhubungan langsung (topik berbeda/independen), jelaskan secara ringkas masing-masing fokus dokumennya.
+3. Langsung mulai dengan kalimat ringkasan (tanpa awalan seperti "Berikut adalah...", tanpa judul, dan tanpa bullet points).
+"""
+    try:
+        batch_summary = await asyncio.to_thread(llm.generate, batch_prompt)
+        batch_summary = batch_summary.strip().strip('"').strip("'")
+
+        # Save batch_summary to each document's metadata maintaining exact key order
+        ordered_keys = [
+            "knowledge_id", "batch_id", "file_name", "file_hash", "title",
+            "type", "status", "text_accuracy", "initial_prompt", "summary",
+            "feedback", "batch_summary", "suggested_categories",
+            "visibility_settings", "history", "chunks", "image_url"
+        ]
+
+        for fp, doc_data in zip(batch_file_paths, batch_docs):
+            doc_data["batch_summary"] = batch_summary
+            reordered = {}
+            for k in ordered_keys:
+                if k in doc_data:
+                    reordered[k] = doc_data[k]
+            for k, v in doc_data.items():
+                if k not in reordered:
+                    reordered[k] = v
+
+            with open(fp, "w", encoding="utf-8") as out_f:
+                json.dump(reordered, out_f, indent=4, ensure_ascii=False)
+
+        logger.info(f"Synthesized batch executive summary for batch {batch_id}: {batch_summary[:80]}...")
+        return batch_summary
+    except Exception as e:
+        logger.warning(f"Could not synthesize batch executive summary: {e}")
+        return None
+
 @router.post(
     "/ingest", 
     tags=["Ingestion"], 
@@ -478,6 +700,11 @@ async def process_ingestion_background(
                             "prompt": {
                                 "type": "string",
                                 "description": "Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"
+                            },
+                            "replace_existing": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Explicit confirmation by Admin to replace/overwrite an existing PENDING draft"
                             }
                         },
                         "required": ["file"]
@@ -492,13 +719,16 @@ async def ingest_document(
     file: List[UploadFile] = File(..., description="Primary document file(s) to upload (Choose File)"),
     category_type: str = Form("Product", description="Category Type: 'Product', 'Treatment', 'Promotional', or 'Other'"),
     prompt: Optional[str] = Form(None, description="Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"),
+    replace_existing: bool = Form(False, description="Set to true if admin explicitly confirms replacing/overwriting existing PENDING draft(s)"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     llm: BaseLLMAdapter = Depends(get_llm)
 ):
     """
     API endpoint to upload and stage document(s) for ingestion.
-    Parses, chunks, self-heals, and summarizes the file(s) using AI, 
-    then stores them in data/pending/ for approval.
+    Supports Batch Ingestion with Batch ID, SHA-256 Checksum calculation, and 3-Way Duplicate Detection:
+    - PUBLISHED / APPROVED -> BLOCKED (Protects active clinic knowledge base)
+    - PENDING / ON REVIEW  -> Requires Admin Confirmation (replace_existing=True) to prevent silent overwrite
+    - NEW                  -> Proceed with AI staging
     """
     upload_list = file if isinstance(file, list) else [file]
     upload_list = [f for f in upload_list if f is not None and f.filename]
@@ -508,11 +738,12 @@ async def ingest_document(
     try:
         raw_type = (category_type or "").strip().upper()
         from app.models.knowledge import KnowledgeType
+        import uuid as _uuid
+        import hashlib
         
         response_items = []
         os.makedirs("data/temp", exist_ok=True)
-        import uuid as _uuid
-        upload_batch_id = str(_uuid.uuid4()) if len(upload_list) > 1 else None
+        batch_id = str(_uuid.uuid4()) if len(upload_list) > 1 else None
 
         for target_file in upload_list:
             if not target_file.filename:
@@ -546,64 +777,68 @@ async def ingest_document(
                     doc_type_display = "Other"
 
             file_bytes = await target_file.read()
-            import hashlib
             file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-            duplicate_match = check_sha256_duplicate(file_hash, target_file.filename)
-            if duplicate_match:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Dokumen dengan isi konten identik 100% sudah terdaftar di sistem dengan nama '{duplicate_match}' (SHA-256 Checksum Match). Upload dibatalkan untuk mencegah duplikasi data."
-                )
+            # -------------------------------------------------------------
+            # 3-WAY DUPLICATE DETECTION LIFECYCLE
+            # -------------------------------------------------------------
+            dup_info = detect_duplicate_lifecycle(file_hash, target_file.filename)
+            dup_status = dup_info.get("status", "NEW")
 
+            # 1. STATE: PUBLISHED -> BLOCK
+            if dup_status == "PUBLISHED":
+                if len(upload_list) == 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Dokumen '{target_file.filename}' sudah terpublikasi (PUBLISHED / APPROVED) di knowledge base aktif ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). Upload dibatalkan untuk menjaga keakuratan sistem dokter. Silakan gunakan menu 'Edit Knowledge' di UI jika ingin memperbarui."
+                    )
+                else:
+                    response_items.append({
+                        "file_name": target_file.filename,
+                        "batch_id": batch_id,
+                        "duplicate_status": "PUBLISHED",
+                        "action": "BLOCKED",
+                        "detail": f"Dokumen sudah terpublikasi (APPROVED) ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). Upload dibatalkan."
+                    })
+                    continue
+
+            # 2. STATE: PENDING -> REQUIRE ADMIN CONFIRMATION (DO NOT SILENTLY OVERWRITE)
+            if dup_status == "PENDING" and not replace_existing:
+                existing_k_id = dup_info.get("knowledge_id")
+                if len(upload_list) == 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Draft peninjauan untuk '{target_file.filename}' (ID: {existing_k_id}) sudah ada di antrean On Review (Pending). Upload dibatalkan agar draft lama tidak tertimpa secara diam-diam. Silakan selesaikan review draft yang ada, atau kirim konfirmasi 'replace_existing=true' untuk mengganti draft lama."
+                    )
+                else:
+                    response_items.append({
+                        "file_name": target_file.filename,
+                        "existing_knowledge_id": existing_k_id,
+                        "batch_id": batch_id,
+                        "duplicate_status": "PENDING",
+                        "action": "REQUIRE_ADMIN_CONFIRMATION",
+                        "detail": f"Draft peninjauan sudah ada di daftar On Review ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). Kirim 'replace_existing=true' jika ingin menimpa draft ini."
+                    })
+                    continue
+
+            # 3. STATE: NEW or PENDING with replace_existing=True -> PROCEED
             file_path = f"data/temp/{target_file.filename}"
             with open(file_path, "wb") as f_out:
                 f_out.write(file_bytes)
 
             file_size = os.path.getsize(file_path)
 
-            k_id = None
+            k_id = dup_info.get("knowledge_id") if (dup_status == "PENDING" and replace_existing) else None
             try:
                 from app.core.database import AsyncSessionLocal
                 from app.models.knowledge import Knowledge, KnowledgeStatus
                 from app.models.user import User
                 from sqlalchemy import select
-                import uuid as _uuid
 
                 async with AsyncSessionLocal() as session:
                     user_result = await session.execute(select(User).limit(1))
                     user = user_result.scalars().first()
                     user_id = user.id if user else _uuid.uuid4()
-
-                    res = await session.execute(
-                        select(Knowledge).where(Knowledge.file_name == target_file.filename).order_by(Knowledge.created_at.desc())
-                    )
-                    existing_doc = res.scalars().first()
-                    if existing_doc and existing_doc.status == KnowledgeStatus.APPROVED:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Dokumen '{target_file.filename}' sudah terpublikasi (APPROVED). Jika ingin merevisi isi dokumen, silakan gunakan menu 'Edit Knowledge' di UI atau hapus dokumen lama terlebih dahulu."
-                        )
-                    elif existing_doc:
-                        k_id = str(existing_doc.id)
-
-                    approved_file_check = resolve_approved_file(target_file.filename)
-                    if approved_file_check and os.path.exists(approved_file_check):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Dokumen '{target_file.filename}' sudah terpublikasi (APPROVED). Jika ingin merevisi isi dokumen, silakan gunakan menu 'Edit Knowledge' di UI atau hapus dokumen lama terlebih dahulu."
-                        )
-
-                    if not k_id:
-                        pf = resolve_pending_file(target_file.filename)
-                        if pf and os.path.exists(pf):
-                            try:
-                                with open(pf, "r", encoding="utf-8") as fp:
-                                    pf_data = json.load(fp)
-                                if isinstance(pf_data, dict) and pf_data.get("knowledge_id"):
-                                    k_id = str(pf_data.get("knowledge_id"))
-                            except Exception:
-                                pass
 
                     custom_uuid = None
                     if k_id:
@@ -612,27 +847,37 @@ async def ingest_document(
                         except ValueError:
                             pass
 
-                    if existing_doc or (custom_uuid and (await session.get(Knowledge, custom_uuid))):
-                        knowledge = await session.get(Knowledge, custom_uuid) if custom_uuid else existing_doc
-                        if knowledge:
-                            knowledge.type = k_type
-                            knowledge.status = KnowledgeStatus.PROCESSING
-                            knowledge.ai_summary = "Processing..."
-                            knowledge.original_path = file_path
-                            knowledge.mime_type = target_file.content_type
-                            knowledge.file_size = file_size
-                            if knowledge.metadata_ is None:
-                                knowledge.metadata_ = {}
-                            if upload_batch_id:
-                                knowledge.metadata_["upload_batch_id"] = upload_batch_id
-                            await session.commit()
-                            await session.refresh(knowledge)
-                            k_id = str(knowledge.id)
+                    existing_doc = None
+                    if custom_uuid:
+                        existing_doc = await session.get(Knowledge, custom_uuid)
+                    if not existing_doc:
+                        res = await session.execute(
+                            select(Knowledge).where(Knowledge.file_name == target_file.filename).order_by(Knowledge.created_at.desc())
+                        )
+                        existing_doc = res.scalars().first()
+
+                    if existing_doc:
+                        knowledge = existing_doc
+                        knowledge.type = k_type
+                        knowledge.status = KnowledgeStatus.PROCESSING
+                        knowledge.ai_summary = "Processing..."
+                        knowledge.original_path = file_path
+                        knowledge.mime_type = target_file.content_type
+                        knowledge.file_size = file_size
+                        if knowledge.metadata_ is None:
+                            knowledge.metadata_ = {}
+                        knowledge.metadata_["batch_id"] = batch_id
+                        knowledge.metadata_["file_hash"] = file_hash
+                        if dup_status == "PENDING" and replace_existing:
+                            knowledge.metadata_["replaced_at"] = str(asyncio.get_event_loop().time())
+                        await session.commit()
+                        await session.refresh(knowledge)
+                        k_id = str(knowledge.id)
                     else:
-                        metadata = {}
-                        if upload_batch_id:
-                            metadata["upload_batch_id"] = upload_batch_id
-                            
+                        metadata = {
+                            "batch_id": batch_id,
+                            "file_hash": file_hash
+                        }
                         knowledge = Knowledge(
                             id=custom_uuid if custom_uuid else _uuid.uuid4(),
                             type=k_type,
@@ -656,30 +901,37 @@ async def ingest_document(
                 if not k_id:
                     k_id = str(_uuid.uuid4())
 
-            background_tasks.add_task(
-                process_ingestion_background,
-                k_id,
-                file_path,
-                target_file.filename,
-                pipeline,
-                llm,
-                doc_type_display,
-                prompt,
-                file_hash
+            # Spawn concurrent background ingestion task
+            asyncio.create_task(
+                process_ingestion_background(
+                    k_id,
+                    file_path,
+                    target_file.filename,
+                    pipeline,
+                    llm,
+                    doc_type_display,
+                    prompt,
+                    file_hash,
+                    batch_id
+                )
             )
 
+            status_display = "On review (Replaced)" if (dup_status == "PENDING" and replace_existing) else "On review"
             response_items.append({
                 "knowledge_id": k_id,
+                "batch_id": batch_id,
                 "file_name": target_file.filename,
                 "type": doc_type_display,
-                "status": "On review"
+                "duplicate_status": "PENDING_REPLACED" if (dup_status == "PENDING" and replace_existing) else "NEW",
+                "status": status_display
             })
 
         return {
             "status": "success",
-            "message": f"Successfully queued {len(response_items)} document(s) for ingestion.",
-            "total_files": len(response_items),
-            "upload_batch_id": upload_batch_id,
+            "batch_id": batch_id,
+            "total_files": len(upload_list),
+            "processed_files": len([r for r in response_items if r.get("knowledge_id")]),
+            "message": f"Successfully queued {len(response_items)} document(s) for ingestion." if not batch_id else f"Processed {len(response_items)} document(s) in Batch '{batch_id}'.",
             "documents": response_items
         }
 
@@ -746,6 +998,11 @@ async def get_pending_details(knowledge_id: str):
                 data["status"] = "Approved" if "output" in target_file else "On review"
             if "title" not in data or not data["title"]:
                 data["title"] = data.get("file_name", "document.pdf")
+            if not data.get("image_url") and data.get("chunks"):
+                for c in data["chunks"]:
+                    if isinstance(c, dict) and c.get("metadata", {}).get("image_url"):
+                        data["image_url"] = c["metadata"]["image_url"]
+                        break
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read document details: {e}")
@@ -1047,12 +1304,14 @@ async def get_approved_document_details(knowledge_id: str):
         categories = []
         chunks = []
         file_name = knowledge_id
+        title = knowledge_id
 
         if isinstance(data, dict):
             summary = data.get("summary", "")
             categories = data.get("categories", [])
             chunks = data.get("chunks", [])
             file_name = data.get("file_name", knowledge_id)
+            title = data.get("title", file_name)
         elif isinstance(data, list):
             chunks = data
             if chunks and isinstance(chunks[0], dict):
@@ -1061,8 +1320,12 @@ async def get_approved_document_details(knowledge_id: str):
                 title = first_meta.get("title", file_name)
                 summary = first_meta.get("summary", "")
                 cat = first_meta.get("document_type")
-                if cat:
-                    categories = [cat]
+        parsed_categories = []
+        for c in categories:
+            if isinstance(c, dict) and "name" in c:
+                parsed_categories.append(c["name"])
+            elif isinstance(c, str):
+                parsed_categories.append(c)
 
         vis_settings = (data.get("visibility_settings") if isinstance(data, dict) else None) or {
             "clinics": ["all"],
@@ -1076,7 +1339,7 @@ async def get_approved_document_details(knowledge_id: str):
             title=title,
             status="Approved",
             summary=summary,
-            categories=categories,
+            categories=parsed_categories,
             visibility_settings=vis_settings,
             chunks=chunks
         )
@@ -1450,7 +1713,9 @@ async def approve_document(
             approved_file = os.path.join("data/output", f"{k_id}.json")
             approved_doc_structure = {
                 "knowledge_id": k_id,
+                "batch_id": data.get("batch_id") if isinstance(data, dict) else None,
                 "file_name": file_name,
+                "file_hash": data.get("file_hash") if isinstance(data, dict) else None,
                 "title": doc_title,
                 "type": data.get("type", "Product") if isinstance(data, dict) else "Product",
                 "document_type": data.get("document_type", "product") if isinstance(data, dict) else "product",
@@ -1651,8 +1916,13 @@ async def chat_endpoint(
     optional ReAct AI Agent multi-step reasoning, and Guardrails safety checks.
     """
     # 1. Guardrails: Pre-retrieval Input Check (prompt injection & topicality filter)
+    u_ctx = request.user_context
+    dr_info = f"DrType: {u_ctx.dr_type}, Branches: {u_ctx.branch_ids}" if u_ctx else "General / Anonymous"
+    logger.debug(f"🩺 [Chat Request] Query: \"{request.query}\" | Context: {dr_info} | History: {len(request.history)} turn(s)")
+
     is_valid_input, rejection_msg = GuardrailsPipeline.validate_input(request.query)
     if not is_valid_input:
+        logger.warning(f"❌ Input guardrail rejected query: '{request.query[:80]}'")
         return ChatResponse(
             query=request.query,
             answer=rejection_msg,
@@ -1666,7 +1936,7 @@ async def chat_endpoint(
     # 2. Try ReAct AI Agent (if enabled via RAG_AGENT_ENABLED=true)
     if agent:
         try:
-            logger.info("RAG_AGENT_ENABLED is True. Executing MedicalAgent...")
+            logger.info("🤖 Executing ReAct MedicalAgent pipeline...")
             agent_res = agent.run(request.query, history=raw_history)
             if agent_res and agent_res.get("answer"):
                 sanitized_answer = GuardrailsPipeline.process_output(agent_res["answer"])

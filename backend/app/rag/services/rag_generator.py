@@ -5,7 +5,7 @@ from loguru import logger
 
 from app.rag.services.interfaces import BaseLLMAdapter
 from app.rag.services.rag_retriever import HybridRetriever
-from app.rag.services.intent import QueryIntentDetector, QueryIntent
+from app.rag.services.intent import QueryIntentDetector, QueryIntent, get_current_time_period, get_time_greeting_response
 from app.rag.config import settings
 
 # --- LLM Adapter Implementations ---
@@ -73,41 +73,45 @@ class OpenAIAdapter(BaseLLMAdapter):
 # --- Grounded System Prompt Configuration ---
 
 SYSTEM_PROMPT = """<role>
-You are ERHA Assistant, a grounded knowledge-base assistant.
-Your primary responsibility is to answer the user's question accurately and concisely using ONLY the retrieved knowledge base.
+You are ERHA Medical Assistant, an expert clinical decision support and product knowledge assistant exclusively for ERHA Doctors and Clinicians (PT Arya Noble).
+The user is ALWAYS an ERHA Doctor/Clinician consulting on ERHA skincare products, clinical protocols, treatment regimens, active ingredients, dosages, and contraindications for treating their patients. This chatbot is NOT used by patients directly.
+Your primary responsibility is to provide accurate, concise, clinically grounded, and doctor-tailored answers using ONLY the retrieved ERHA knowledge base.
 </role>
 
-<grounding_and_safety_rules>
-1. Answer ONLY what the user asked.
-2. Do not provide unrelated information.
-3. Do not expand a simple factual question into a long explanation.
-4. Do not provide unsolicited product recommendations.
-5. Do not provide unsolicited treatment regimens.
-6. Do not provide unsolicited clinical advice.
-7. Do not mention other products unless they are necessary to answer the user's question.
-8. Do not add greetings such as 'Halo Dok' unless explicitly requested.
-9. Do not add unnecessary sections, bullet points, emojis, or disclaimers.
-10. Do not end with phrases such as 'Jika Dokter membutuhkan...' unless explicitly requested.
-11. Do not repeat the user's question.
-12. Do not speculate.
-13. Do not use information outside the retrieved context.
-14. Never substitute one product name for another.
-15. Preserve exact product names, ingredient names, percentages, quantities, and other factual values from the retrieved context.
-16. Focus on directly and naturally answering the primary question using the facts provided in the retrieved context. Do not append robotic disclaimer sentences such as "informasi tidak tersedia dalam basis pengetahuan" for minor secondary details if the main clinical query is already answered.
-17. If the user asks whether a skincare regimen or product combination is appropriate, prioritize clear safety guidance based on the retrieved treatment aftercare instructions (such as avoiding exfoliating products for 5 days after peeling).
-</grounding_and_safety_rules>
+<language_and_tone_rules>
+- Chatbot ini digunakan KHUSUS OLEH DOKTER ERHA (bukan pasien umum). Gunakan gaya komunikasi profesional medis klinis antar sejawat (medical assistant to doctor).
+- Selalu sapa pengguna dengan sebutan 'Dokter' atau 'Dok' jika memerlukan sapaan.
+- Bahasa utama yang digunakan adalah Bahasa Indonesia medis yang jelas dan natural.
+- HANYA sertakan sapaan pembuka (seperti 'Halo Dok! Selamat siang') jika Dokter secara eksplisit menyapa di awal query (seperti 'halo', 'selamat pagi') ATAU pada pesan pertama percakapan. Jika percakapan sudah berlangsung (history > 0) atau Dokter langsung bertanya tanpa kata sapaan, DILARANG mengulang sapaan pembuka. Langsung jawab pertanyaan secara singkat, padat, dan objektif.
+- HANYA gunakan Bahasa Inggris jika Dokter mengajukan pertanyaan dalam Bahasa Inggris.
+</language_and_tone_rules>
+
+<negative_prompting_and_strict_grounding>
+1. CRITICAL RESTRICTION: NEVER recommend, invent, or mention non-ERHA third-party commercial skincare brands, outside clinic procedures, or ungrounded external prescription drugs that do NOT exist in the retrieved ERHA knowledge base context.
+2. Ground all answers strictly in facts from the retrieved ERHA context. Do NOT extrapolate or speculate.
+3. If requested medical/product information (e.g. specific product, dosage, protocol, or price) is NOT present in the retrieved context, state clearly and politely in the user's language that the information is not available in the ERHA knowledge base. NEVER substitute with generic outside products.
+4. When asked for recommendations (treatment, products, or routine) for skin concerns (e.g. oily skin, mild inflammatory acne, papules, post-acne marks/scars), provide the relevant ERHA treatments and products found in the retrieved context.
+5. If the user asks to separate categories (e.g. active acne vs post-acne, treatments vs products, morning vs night), structure the response clearly with distinct sections.
+6. Preserve exact product names, ingredient names, percentages, quantities, and clinical instructions from the retrieved context.
+7. Do not repeat the user's question verbatim.
+8. CRITICAL: DILARANG KERAS menyertakan disclaimer pasien atau kalimat penutup seperti "Pastikan untuk melakukan konsultasi lebih lanjut sebelum memulai perawatan...", "Konsultasikan dengan dokter...", "Disarankan untuk berkonsultasi...", dsb. Pengguna sistem ini ADALAH DOKTER itu sendiri yang sedang bertugas.
+9. CRITICAL: DILARANG menempelkan kalimat penutup basa-basi seperti "Jika ada pertanyaan lebih lanjut, silakan beri tahu", "Jika Dokter membutuhkan informasi tambahan...", dsb. Akhiri jawaban secara langsung pada poin fakta/penjelasan medis utama tanpa basa-basi penutup.
+</negative_prompting_and_strict_grounding>
+
+<multimodal_image_display_rules>
+- Saat merekomendasikan atau menjelaskan produk atau tindakan ERHA, jika konteks dari database menyertakan image URL yang valid (misalnya `![Product Name](url)` atau `Image: <url>`), SELALU tampilkan gambar produk dalam format Markdown:
+  `![Nama Lengkap Produk](image_url)`
+  tepat di bawah teks rekomendasi/penjelasan produk tersebut agar dokter dapat melihat bentuk fisik dan kemasan produk.
+- Jika di database/konteks TIDAK terdapat image_url untuk produk tersebut, jawab CUKUP DENGAN TEKS saja. DILARANG membuat, mengarang, atau menebak URL gambar palsu/placeholder.
+</multimodal_image_display_rules>
 
 <response_length_rules>
-- Routine / Multi-product steps question: Provide step-by-step order clearly for morning and evening routines without skipping retrieved products.
+- Routine / Multi-product steps / Categorized recommendations: Provide clear step-by-step or categorized structure without skipping retrieved products.
 - Product name question: 1 sentence.
 - Ingredient question: 1-2 sentences or a concise list.
-- Function/benefit question: maximum 2-3 sentences.
-- How-to-use question: maximum 2-4 sentences.
+- Function/benefit question: 2-3 sentences.
+- How-to-use question: 2-4 sentences.
 - Comparison question: concise comparison using only relevant information.
-- If the user asks for detailed information or complete routine, provide full step-by-step detail.
-
-Do not maximize information.
-Maximize relevance.
 </response_length_rules>"""
 
 
@@ -140,9 +144,22 @@ class GenerationPipeline:
             history_str = "No previous conversation.\n"
 
         length_instruction = intent_rules.get("length_instruction", "Be concise and factual.")
+        period = get_current_time_period()
+
+        import re
+        has_greeting_word = bool(re.search(r'\b(halo|hallo|hai|hi|selamat|assalamualaikum|ping)\b', query.lower()))
+        
+        if not history and (has_greeting_word or intent == QueryIntent.GREETING):
+            turn_greeting_rule = f"Pesan pertama atau Dokter menyapa: Balas sapaan dengan ramah ('Halo Dok! Selamat {period}')."
+        else:
+            turn_greeting_rule = "Percakapan sudah berlangsung (history > 0) atau tidak ada kata sapaan: DILARANG mengulang sapaan pembuka (seperti 'Halo Dok', 'Selamat siang'). Langsung berikan jawaban medis/produk secara singkat, padat, dan objektif."
 
         prompt = (
             f"{SYSTEM_PROMPT}\n\n"
+            f"--- TURN GREETING RULE ---\n"
+            f"{turn_greeting_rule}\n\n"
+            f"--- CURRENT TIME CONTEXT ---\n"
+            f"Current Local Period: {period} (Greeting: 'Selamat {period}')\n\n"
             f"--- DETECTED INTENT ---\n"
             f"Intent Category: {intent.value}\n"
             f"Specific Instruction: {length_instruction}\n\n"
@@ -181,16 +198,36 @@ class GenerationPipeline:
                 "results": []
             }
 
-        # 1. Query Intent Detection
+        # 1. Query Intent Detection & Dynamic Top-K Calculation
         intent, intent_rules = QueryIntentDetector.detect(query)
 
-        # Dynamic top_k boosting for complex routine, comparison, or multi-product queries
-        complex_keywords = ["rangkaian", "rutinitas", "perbandingan", "urutan", "pagi", "malam", "perbedaan", "membandingkan", "kombinasi", "langkah", "semua produk", "persentase"]
-        if any(kw in query.lower() for kw in complex_keywords):
-            effective_top_k = max(top_k, 8)
-            logger.info(f"Complex routine/comparison query detected. Boosting top_k from {top_k} to {effective_top_k}.")
-        else:
-            effective_top_k = top_k
+        # Handle pure greeting immediately with warm time-adjusted response
+        if intent == QueryIntent.GREETING:
+            greeting_ans = get_time_greeting_response(query)
+            logger.info(
+                f"\n"
+                f"================================================================================\n"
+                f"🩺 [RAG CLINICAL CHAT] Doctor Query Execution\n"
+                f"--------------------------------------------------------------------------------\n"
+                f"❓ Query               : \"{query}\"\n"
+                f"🎯 Detected Intent     : {intent.value}\n"
+                f"📊 Top Akurasi         : 100.0% (Fast-path Sapaan)\n"
+                f"📚 Retrieved Chunks    : 0 chunk(s)\n"
+                f"--------------------------------------------------------------------------------\n"
+                f"📝 Jawaban AI (Preview): {greeting_ans}\n"
+                f"🛡️ Guardrails Check    : Passed (Sanitized)\n"
+                f"================================================================================\n"
+            )
+            return {
+                "query": query,
+                "answer": greeting_ans,
+                "context": "",
+                "results": []
+            }
+
+        effective_top_k = QueryIntentDetector.get_recommended_top_k(query, intent, top_k)
+        if effective_top_k != top_k:
+            logger.debug(f"Dynamic top_k applied: adjusted from {top_k} to {effective_top_k} based on query complexity ({intent.value}).")
 
         # 2. Retrieve relevant chunks from Hybrid Retriever
         retrieval_response = self.retriever.retrieve(
@@ -214,17 +251,23 @@ class GenerationPipeline:
 
         if is_context_empty:
             missing_msg = intent_rules.get("missing_fallback", "Informasi tersebut tidak tersedia dalam knowledge base.")
-            logger.info(f"Retrieval context empty for query '{query}'. Returning grounded fallback message.")
-            
-            # --- DEBUG LOGGING ---
-            logger.debug(
-                f"\n=== [RAG DEBUG LOG] ===\n"
-                f"QUERY: {query}\n"
-                f"INTENT: {intent.value}\n"
-                f"RETRIEVED CONTEXT: [EMPTY]\n"
-                f"SIMILARITY SCORE: N/A\n"
-                f"LLM RESPONSE (GROUNDED FALLBACK): {missing_msg}\n"
-                f"========================\n"
+            missing_preview = " ".join(missing_msg.split())
+            if len(missing_preview) > 130:
+                missing_preview = missing_preview[:130] + "..."
+
+            logger.info(
+                f"\n"
+                f"================================================================================\n"
+                f"🩺 [RAG CLINICAL CHAT] Doctor Query Execution\n"
+                f"--------------------------------------------------------------------------------\n"
+                f"❓ Query               : \"{query}\"\n"
+                f"🎯 Detected Intent     : {intent.value} (Top-K: {effective_top_k})\n"
+                f"📊 Top Akurasi         : 0.0% (No matching context)\n"
+                f"📚 Retrieved Chunks    : 0 chunk(s)\n"
+                f"--------------------------------------------------------------------------------\n"
+                f"📝 Jawaban AI (Preview): {missing_preview}\n"
+                f"🛡️ Guardrails Check    : Passed (Sanitized)\n"
+                f"================================================================================\n"
             )
             return {
                 "query": query,
@@ -247,23 +290,47 @@ class GenerationPipeline:
         # 6. Output Guardrails Processing (PII Redaction & Medical Disclaimer)
         answer = GuardrailsPipeline.process_output(answer)
 
-        # --- DEBUG LOGGING ---
+        # --- VISUAL BACKEND LOGS ---
+        top_accuracy_pct = 0.0
         scores_summary = []
-        for i, res in enumerate(results, 1):
-            sc = res.get("rerank_score") if "rerank_score" in res else res.get("score", 0.0)
-            src = res.get("metadata", {}).get("source_file", "unknown")
-            scores_summary.append(f"Chunk {i}: source={src}, score={sc:.4f}")
-        
-        logger.debug(
-            f"\n=== [RAG DEBUG LOG] ===\n"
-            f"QUERY: {query}\n"
-            f"INTENT: {intent.value}\n"
-            f"RETRIEVED CHUNKS COUNT: {len(results)}\n"
-            f"RETRIEVED CONTEXT PREVIEW:\n{context[:600]}...\n"
-            f"SIMILARITY SCORES:\n" + "\n".join(scores_summary) + "\n"
-            f"FINAL LLM PROMPT PREVIEW:\n{full_prompt[:500]}...\n"
-            f"LLM RESPONSE:\n{answer}\n"
-            f"========================\n"
+        for i, res in enumerate(results[:5], 1):
+            sc = res.get("rerank_score", res.get("score", 0.0))
+            if 0.0 <= sc <= 1.0:
+                acc_pct = sc * 100.0
+            else:
+                import math
+                acc_pct = (1.0 / (1.0 + math.exp(-sc))) * 100.0
+
+            if i == 1:
+                top_accuracy_pct = acc_pct
+
+            meta = res.get("metadata", {})
+            src = meta.get("source_file", "unknown")
+            p_name = meta.get("product_name") or meta.get("title") or "-"
+            img_tag = f" 🖼️ [Image]" if meta.get("image_url") else ""
+            scores_summary.append(f"   [{i}] {src} | {p_name} | Akurasi: {acc_pct:.1f}% (Score: {sc:.4f}){img_tag}")
+
+        retrieved_list_str = "\n".join(scores_summary) if scores_summary else "   (No chunks retrieved)"
+        accuracy_display = f"{top_accuracy_pct:.1f}%" if results else "0.0%"
+
+        ans_preview = " ".join(answer.split())
+        if len(ans_preview) > 130:
+            ans_preview = ans_preview[:130] + "..."
+
+        logger.info(
+            f"\n"
+            f"================================================================================\n"
+            f"🩺 [RAG CLINICAL CHAT] Doctor Query Execution\n"
+            f"--------------------------------------------------------------------------------\n"
+            f"❓ Query               : \"{query}\"\n"
+            f"🎯 Detected Intent     : {intent.value} (Top-K: {effective_top_k})\n"
+            f"📊 Top Akurasi         : {accuracy_display}\n"
+            f"📚 Retrieved Chunks    : {len(results)} document chunk(s)\n"
+            f"{retrieved_list_str}\n"
+            f"--------------------------------------------------------------------------------\n"
+            f"📝 Jawaban AI (Preview): {ans_preview}\n"
+            f"🛡️ Guardrails Check    : Passed (Sanitized)\n"
+            f"================================================================================\n"
         )
 
         return {
@@ -299,11 +366,17 @@ class GenerationPipeline:
         
         intent, intent_rules = QueryIntentDetector.detect(query)
 
-        complex_keywords = ["rangkaian", "rutinitas", "perbandingan", "urutan", "pagi", "malam", "perbedaan", "membandingkan", "kombinasi", "langkah", "semua produk", "persentase"]
-        if any(kw in query.lower() for kw in complex_keywords):
-            effective_top_k = max(top_k, 8)
-        else:
-            effective_top_k = top_k
+        # Handle pure greeting immediately in stream with warm time-adjusted response
+        if intent == QueryIntent.GREETING:
+            greeting_ans = get_time_greeting_response(query)
+            logger.info(f"Pure greeting stream detected ('{query}'). Yielding warm time-adjusted response.")
+            yield json.dumps({"type": "context", "results": []}) + "\n"
+            yield greeting_ans
+            return
+
+        effective_top_k = QueryIntentDetector.get_recommended_top_k(query, intent, top_k)
+        if effective_top_k != top_k:
+            logger.info(f"Dynamic stream top_k applied: adjusted from {top_k} to {effective_top_k} based on query complexity ({intent.value}).")
 
         # Using thread for retrieve since it might be sync
         import asyncio

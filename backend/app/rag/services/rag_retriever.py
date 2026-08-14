@@ -295,10 +295,12 @@ class PromptContextBuilder:
                 
             section = metadata.get("section", "General")
             page = metadata.get("page", 1)
+            image_url = metadata.get("image_url") or metadata.get("image")
             text = hit.get("text", "")
 
+            img_header = f" | Image: {image_url}" if image_url else ""
             part = (
-                f"[{idx}] Source: {source_file} | Product: {product_name} | Section: {section} | Page: {page}\n"
+                f"[{idx}] Source: {source_file} | Product: {product_name}{img_header} | Section: {section} | Page: {page}\n"
                 f"Content:\n{text.strip()}"
             )
             context_parts.append(part)
@@ -375,7 +377,7 @@ class HybridRetriever:
         4. Cross-Encoder Reranking (optional)
         5. Prompt Context Generation
         """
-        logger.info(f"Retrieving for query: '{query}' with top_k={top_k}, metadata_filter={filter_metadata}")
+        logger.debug(f"Retrieving for query: '{query}' with top_k={top_k}, metadata_filter={filter_metadata}")
 
         sub_queries = []
         for separator in [" dan ", " serta ", " and ", " & "]:
@@ -389,7 +391,7 @@ class HybridRetriever:
         candidate_k = top_k * 2
         
         if sub_queries:
-            logger.info(f"Multi-intent query detected. Splitting query into sub-queries: {sub_queries}")
+            logger.debug(f"Multi-intent query detected. Splitting query into sub-queries: {sub_queries}")
             sub_fused_hits = []
             
             for sq in sub_queries:
@@ -410,7 +412,7 @@ class HybridRetriever:
                         if key not in seen_keys:
                             seen_keys.add(key)
                             fused_hits.append(hit)
-            logger.info(f"Interleaved sub-queries completed. Combined into {len(fused_hits)} candidates.")
+            logger.debug(f"Interleaved sub-queries completed. Combined into {len(fused_hits)} candidates.")
         else:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -426,7 +428,7 @@ class HybridRetriever:
                 logger.debug(f"Sparse retrieval returned {len(sparse_hits)} candidates.")
             
             fused_hits = reciprocal_rank_fusion(dense_hits, sparse_hits)
-            logger.info(f"RRF Fusion completed. Fused {len(fused_hits)} candidates.")
+            logger.debug(f"RRF Fusion completed. Fused {len(fused_hits)} candidates.")
 
         # Deduplicate
         seen_texts = set()
@@ -437,7 +439,7 @@ class HybridRetriever:
             if norm_text not in seen_texts:
                 seen_texts.add(norm_text)
                 deduplicated_hits.append(hit)
-        logger.info(f"Deduplicated fused hits from {len(fused_hits)} to {len(deduplicated_hits)} unique candidates.")
+        logger.debug(f"Deduplicated fused hits from {len(fused_hits)} to {len(deduplicated_hits)} unique candidates.")
 
         final_hits = deduplicated_hits
         if rerank and self.reranker:
@@ -466,7 +468,7 @@ class HybridRetriever:
                 boosted_hits.append(updated_hit)
                 
             final_hits = sorted(boosted_hits, key=lambda h: h.get("rerank_score", 0.0), reverse=True)[:rerank_top_n]
-            logger.info(f"Reranking and intent boosting completed. Returned top {len(final_hits)} chunks.")
+            logger.debug(f"Reranking and intent boosting completed. Returned top {len(final_hits)} chunks.")
         else:
             final_hits = deduplicated_hits[:top_k]
 

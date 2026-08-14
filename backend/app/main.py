@@ -148,3 +148,4 @@ except Exception as e:
 @app.get("/health", tags=["health"])
 async def health_check():
     return {"status": "ok", "project": settings.PROJECT_NAME}
+

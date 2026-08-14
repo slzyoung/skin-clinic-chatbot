@@ -54,13 +54,17 @@ class VisibilitySettings(BaseModel):
 
 class PendingDocumentResponse(BaseModel):
     knowledge_id: str = Field(..., description="Unique document ID (UUID)")
+    batch_id: Optional[str] = Field(None, description="Batch Upload ID for grouped ingestion tracking")
     file_name: str = Field(..., description="Filename of the staged document")
-    title: Optional[str] = Field(None, description="AI Recommended Title for Knowledge Header (e.g. 'Knowledge Ingestment Brightener Product')")
+    file_hash: Optional[str] = Field(None, description="SHA-256 Checksum hash of the document content")
+    title: Optional[str] = Field(None, description="AI Recommended Title for Knowledge Header (e.g. 'Standard Operating Procedure (SOP) Brightening Center')")
     type: Optional[str] = Field("Product", description="Document Category Type (Product, Treatment, Promotional, General)")
     status: str = Field(..., description="'Approved' or 'On review'")
     summary: Optional[str] = Field("", description="Document content in markdown format")
+    image_url: Optional[str] = Field(None, description="Image URL of the document or product in MinIO")
     text_accuracy: str = Field(..., description="AI confidence score / text accuracy percentage")
     feedback: str = Field(..., description="AI data validation feedback")
+    batch_summary: Optional[str] = Field(None, description="Batch Executive Summary if multi-file")
     suggested_categories: Optional[List[Any]] = Field(default=[], description="Suggested category tags (objects with id and name)")
     visibility_settings: Optional[VisibilitySettings] = Field(default_factory=VisibilitySettings, description="Access control visibility settings (Clinic, Doctor Type, Doctor)")
     initial_prompt: Optional[str] = Field(None, description="Initial prompt passed during ingestion if any")
@@ -102,10 +106,13 @@ class EditApprovedDocumentRequest(BaseModel):
 
 class ApprovedDocumentResponse(BaseModel):
     knowledge_id: str = Field(..., description="Knowledge ID / document identifier")
+    batch_id: Optional[str] = Field(None, description="Batch Upload ID")
     file_name: str = Field(..., description="Filename of the approved document")
+    file_hash: Optional[str] = Field(None, description="SHA-256 Checksum hash")
     title: Optional[str] = Field(None, description="Document title")
     status: str = Field("Approved", description="Document status")
     summary: str = Field("", description="Document summary")
+    image_url: Optional[str] = Field(None, description="Image URL of the document or product in MinIO")
     categories: List[str] = Field(default=[], description="Document categories")
     visibility_settings: Optional[VisibilitySettings] = Field(default_factory=VisibilitySettings, description="Access control visibility settings (Clinic, Doctor Type, Doctor)")
     chunks: List[Dict[str, Any]] = Field(..., description="Document text chunks")
