@@ -23,10 +23,17 @@ export interface BranchDoctorResponse {
 	tokensLeft: number;
 	status: string;
 	maxTokens: number;
+	employee_id?: string;
+	dr_type?: string;
+	user_type_code?: string;
+	ecosystem?: string;
 }
 
 export interface BranchResponse extends BranchBase {
 	id: string;
+	external_id?: number;
+	code?: string;
+	ecosystem?: string;
 	created_at: string;
 	updated_at: string;
 	tokensMonth?: number;

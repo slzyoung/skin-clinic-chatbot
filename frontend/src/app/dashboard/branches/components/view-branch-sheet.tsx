@@ -64,6 +64,20 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 									<span className="text-sm font-medium text-black-500">{branch.name}</span>
 								</div>
 
+								{branch.code && (
+									<div className="flex flex-col gap-1">
+										<span className="text-sm text-black-300">Branch Code</span>
+										<span className="text-sm font-medium text-black-500">{branch.code}</span>
+									</div>
+								)}
+
+								{branch.ecosystem && (
+									<div className="flex flex-col gap-1">
+										<span className="text-sm text-black-300">Ecosystem</span>
+										<span className="text-sm font-medium text-black-500">{branch.ecosystem}</span>
+									</div>
+								)}
+
 								<div className="flex items-center justify-between gap-4">
 									<div className="flex flex-col gap-1">
 										<span className="text-sm text-black-300">Tokens</span>
