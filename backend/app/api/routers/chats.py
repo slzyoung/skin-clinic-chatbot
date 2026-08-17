@@ -231,16 +231,33 @@ async def mark_feedback_read(
 
 @router.get("/", response_model=List[ChatHistoryResponse])
 async def list_chat_sessions(
+    search: Optional[str] = None,
+    doctor_id: Optional[uuid.UUID] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_flexible)
 ):
-    stmt = select(ChatSession)
+    stmt = select(ChatSession).order_by(ChatSession.updated_at.desc())
     if not await has_chats_read_access(current_user, db):
         stmt = stmt.where(ChatSession.user_id == current_user.id)
+    elif doctor_id:
+        stmt = stmt.where(ChatSession.user_id == doctor_id)
+
     result = await db.execute(stmt)
     sessions = result.scalars().all()
-    
-    return [await _hydrate_chat_session(s, db) for s in sessions]
+
+    hydrated = [await _hydrate_chat_session(s, db) for s in sessions]
+
+    if search:
+        s_clean = search.lower().strip()
+        hydrated = [
+            h for h in hydrated
+            if s_clean in (h.get("query") or "").lower()
+            or s_clean in (h.get("summary") or "").lower()
+            or s_clean in (h.get("doctor") or "").lower()
+            or s_clean in (h.get("branch") or "").lower()
+        ]
+
+    return hydrated
 
 @router.post("/", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_chat_session(

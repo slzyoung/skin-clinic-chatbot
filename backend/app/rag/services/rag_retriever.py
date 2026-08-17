@@ -196,7 +196,7 @@ class Reranker:
     def _ensure_loaded(self):
         if not self._initialized:
             self._initialized = True
-            logger.info(f"Lazy loading Cross-Encoder Reranker model: {self.model_name}...")
+            logger.info(f"Loading Cross-Encoder Reranker model: {self.model_name}...")
             try:
                 self.model = CrossEncoder(self.model_name)
                 logger.info("Cross-Encoder Reranker model loaded successfully.")
@@ -207,6 +207,8 @@ class Reranker:
     def rerank(self, query: str, hits: List[Dict[str, Any]], top_n: int = 3) -> List[Dict[str, Any]]:
         """
         Reranks retrieve search candidates using the Cross-Encoder.
+        Optimized for fast CPU inference (< 200ms) by clipping candidate set to top 5
+        and truncating text snippets to 350 chars.
         """
         if not hits:
             return []
@@ -217,8 +219,10 @@ class Reranker:
             return hits[:top_n]
 
         try:
+            # Clip candidates to top 5 and truncate text to 350 chars for fast CPU inference (< 200ms)
+            target_hits = hits[:5]
             pairs = []
-            for hit in hits:
+            for hit in target_hits:
                 meta = hit.get("metadata", {})
                 product_name = meta.get("product_name")
                 if not product_name:
@@ -237,26 +241,27 @@ class Reranker:
                     product_name = product_name.strip()
                 
                 section = meta.get("section", "General")
-                text = hit.get("text", "")
+                text = hit.get("text", "")[:350]
                 
                 enriched_text = f"Product: {product_name} | Section: {section} | Content: {text}"
                 pairs.append([query, enriched_text])
             
-            scores = self.model.predict(pairs, batch_size=32, show_progress_bar=False)
+            import torch
+            with torch.no_grad():
+                scores = self.model.predict(pairs, batch_size=8, show_progress_bar=False)
             
             import math
             reranked_hits = []
-            for hit, raw_score in zip(hits, scores):
+            for hit, raw_score in zip(target_hits, scores):
                 updated_hit = hit.copy()
                 val = float(raw_score)
-                # Normalize raw Cross-Encoder logit to [0, 1] probability range via Sigmoid
                 norm_score = 1.0 / (1.0 + math.exp(-val)) if -700 <= val <= 700 else (1.0 if val > 700 else 0.0)
                 updated_hit["rerank_score"] = norm_score
                 reranked_hits.append(updated_hit)
                 
             sorted_hits = sorted(reranked_hits, key=lambda h: h["rerank_score"], reverse=True)
             
-            logger.info(f"Successfully reranked {len(hits)} candidates. Top score: {sorted_hits[0]['rerank_score']:.4f}")
+            logger.info(f"Successfully reranked {len(target_hits)} candidates. Top score: {sorted_hits[0]['rerank_score']:.4f}")
             return sorted_hits[:top_n]
         except Exception as e:
             logger.error(f"Reranking failed: {e}. Falling back to original rankings.")
@@ -379,56 +384,23 @@ class HybridRetriever:
         """
         logger.debug(f"Retrieving for query: '{query}' with top_k={top_k}, metadata_filter={filter_metadata}")
 
-        sub_queries = []
-        for separator in [" dan ", " serta ", " and ", " & "]:
-            if separator in query:
-                parts = query.split(separator)
-                parts = [p.strip() for p in parts if len(p.strip()) > 3]
-                if len(parts) > 1:
-                    sub_queries = parts
-                    break
-
         candidate_k = top_k * 2
-        
-        if sub_queries:
-            logger.debug(f"Multi-intent query detected. Splitting query into sub-queries: {sub_queries}")
-            sub_fused_hits = []
-            
-            for sq in sub_queries:
-                sq_dense = self.vector_store.search(sq, top_k=candidate_k, filter_metadata=filter_metadata) if self.vector_store else []
-                sq_sparse = self.bm25_index.search(sq, top_k=candidate_k, filter_metadata=filter_metadata) if self.bm25_index else []
-                sq_fused = reciprocal_rank_fusion(sq_dense, sq_sparse)
-                sub_fused_hits.append(sq_fused)
-                
-            fused_hits = []
-            seen_keys = set()
-            
-            max_len = max(len(lst) for lst in sub_fused_hits) if sub_fused_hits else 0
-            for i in range(max_len):
-                for lst in sub_fused_hits:
-                    if i < len(lst):
-                        hit = lst[i]
-                        key = get_chunk_key(hit)
-                        if key not in seen_keys:
-                            seen_keys.add(key)
-                            fused_hits.append(hit)
-            logger.debug(f"Interleaved sub-queries completed. Combined into {len(fused_hits)} candidates.")
-        else:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                future_dense = executor.submit(self.vector_store.search, query, candidate_k, filter_metadata) if self.vector_store else None
-                future_sparse = executor.submit(self.bm25_index.search, query, candidate_k, filter_metadata) if self.bm25_index else None
-                
-                dense_hits = future_dense.result() if future_dense else []
-                sparse_hits = future_sparse.result() if future_sparse else []
 
-            if self.vector_store:
-                logger.debug(f"Dense retrieval returned {len(dense_hits)} candidates.")
-            if self.bm25_index:
-                logger.debug(f"Sparse retrieval returned {len(sparse_hits)} candidates.")
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_dense = executor.submit(self.vector_store.search, query, candidate_k, filter_metadata) if self.vector_store else None
+            future_sparse = executor.submit(self.bm25_index.search, query, candidate_k, filter_metadata) if self.bm25_index else None
             
-            fused_hits = reciprocal_rank_fusion(dense_hits, sparse_hits)
-            logger.debug(f"RRF Fusion completed. Fused {len(fused_hits)} candidates.")
+            dense_hits = future_dense.result() if future_dense else []
+            sparse_hits = future_sparse.result() if future_sparse else []
+
+        if self.vector_store:
+            logger.debug(f"Dense retrieval returned {len(dense_hits)} candidates.")
+        if self.bm25_index:
+            logger.debug(f"Sparse retrieval returned {len(sparse_hits)} candidates.")
+        
+        fused_hits = reciprocal_rank_fusion(dense_hits, sparse_hits)
+        logger.debug(f"RRF Fusion completed. Fused {len(fused_hits)} candidates.")
 
         # Deduplicate
         seen_texts = set()

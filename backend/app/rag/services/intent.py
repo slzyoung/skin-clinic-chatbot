@@ -53,6 +53,7 @@ def get_time_greeting_response(query: str = "") -> str:
 
 class QueryIntent(str, Enum):
     GREETING = "GREETING"
+    CLOSING = "CLOSING"
     PRODUCT_NAME = "PRODUCT_NAME"
     PRODUCT_FUNCTION = "PRODUCT_FUNCTION"
     INGREDIENTS = "INGREDIENTS"
@@ -79,6 +80,14 @@ _INTENT_PATTERNS = [
             r"^\s*(tes|test|ping)\s*[\.\,\!\?]*\s*$",
             r"^\s*(halo|hallo|hai|hi|hello)\s+(ada\s+orang|apakah\s+ada\s+orang|bisa\s+bantu|apa\s+kabar)\s*[\.\,\!\?]*\s*$",
             r"^\s*(halo|hallo|hai|hi|hello)\s+(admin|cs|asisten|bot|erha)\s*[\.\,\!\?]*\s*$",
+        ]
+    ),
+    # 0.1 CLOSING / TERIMA KASIH
+    (
+        QueryIntent.CLOSING,
+        [
+            r"^\s*(oke|ok)?\s*(kalo|kalau)?\s*(gitu|begitu)?\s*(terima\s*kasih|terimaksih|makasih|thanks|thank\s*you|trims)(\s+dok|\s+dokter)?\s*[\.\,\!\?]*\s*$",
+            r"^\s*(sama[- ]sama|siap|baik|mantap|sip)\s*(dok|dokter)?\s*[\.\,\!\?]*\s*$"
         ]
     ),
     # 1. PRICE
@@ -215,6 +224,30 @@ class QueryIntentDetector:
         elif intent in (QueryIntent.PRODUCT_NAME, QueryIntent.PRICE, QueryIntent.AVAILABILITY, QueryIntent.INGREDIENTS):
             return min(requested_top_k, 4) if requested_top_k > 4 else requested_top_k
         return requested_top_k
+
+    @staticmethod
+    def should_use_agent(query: str, intent: QueryIntent) -> bool:
+        """
+        Evaluates whether a query requires deep ReAct Agent multi-step tool reasoning:
+        - Simple factual queries (greeting, closing, single product usage, ingredients, price) -> False (Use fast GenerationPipeline)
+        - Complex multi-condition, comparison, multi-topic, or deep reasoning queries -> True (Use MedicalAgent)
+        """
+        if intent in (QueryIntent.GREETING, QueryIntent.CLOSING, QueryIntent.PRICE, QueryIntent.PRODUCT_NAME):
+            return False
+
+        query_lower = query.lower()
+        complex_agent_indicators = [
+            "bandingkan", "perbandingan", "bedanya", "vs", "kombinasi", 
+            "kontraindikasi dan", "aman untuk", "sekaligus", "pisahkan",
+            "buat analisis klinis", "urutkan", "tindakan dan produk",
+            "treatment + produk", "treatment dan produk", "fase active", "fase post"
+        ]
+
+        words = query_lower.split()
+        is_long_multi_topic = len(words) >= 12 and any(kw in query_lower for kw in ["dan", "serta", "tetapi", "namun", "untuk"])
+        is_explicit_complex = any(ind in query_lower for ind in complex_agent_indicators)
+
+        return is_explicit_complex or is_long_multi_topic
 
     @staticmethod
     def _get_rules_for_intent(intent: QueryIntent) -> Dict[str, Any]:

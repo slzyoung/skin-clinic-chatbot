@@ -6,6 +6,7 @@ from loguru import logger
 
 from sqlalchemy import create_engine, Column, String, Text, Integer, JSON, text
 from sqlalchemy.orm import declarative_base, sessionmaker
+# pyrefly: ignore [missing-import]
 from pgvector.sqlalchemy import Vector
 
 from app.rag.services.interfaces import BaseVectorStoreAdapter

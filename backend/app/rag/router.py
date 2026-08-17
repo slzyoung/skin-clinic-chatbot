@@ -25,6 +25,7 @@ from app.rag.services.rag_generator import GenerationPipeline
 from app.rag.services.evaluation import RetrievalEvaluator, RAGEvaluator
 from app.rag.services.guardrails import GuardrailsPipeline
 from app.rag.config import settings
+from app.rag.services.intent import QueryIntentDetector, QueryIntent
 from app.rag.deps import (
     get_ingestion_pipeline,
     get_hybrid_retriever,
@@ -211,6 +212,8 @@ def check_sha256_duplicate(file_hash: str, file_name: str) -> Optional[str]:
         return res.get("existing_file")
     return None
 
+_ingestion_semaphore = asyncio.Semaphore(settings.max_ingestion_concurrency)
+
 async def process_ingestion_background(
     knowledge_id: str,
     file_path: str,
@@ -222,234 +225,234 @@ async def process_ingestion_background(
     file_hash: Optional[str] = None,
     batch_id: Optional[str] = None
 ):
+    import time as _time
+    t0_total = _time.time()
+    timing_metrics = {
+        "upload_ms": 0,
+        "checksum_ms": 0,
+        "parsing_ms": 0,
+        "ocr_ms": 0,
+        "llm_review_ms": 0,
+        "embedding_ms": 0,
+        "database_insert_ms": 0,
+        "bm25_update_ms": 0,
+        "total_ingestion_ms": 0
+    }
+
     try:
-        # Temporarily configure pipeline to stage file in data/pending without indexing
-        original_output_dir = pipeline.output_dir
-        original_store = pipeline.vector_store
-        
-        pipeline.output_dir = "data/pending"
-        pipeline.vector_store = None
-        os.makedirs(pipeline.output_dir, exist_ok=True)
-        
-        try:
-            output_file = await asyncio.to_thread(pipeline.ingest_file, file_path)
-        finally:
-            pipeline.output_dir = original_output_dir
-            pipeline.vector_store = original_store
+        async with _ingestion_semaphore:
+            # Temporarily configure pipeline to stage file in data/pending without indexing
+            original_output_dir = pipeline.output_dir
+            original_store = pipeline.vector_store
             
-        # Cleanup temp file
-        try:
-            import gc
-            gc.collect()
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except Exception as cleanup_err:
-            logger.warning(f"Could not delete temporary file {file_path}: {cleanup_err}")
+            pipeline.output_dir = "data/pending"
+            pipeline.vector_store = None
+            os.makedirs(pipeline.output_dir, exist_ok=True)
             
-        if not output_file:
-            logger.error("Ingestion failed: no output file.")
-            return
-            
-        # Load the staged JSON containing raw parsed chunks
-        with open(output_file, 'r', encoding='utf-8') as f:
-            enriched_chunks = json.load(f)
-
-        # Inject metadata cleanly into every chunk immediately
-        for chunk in enriched_chunks:
-            if isinstance(chunk, dict):
-                if "metadata" not in chunk:
-                    chunk["metadata"] = {}
-                chunk["metadata"]["knowledge_id"] = knowledge_id
-                chunk["metadata"]["batch_id"] = batch_id
-                chunk["metadata"]["file_hash"] = file_hash
-                chunk["metadata"]["source_file"] = file_name
-                chunk["metadata"]["type"] = doc_type_display.lower()
-                chunk["metadata"].pop("suggested_categories", None)
-                chunk["metadata"].pop("document_type", None)
-
-        full_extracted_text = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
-
-        clean_title_fallback = os.path.splitext(file_name)[0]
-
-        # Write initial pending state IMMEDIATELY (0.5s) so GET /pending and GET /documents work instantly
-        init_image_url = None
-        for c in enriched_chunks:
-            if isinstance(c, dict) and c.get("metadata", {}).get("image_url"):
-                init_image_url = c["metadata"]["image_url"]
-                break
-
-        os.makedirs("data/pending", exist_ok=True)
-        pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
-        initial_staged_doc = {
-            "knowledge_id": knowledge_id,
-            "batch_id": batch_id,
-            "file_name": file_name,
-            "file_hash": file_hash,
-            "title": clean_title_fallback,
-            "type": doc_type_display,
-            "status": "On review",
-            "text_accuracy": "100%",
-            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
-            "summary": full_extracted_text,
-            "feedback": f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan.",
-            "batch_summary": None,
-            "suggested_categories": [],
-            "visibility_settings": {
-                "clinics": ["all"],
-                "doctor_types": ["all"],
-                "doctors": ["all"]
-            },
-            "history": [],
-            "chunks": enriched_chunks
-        }
-        if init_image_url:
-            initial_staged_doc["image_url"] = init_image_url
-
-        with open(pending_file_path, 'w', encoding='utf-8') as f:
-            json.dump(initial_staged_doc, f, indent=4, ensure_ascii=False)
-            
-        summary = full_extracted_text
-        text_accuracy = "100%"
-        feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan."
-        suggested_categories = []
-        
-        if llm and enriched_chunks:
+            t0_parse = _time.time()
             try:
-                # Fetch categories from DB for LLM recommendation
-                db_categories = []
+                output_file = await asyncio.to_thread(pipeline.ingest_file, file_path)
+            finally:
+                pipeline.output_dir = original_output_dir
+                pipeline.vector_store = original_store
+            
+            timing_metrics["parsing_ms"] = int((_time.time() - t0_parse) * 1000)
+                
+            # Cleanup temp file
+            try:
+                import gc
+                gc.collect()
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception as cleanup_err:
+                logger.warning(f"Could not delete temporary file {file_path}: {cleanup_err}")
+                
+            if not output_file:
+                logger.error("Ingestion failed: no output file.")
+                return
+                
+            # Load the staged JSON containing raw parsed chunks
+            with open(output_file, 'r', encoding='utf-8') as f:
+                enriched_chunks = json.load(f)
+
+            # Inject metadata cleanly into every chunk immediately
+            for chunk in enriched_chunks:
+                if isinstance(chunk, dict):
+                    if "metadata" not in chunk:
+                        chunk["metadata"] = {}
+                    chunk["metadata"]["knowledge_id"] = knowledge_id
+                    chunk["metadata"]["batch_id"] = batch_id
+                    chunk["metadata"]["file_hash"] = file_hash
+                    chunk["metadata"]["source_file"] = file_name
+                    chunk["metadata"]["type"] = doc_type_display.lower()
+                    chunk["metadata"].pop("suggested_categories", None)
+                    chunk["metadata"].pop("document_type", None)
+
+            full_extracted_text = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
+
+            clean_title_fallback = os.path.splitext(file_name)[0]
+
+            # Write initial pending state IMMEDIATELY (0.5s) so GET /pending and GET /documents work instantly
+            init_image_url = None
+            for c in enriched_chunks:
+                if isinstance(c, dict) and c.get("metadata", {}).get("image_url"):
+                    init_image_url = c["metadata"]["image_url"]
+                    break
+
+            os.makedirs("data/pending", exist_ok=True)
+            pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
+            initial_staged_doc = {
+                "knowledge_id": knowledge_id,
+                "batch_id": batch_id,
+                "file_name": file_name,
+                "file_hash": file_hash,
+                "title": clean_title_fallback,
+                "type": doc_type_display,
+                "status": "PARSING",
+                "text_accuracy": "100%",
+                "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+                "summary": full_extracted_text,
+                "feedback": f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan.",
+                "batch_summary": None,
+                "suggested_categories": [],
+                "visibility_settings": {
+                    "clinics": ["all"],
+                    "doctor_types": ["all"],
+                    "doctors": ["all"]
+                },
+                "history": [],
+                "chunks": enriched_chunks,
+                "timing_metrics": timing_metrics
+            }
+            if init_image_url:
+                initial_staged_doc["image_url"] = init_image_url
+
+            with open(pending_file_path, 'w', encoding='utf-8') as f:
+                json.dump(initial_staged_doc, f, indent=4, ensure_ascii=False)
+                
+            summary = full_extracted_text
+            text_accuracy = "100%"
+            feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan."
+            suggested_categories = []
+            
+            if llm and enriched_chunks:
+                t0_llm = _time.time()
                 try:
-                    from app.core.database import AsyncSessionLocal
-                    from app.models.category import Category
-                    from sqlalchemy import select
-                    async with AsyncSessionLocal() as session:
-                        res = await session.execute(select(Category).where(Category.deleted_at.is_(None)))
-                        cats = res.scalars().all()
-                        db_categories = [{"id": str(c.id), "name": c.name} for c in cats]
-                except Exception as cat_err:
-                    logger.warning(f"Failed to fetch categories for review prompt: {cat_err}")
-                
-                if not db_categories:
-                    default_cats = [
-                        ("9b79e362-ec70-4560-902e-fd5897c07a00", "Acne Care"),
-                        ("1a23b456-ec70-4560-902e-fd5897c07a01", "Anti Aging"),
-                        ("2b34c567-ec70-4560-902e-fd5897c07a02", "Dark Spot"),
-                        ("3c45d678-ec70-4560-902e-fd5897c07a03", "Psoriasis Care"),
-                        ("4d56e789-ec70-4560-902e-fd5897c07a04", "Scar Treatment"),
-                        ("5e67f890-ec70-4560-902e-fd5897c07a05", "Wound Healing"),
-                        ("6f78a901-ec70-4560-902e-fd5897c07a06", "Brightening")
+                    # Fetch categories from DB for LLM recommendation
+                    db_categories = []
+                    try:
+                        from app.core.database import AsyncSessionLocal
+                        from app.models.category import Category
+                        from sqlalchemy import select
+                        async with AsyncSessionLocal() as session:
+                            res = await session.execute(select(Category).where(Category.deleted_at.is_(None)))
+                            cats = res.scalars().all()
+                            db_categories = [{"id": str(c.id), "name": c.name} for c in cats]
+                    except Exception as cat_err:
+                        logger.warning(f"Failed to fetch categories for review prompt: {cat_err}")
+                    
+                    if not db_categories:
+                        default_cats = [
+                            ("9b79e362-ec70-4560-902e-fd5897c07a00", "Acne Care"),
+                            ("1a23b456-ec70-4560-902e-fd5897c07a01", "Anti Aging"),
+                            ("2b34c567-ec70-4560-902e-fd5897c07a02", "Dark Spot"),
+                            ("3c45d678-ec70-4560-902e-fd5897c07a03", "Psoriasis Care"),
+                            ("4d56e789-ec70-4560-902e-fd5897c07a04", "Scar Treatment"),
+                            ("5e67f890-ec70-4560-902e-fd5897c07a05", "Wound Healing"),
+                            ("6f78a901-ec70-4560-902e-fd5897c07a06", "Brightening")
+                        ]
+                        db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
+
+                    # Build full extracted markdown text from enriched_chunks
+                    full_extracted_text = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
+                    summary = full_extracted_text
+
+                    user_instruction_block = f"""
+                    CRITICAL USER CUSTOM INSTRUCTION (HIGHEST PRIORITY):
+                    "{user_prompt}"
+                    You MUST follow and fulfill the user's custom instruction above (e.g. translate to Indonesian, reformat, highlight specific sections, etc.) when generating the summary.
+                    """ if user_prompt and str(user_prompt).strip() else ""
+
+                    review_prompt = f"""
+                    You are a world-class AI Knowledge Engineer and Specialist for ERHA (PT Arya Noble) knowledge base.
+                    Your task is to refine, validate, and structure the extracted document content into clean, comprehensive, production-grade Markdown matching ChatGPT / Claude standards.
+
+                    Extracted Document Content:
+                    {full_extracted_text}
+
+                    Available System Categories:
+                    {json.dumps(db_categories, ensure_ascii=False)}
+
+                    {user_instruction_block}
+
+                    FLEXIBLE & COMPREHENSIVE STRUCTURING GUIDELINES:
+                    1. **Adaptive Structure for Any Document Type**:
+                       - Documents can be of ANY nature (e.g. Skincare/Cosmetics, Treatment Protocols, SOP / Clinic Guidelines, Training Slides / Presentations, Research / Clinical Literature, Price Lists, FAQ, Device/Equipment Guides, etc.).
+                       - Dynamically structure the Markdown using clear hierarchical headers (`# [Document Title]`, `## Section`, `### Subsection`), bold key terms (`**`), structured bullet points (`-`), and crisp Markdown tables (`| Col 1 | Col 2 |`) tailored to the document's actual topic.
+                    2. **100% Content & Information Preservation**:
+                       - ALL key points, steps, specifications, numbers, ingredients/substances, parameters, tables, questions/answers, and details present in the raw text MUST be fully retained and organized.
+                       - DO NOT omit, over-condense, or skip substantive sections. Ensure all factual information from the uploaded file is thoroughly represented.
+                    3. **Professional Markdown Formatting**:
+                       - Fix any OCR noise, broken line breaks, or formatting typos while preserving 100% factual accuracy.
+                       - Start directly with `# [Document Title]`. Do NOT add meta introductions like "Here is the summary".
+
+                    Perform the following tasks:
+                    1. **AI Recommended Title (`title`)**: Provide a clean, short, professional document title WITHOUT any prefixes like "Knowledge Ingestment" or "Knowledge Base" (e.g. "Standard Operating Procedure (SOP) Brightening Center" or "ERHA Acne Spot Gel Protocol").
+                    2. **Structured Full Document Markdown (`summary`)**: Present the complete content in beautifully organized Markdown matching the document's domain.
+                    3. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
+                    4. **Dynamic Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary in Indonesian explaining exactly what this specific document covers and its main points.
+                    5. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
+
+                    Return a valid JSON object ONLY:
+                    {{
+                        "title": "Standard Operating Procedure (SOP) Brightening Center",
+                        "summary": "# Document Title\\n\\n## 1. Section 1\\n- Content...",
+                        "feedback": "Dokumen ini memuat panduan lengkap mengenai [topik dokumen], mencakup [poin-poin utama yang dibahas].",
+                        "text_accuracy": "100%",
+                        "suggested_categories": [
+                            {{
+                                "id": "9b79e362-ec70-4560-902e-fd5897c07a00",
+                                "name": "Acne Care"
+                            }}
+                        ]
+                    }}
+                    """
+                    llm_response = await asyncio.to_thread(llm.generate, review_prompt)
+                    timing_metrics["llm_review_ms"] = int((_time.time() - t0_llm) * 1000)
+                    parsed_review = safe_json_loads(llm_response)
+                    raw_title = parsed_review.get("title") or clean_title_fallback
+
+                    # Strip unwanted prefixes from title
+                    prefixes_to_strip = [
+                        "knowledge ingestment", "knowledge ingestion", "knowledge ingest",
+                        "ingestment", "ingestion", "knowledge base", "knowledge"
                     ]
-                    db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
+                    recommended_title = raw_title.strip()
+                    for p in prefixes_to_strip:
+                        if recommended_title.lower().startswith(p):
+                            recommended_title = recommended_title[len(p):].lstrip(" :-_#\t")
 
-                # Build full extracted markdown text from enriched_chunks
-                full_extracted_text = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
-                summary = full_extracted_text
+                    for ext in [".pdf", ".docx", ".xlsx", ".csv", ".pptx", ".ppt", ".doc", ".txt"]:
+                        if recommended_title.lower().endswith(ext):
+                            recommended_title = recommended_title[:-len(ext)].strip()
 
-                user_instruction_block = f"""
-                CRITICAL USER CUSTOM INSTRUCTION (HIGHEST PRIORITY):
-                "{user_prompt}"
-                You MUST follow and fulfill the user's custom instruction above (e.g. translate to Indonesian, reformat, highlight specific sections, etc.) when generating the summary and correcting chunks.
-                """ if user_prompt and str(user_prompt).strip() else ""
+                    if not recommended_title:
+                        recommended_title = clean_title_fallback
 
-                review_prompt = f"""
-                You are a world-class AI Knowledge Engineer and Specialist for ERHA (PT Arya Noble) knowledge base.
-                Your task is to refine, validate, and structure the extracted document content into clean, comprehensive, production-grade Markdown matching ChatGPT / Claude standards.
-
-                Extracted Document Content:
-                {full_extracted_text}
-
-                Available System Categories:
-                {json.dumps(db_categories, ensure_ascii=False)}
-
-                {user_instruction_block}
-
-                FLEXIBLE & COMPREHENSIVE STRUCTURING GUIDELINES:
-                1. **Adaptive Structure for Any Document Type**:
-                   - Documents can be of ANY nature (e.g. Skincare/Cosmetics, Treatment Protocols, SOP / Clinic Guidelines, Training Slides / Presentations, Research / Clinical Literature, Price Lists, FAQ, Device/Equipment Guides, etc.).
-                   - Dynamically structure the Markdown using clear hierarchical headers (`# [Document Title]`, `## Section`, `### Subsection`), bold key terms (`**`), structured bullet points (`-`), and crisp Markdown tables (`| Col 1 | Col 2 |`) tailored to the document's actual topic.
-                2. **100% Content & Information Preservation**:
-                   - ALL key points, steps, specifications, numbers, ingredients/substances, parameters, tables, questions/answers, and details present in the raw text MUST be fully retained and organized.
-                   - DO NOT omit, over-condense, or skip substantive sections. Ensure all factual information from the uploaded file is thoroughly represented.
-                3. **Professional Markdown Formatting**:
-                   - Fix any OCR noise, broken line breaks, or formatting typos while preserving 100% factual accuracy.
-                   - Start directly with `# [Document Title]`. Do NOT add meta introductions like "Here is the summary".
-
-                Perform the following tasks:
-                1. **AI Recommended Title (`title`)**: Provide a clean, short, professional document title WITHOUT any prefixes like "Knowledge Ingestment" or "Knowledge Base" (e.g. "Standard Operating Procedure (SOP) Brightening Center" or "ERHA Acne Spot Gel Protocol").
-                2. **Structured Full Document Markdown (`summary`)**: Present the complete content in beautifully organized Markdown matching the document's domain.
-                3. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
-                4. **Dynamic Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary in Indonesian explaining exactly what this specific document covers and its main points.
-                5. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
-                6. **Granular Corrected Chunks (`corrected_chunks`)**: Return the array of corrected text chunks matching input chunk count with "text" and "category".
-
-                Return a valid JSON object ONLY:
-                {{
-                    "title": "Standard Operating Procedure (SOP) Brightening Center",
-                    "summary": "# Document Title\\n\\n## 1. Section 1\\n- Content...",
-                    "feedback": "Dokumen ini memuat panduan lengkap mengenai [topik dokumen], mencakup [poin-poin utama yang dibahas].",
-                    "text_accuracy": "100%",
-                    "suggested_categories": [
-                        {{
-                            "id": "9b79e362-ec70-4560-902e-fd5897c07a00",
-                            "name": "Acne Care"
-                        }}
-                    ],
-                    "corrected_chunks": [
-                        {{
-                            "text": "Corrected chunk 1 text...",
-                            "category": "Acne Care"
-                        }}
-                    ]
-                }}
-                """
-                llm_response = await asyncio.to_thread(llm.generate, review_prompt)
-                parsed_review = safe_json_loads(llm_response)
-                raw_title = parsed_review.get("title") or clean_title_fallback
-
-                # Strip unwanted prefixes from title
-                prefixes_to_strip = [
-                    "knowledge ingestment", "knowledge ingestion", "knowledge ingest",
-                    "ingestment", "ingestion", "knowledge base", "knowledge"
-                ]
-                recommended_title = raw_title.strip()
-                for p in prefixes_to_strip:
-                    if recommended_title.lower().startswith(p):
-                        recommended_title = recommended_title[len(p):].lstrip(" :-_#\t")
-
-                for ext in [".pdf", ".docx", ".xlsx", ".csv", ".pptx", ".ppt", ".doc", ".txt"]:
-                    if recommended_title.lower().endswith(ext):
-                        recommended_title = recommended_title[:-len(ext)].strip()
-
-                if not recommended_title:
+                    summary = parsed_review.get("summary", summary)
+                    text_accuracy = parsed_review.get("text_accuracy", "100%")
+                    feedback = parsed_review.get("feedback", feedback)
+                    suggested_categories = parsed_review.get("suggested_categories", [])
+                            
+                except Exception as llm_err:
+                    timing_metrics["llm_review_ms"] = int((_time.time() - t0_llm) * 1000)
+                    logger.error(f"Failed to process AI review: {llm_err}")
                     recommended_title = clean_title_fallback
-
-                summary = parsed_review.get("summary", summary)
-                text_accuracy = parsed_review.get("text_accuracy", "100%")
-                feedback = parsed_review.get("feedback", feedback)
-                suggested_categories = parsed_review.get("suggested_categories", [])
-                corrected_chunks = parsed_review.get("corrected_chunks", [])
-                
-                # Apply corrected chunks & granular chunk categories back to enriched_chunks
-                if corrected_chunks:
-                    for idx, c_item in enumerate(corrected_chunks):
-                        if idx < len(enriched_chunks):
-                            if isinstance(c_item, dict):
-                                c_txt = c_item.get("text", "")
-                                c_cat = c_item.get("category") or c_item.get("category_name")
-                                if c_txt:
-                                    enriched_chunks[idx]["text"] = c_txt
-                                if c_cat:
-                                    enriched_chunks[idx]["chunk_category"] = c_cat
-                            elif isinstance(c_item, str):
-                                enriched_chunks[idx]["text"] = c_item
-                        
-            except Exception as llm_err:
-                logger.error(f"Failed to process AI review: {llm_err}")
-                recommended_title = clean_title_fallback
-                if not summary or summary == "":
-                    summary = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
-                if not suggested_categories and db_categories:
-                    suggested_categories = [db_categories[0]]
-                feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan. Pemrosesan analisis AI otomatis sementara tertunda (kuota token API perlu diperbarui). Seluruh isi teks dokumen dapat ditinjau di bawah."
+                    if not summary or summary == "":
+                        summary = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
+                    if not suggested_categories and db_categories:
+                        suggested_categories = [db_categories[0]]
+                    feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan. Pemrosesan analisis AI otomatis sementara tertunda (kuota token API perlu diperbarui). Seluruh isi teks dokumen dapat ditinjau di bawah."
                 
         # Define document-level visibility settings
         visibility_settings = {
@@ -522,6 +525,8 @@ async def process_ingestion_background(
                 {"role": "assistant", "content": summary}
             ]
 
+        timing_metrics["total_ingestion_ms"] = int((_time.time() - t0_total) * 1000)
+
         # Structure the final pending document state in exact requested order
         staged_document = {
             "knowledge_id": knowledge_id,
@@ -539,7 +544,8 @@ async def process_ingestion_background(
             "suggested_categories": suggested_categories,
             "visibility_settings": visibility_settings,
             "history": history_list,
-            "chunks": enriched_chunks
+            "chunks": enriched_chunks,
+            "timing_metrics": timing_metrics
         }
         if doc_image_url:
             staged_document["image_url"] = doc_image_url
@@ -567,6 +573,7 @@ async def process_ingestion_background(
                 logger.warning(f"Could not synthesize batch summary: {batch_summary_err}")
 
         # Update Knowledge DB table status to PENDING
+        t0_db = _time.time()
         try:
             from app.core.database import AsyncSessionLocal
             from app.models.knowledge import Knowledge, KnowledgeStatus
@@ -586,9 +593,29 @@ async def process_ingestion_background(
                     k_entry.title = recommended_title
                     k_entry.ai_summary = summary
                     k_entry.ai_confidence = float(text_accuracy.replace("%", "")) if isinstance(text_accuracy, str) and "%" in text_accuracy else 95.00
+                    if k_entry.metadata_ is None:
+                        k_entry.metadata_ = {}
+                    k_entry.metadata_["timing_metrics"] = timing_metrics
                     await session.commit()
         except Exception as db_err:
             logger.warning(f"Could not update status to PENDING in Knowledge DB table: {db_err}")
+
+        timing_metrics["database_insert_ms"] = int((_time.time() - t0_db) * 1000)
+        timing_metrics["total_ingestion_ms"] = int((_time.time() - t0_total) * 1000)
+
+        # Update staged document with final timing metrics
+        staged_document["timing_metrics"] = timing_metrics
+        with open(pending_file_path, 'w', encoding='utf-8') as f:
+            json.dump(staged_document, f, indent=4, ensure_ascii=False)
+
+        logger.info(
+            f"\n"
+            f"⏱️ [INGESTION TIMING] File: '{file_name}' (ID: {knowledge_id})\n"
+            f"  - Parsing Stage        : {timing_metrics['parsing_ms']} ms\n"
+            f"  - LLM Review Stage     : {timing_metrics['llm_review_ms']} ms\n"
+            f"  - DB Staging Stage     : {timing_metrics['database_insert_ms']} ms\n"
+            f"  - Total Ingestion Time : {timing_metrics['total_ingestion_ms']} ms\n"
+        )
 
     except Exception as e:
         logger.error(f"Failed background processing for document: {e}")
@@ -1908,52 +1935,27 @@ async def search_hybrid(
 @router.post("/chat", response_model=ChatResponse, tags=["Generation"])
 async def chat_endpoint(
     request: ChatRequest,
-    pipeline: GenerationPipeline = Depends(get_generation_pipeline),
-    agent = Depends(get_medical_agent)
+    pipeline: GenerationPipeline = Depends(get_generation_pipeline)
 ):
     """
-    Production RAG Chat Endpoint. Synthesizes a doctor-aligned response using context-enriched retrieval,
-    optional ReAct AI Agent multi-step reasoning, and Guardrails safety checks.
+    Production Unified RAG Chat Endpoint. Single entry point for query processing,
+    dynamic complexity routing, evidence validation, clinical safety gate, and LLM response synthesis.
     """
-    # 1. Guardrails: Pre-retrieval Input Check (prompt injection & topicality filter)
-    u_ctx = request.user_context
-    dr_info = f"DrType: {u_ctx.dr_type}, Branches: {u_ctx.branch_ids}" if u_ctx else "General / Anonymous"
-    logger.debug(f"🩺 [Chat Request] Query: \"{request.query}\" | Context: {dr_info} | History: {len(request.history)} turn(s)")
-
-    is_valid_input, rejection_msg = GuardrailsPipeline.validate_input(request.query)
-    if not is_valid_input:
-        logger.warning(f"❌ Input guardrail rejected query: '{request.query[:80]}'")
-        return ChatResponse(
-            query=request.query,
-            answer=rejection_msg,
-            context="",
-            results=[],
-            agent_used=False
-        )
-
-    raw_history = [{"role": msg.role, "content": msg.content} for msg in request.history]
-
-    # 2. Try ReAct AI Agent (if enabled via RAG_AGENT_ENABLED=true)
-    if agent:
-        try:
-            logger.info("🤖 Executing ReAct MedicalAgent pipeline...")
-            agent_res = agent.run(request.query, history=raw_history)
-            if agent_res and agent_res.get("answer"):
-                sanitized_answer = GuardrailsPipeline.process_output(agent_res["answer"])
-                return ChatResponse(
-                    query=request.query,
-                    answer=sanitized_answer,
-                    context="[Retrieved via MedicalAgent Multi-step Tool Reasoning]",
-                    results=agent_res.get("sources", []),
-                    agent_used=True
-                )
-        except Exception as agent_err:
-            logger.warning(f"MedicalAgent execution failed, falling back to standard pipeline: {agent_err}")
-
-    # 3. Standard Single-pass RAG Generation Pipeline Fallback
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Generation pipeline is not initialized. Please ensure your LLM API keys are configured correctly.")
-        
+        raise HTTPException(status_code=500, detail="Generation pipeline is not initialized.")
+
+    raw_history = []
+    if request.history:
+        for msg in request.history:
+            if isinstance(msg, dict):
+                r = msg.get("role", "")
+                c = msg.get("content", "")
+            else:
+                r = getattr(msg, "role", "")
+                c = getattr(msg, "content", "")
+            if r and c:
+                raw_history.append({"role": r, "content": c})
+
     filter_metadata = {}
     if request.document_type and request.document_type.strip().lower() not in ("string", ""):
         filter_metadata["document_type"] = request.document_type
@@ -1980,20 +1982,20 @@ async def chat_endpoint(
             history=raw_history
         )
         
-        # 4. Guardrails: Post-generation Output Check (PII Redaction & Medical Disclaimer)
         if isinstance(response, ChatResponse):
-            response.answer = GuardrailsPipeline.process_output(response.answer)
-            response.agent_used = False
             return response
         elif isinstance(response, dict):
-            raw_answer = response.get("answer", "")
-            response["answer"] = GuardrailsPipeline.process_output(raw_answer)
-            response["agent_used"] = False
-            return response
+            return ChatResponse(
+                query=response.get("query", request.query),
+                answer=response.get("answer", ""),
+                context=response.get("context", ""),
+                results=response.get("results", []),
+                agent_used=response.get("agent_used", False)
+            )
         return response
 
     except Exception as e:
-        logger.error(f"Chat generation failed: {e}")
+        logger.error(f"Unified Chat generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
