@@ -16,7 +16,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     type: Mapped[UserType] = mapped_column(SQLEnum(UserType, name="user_type"), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String, unique=True, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     cis_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True, nullable=True)
     token_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -28,11 +28,11 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
 
     __table_args__ = (
         CheckConstraint(
-            "(type = 'DOCTOR' AND cis_id IS NOT NULL) OR (type = 'STAFF' AND password_hash IS NOT NULL)",
+            "(type = 'DOCTOR' AND cis_id IS NOT NULL) OR (type = 'STAFF' AND password_hash IS NOT NULL AND email IS NOT NULL)",
             name="chk_user_integrity"
         ),
         CheckConstraint(
-            "email ~* '^[A-Za-z0-9._%-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,4}$'",
+            "email IS NULL OR email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'",
             name="chk_user_email"
         ),
     )

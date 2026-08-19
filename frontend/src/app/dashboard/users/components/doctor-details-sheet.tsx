@@ -69,7 +69,7 @@ export function DoctorDetailsSheet({
 
 									<div className="flex flex-col gap-2">
 										<span className="text-sm text-gray-500">Email</span>
-										<span className="text-sm text-gray-900">{doctor.email}</span>
+										<span className="text-sm text-gray-900">{doctor.email || "-"}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
