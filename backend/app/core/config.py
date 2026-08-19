@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # RAG & LLM Settings
     EMBEDDING_PROVIDER: str = "huggingface"
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
-    LLM_MODEL_NAME: str = "gpt-4o-mini"
+    LLM_MODEL_NAME: str = "gpt-5.4-mini"
     OPENAI_API_KEY: Optional[str] = None
 
     # MinIO / S3 Object Storage Settings
