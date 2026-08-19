@@ -20,15 +20,30 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
 	RiBookOpenLine,
+	RiBookletLine,
 	RiDatabase2Line,
 	RiEyeLine,
 	RiLoader4Line,
 	RiMoneyDollarCircleLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useKnowledgeBaseList } from "../../../app/dashboard/knowledge/hooks/use-knowledge";
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
+
+interface DisplayRowItem {
+	id: string;
+	isBatch: boolean;
+	batchId?: string;
+	title: string;
+	type: string;
+	status: string;
+	created_at?: string;
+	description: string;
+	documentCount?: number;
+	rawItem: KnowledgeResponse;
+	allFileNames: string[];
+}
 
 export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const router = useRouter();
@@ -39,9 +54,9 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 
 	const basePath = "/dashboard/knowledge";
 
-	const handleRowClick = (row: KnowledgeResponse) => {
-		if (row.metadata?.upload_batch_id) {
-			router.push(`${basePath}/batch/${row.metadata.upload_batch_id}`);
+	const handleRowClick = (row: DisplayRowItem) => {
+		if (row.isBatch && row.batchId) {
+			router.push(`${basePath}/batch/${row.batchId}`);
 		} else {
 			router.push(`${basePath}/${row.id}`);
 		}
@@ -61,14 +76,118 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 		return false;
 	};
 
-	const filteredList = knowledgeList
+	// Group knowledgeList by batch_id if present
+	const displayRows = useMemo<DisplayRowItem[]>(() => {
+		if (!knowledgeList) return [];
+
+		const batchMap = new Map<string, KnowledgeResponse[]>();
+		const singleItems: KnowledgeResponse[] = [];
+
+		for (const item of knowledgeList) {
+			const bId = (item.metadata?.batch_id || item.metadata?.upload_batch_id) as string | undefined;
+			if (bId) {
+				const existing = batchMap.get(bId) || [];
+				existing.push(item);
+				batchMap.set(bId, existing);
+			} else {
+				singleItems.push(item);
+			}
+		}
+
+		const rows: DisplayRowItem[] = [];
+
+		// 1. Process Batch Groups
+		for (const [batchId, docs] of batchMap.entries()) {
+			if (docs.length === 1) {
+				// If a batch has only 1 document, display as normal or batch
+				const doc = docs[0];
+				rows.push({
+					id: doc.id,
+					isBatch: true,
+					batchId,
+					title: doc.title || doc.file_name,
+					type: doc.type,
+					status: doc.status,
+					created_at: doc.created_at,
+					description: doc.ai_summary || doc.content || "No description available.",
+					documentCount: 1,
+					rawItem: doc,
+					allFileNames: [doc.file_name],
+				});
+			} else {
+				// Multi-document batch: Aggregate status
+				let aggStatus = "APPROVED";
+				const hasProcessing = docs.some((d) => d.status === "PROCESSING");
+				const hasPending = docs.some((d) => d.status === "PENDING");
+				const hasRejected = docs.some((d) => d.status === "REJECTED");
+
+				if (hasProcessing) {
+					aggStatus = "PROCESSING";
+				} else if (hasPending) {
+					aggStatus = "PENDING";
+				} else if (docs.every((d) => d.status === "APPROVED")) {
+					aggStatus = "APPROVED";
+				} else if (hasRejected) {
+					aggStatus = "REJECTED";
+				} else {
+					aggStatus = docs[0].status;
+				}
+
+				// Find batch summary if available
+				const batchSummary = (docs[0].metadata?.batch_summary as string) || docs[0].ai_summary || "";
+				const allNames = docs.map((d) => d.file_name || d.title);
+				const firstDocTitle = docs[0].title || docs[0].file_name;
+				const displayTitle = `${firstDocTitle} + ${docs.length - 1} more`;
+
+				const mostRecentDate = docs.reduce((latest, d) => {
+					if (!latest) return d.created_at;
+					if (!d.created_at) return latest;
+					return new Date(d.created_at) > new Date(latest) ? d.created_at : latest;
+				}, docs[0].created_at);
+
+				rows.push({
+					id: docs[0].id,
+					isBatch: true,
+					batchId,
+					title: displayTitle,
+					type: docs[0].type,
+					status: aggStatus,
+					created_at: mostRecentDate,
+					description: batchSummary || `Batch upload containing ${docs.length} documents.`,
+					documentCount: docs.length,
+					rawItem: docs[0],
+					allFileNames: allNames,
+				});
+			}
+		}
+
+		// 2. Process Standalone Items
+		for (const doc of singleItems) {
+			rows.push({
+				id: doc.id,
+				isBatch: false,
+				title: doc.title || doc.file_name,
+				type: doc.type,
+				status: doc.status,
+				created_at: doc.created_at,
+				description: doc.ai_summary || doc.content || "No description available.",
+				documentCount: 1,
+				rawItem: doc,
+				allFileNames: [doc.file_name],
+			});
+		}
+
+		return rows;
+	}, [knowledgeList]);
+
+	const filteredList = displayRows
 		?.filter((item) => isTypeMatch(item.type, type))
 		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
-		// We'll leave categoryFilter as a visual stub for now until dynamic categories are fully wired
 		?.filter(
 			(item) =>
 				item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-				item.file_name.toLowerCase().includes(searchQuery.toLowerCase()),
+				item.allFileNames.some((f) => f.toLowerCase().includes(searchQuery.toLowerCase())) ||
+				item.description.toLowerCase().includes(searchQuery.toLowerCase()),
 		)
 		.sort((a, b) => {
 			const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
@@ -228,19 +347,31 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 						{!isLoading &&
 							filteredList?.map((row) => (
 								<TableRow
-									key={row.id}
+									key={row.isBatch ? `batch-${row.batchId}` : `doc-${row.id}`}
 									className="hover:bg-gray-50/60 cursor-pointer"
 									onClick={() => handleRowClick(row)}
 								>
 									<TableCell>
 										<div className="flex items-center gap-2 min-w-0 max-w-50 sm:max-w-62.5">
-											<RiBookOpenLine className="size-4 shrink-0 text-gray-600" />
+											{row.isBatch && row.documentCount && row.documentCount > 1 ? (
+												<RiBookletLine className="size-4 shrink-0 text-gray-600" />
+											) : (
+												<RiBookOpenLine className="size-4 shrink-0 text-gray-600" />
+											)}
 											<span
 												className="font-medium text-gray-900 truncate"
 												title={row.title || undefined}
 											>
 												{row.title}
 											</span>
+											{row.isBatch && row.documentCount && row.documentCount > 1 && (
+												<Badge
+													variant="secondary"
+													className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] px-1.5 py-0 shrink-0 font-normal"
+												>
+													{row.documentCount} files
+												</Badge>
+											)}
 										</div>
 									</TableCell>
 									<TableCell>
@@ -263,9 +394,9 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 									<TableCell className="max-w-xl">
 										<p
 											className="text-sm text-gray-600 truncate"
-											title={row.ai_summary || row.content || undefined}
+											title={row.description || undefined}
 										>
-											{row.ai_summary || row.content || "No description available."}
+											{row.description}
 										</p>
 									</TableCell>
 									<TableCell>{getStatusBadge(row.status)}</TableCell>
@@ -275,7 +406,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 												onClick={() => handleRowClick(row)}
 												variant="outline"
 												size="md"
-												className="border-gray-200 font-medium"
+												className="border-gray-200 font-medium cursor-pointer"
 											>
 												<RiEyeLine className="mr-2 h-4 w-4" />
 												View
