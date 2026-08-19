@@ -23,12 +23,14 @@ import {
 	RiBookletLine,
 	RiDatabase2Line,
 	RiEyeLine,
+	RiFilterOffLine,
 	RiLoader4Line,
 	RiMoneyDollarCircleLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useKnowledgeBaseList } from "../../../app/dashboard/knowledge/hooks/use-knowledge";
+import { useCategories } from "../../../app/dashboard/category/hooks/use-categories";
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
 
 interface DisplayRowItem {
@@ -43,6 +45,7 @@ interface DisplayRowItem {
 	documentCount?: number;
 	rawItem: KnowledgeResponse;
 	allFileNames: string[];
+	categories: string[];
 }
 
 export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
@@ -51,6 +54,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	const [statusFilter, setStatusFilter] = useState("ALL");
 	const [categoryFilter, setCategoryFilter] = useState("ALL");
 	const { data: knowledgeList, isLoading, isError } = useKnowledgeBaseList();
+	const { data: availableCategories = [] } = useCategories();
 
 	const basePath = "/dashboard/knowledge";
 
@@ -76,7 +80,15 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 		return false;
 	};
 
-	// Group knowledgeList by batch_id if present
+	const isCategoryMatch = (itemCategories: string[], filterCat: string) => {
+		if (!filterCat || filterCat === "ALL") return true;
+		const target = filterCat.toLowerCase();
+		return itemCategories.some(
+			(c) => c.toLowerCase() === target || c.toLowerCase().includes(target),
+		);
+	};
+
+	// Group knowledgeList by batch_id if present and collect categories
 	const displayRows = useMemo<DisplayRowItem[]>(() => {
 		if (!knowledgeList) return [];
 
@@ -96,10 +108,38 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 
 		const rows: DisplayRowItem[] = [];
 
+		const extractCategories = (doc: KnowledgeResponse): string[] => {
+			const catSet = new Set<string>();
+			const rawList = (doc.metadata?.categories as string[]) || [];
+			const suggested =
+				(doc.metadata?.suggested_categories as Array<{ name: string } | string>) || [];
+			for (const c of rawList) {
+				if (typeof c === "string" && c.trim()) catSet.add(c.trim());
+			}
+			for (const s of suggested) {
+				if (typeof s === "string" && s.trim()) {
+					catSet.add(s.trim());
+				} else if (
+					s &&
+					typeof s === "object" &&
+					"name" in s &&
+					typeof (s as { name: unknown }).name === "string" &&
+					(s as { name: string }).name.trim()
+				) {
+					catSet.add((s as { name: string }).name.trim());
+				}
+			}
+			if (doc.type) catSet.add(doc.type);
+			return Array.from(catSet);
+		};
+
 		// 1. Process Batch Groups
 		for (const [batchId, docs] of batchMap.entries()) {
+			const combinedCategories = Array.from(
+				new Set(docs.flatMap((d) => extractCategories(d))),
+			);
+
 			if (docs.length === 1) {
-				// If a batch has only 1 document, display as normal or batch
 				const doc = docs[0];
 				rows.push({
 					id: doc.id,
@@ -113,9 +153,9 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 					documentCount: 1,
 					rawItem: doc,
 					allFileNames: [doc.file_name],
+					categories: combinedCategories,
 				});
 			} else {
-				// Multi-document batch: Aggregate status
 				let aggStatus = "APPROVED";
 				const hasProcessing = docs.some((d) => d.status === "PROCESSING");
 				const hasPending = docs.some((d) => d.status === "PENDING");
@@ -133,8 +173,8 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 					aggStatus = docs[0].status;
 				}
 
-				// Find batch summary if available
-				const batchSummary = (docs[0].metadata?.batch_summary as string) || docs[0].ai_summary || "";
+				const batchSummary =
+					(docs[0].metadata?.batch_summary as string) || docs[0].ai_summary || "";
 				const allNames = docs.map((d) => d.file_name || d.title);
 				const firstDocTitle = docs[0].title || docs[0].file_name;
 				const displayTitle = `${firstDocTitle} + ${docs.length - 1} more`;
@@ -157,6 +197,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 					documentCount: docs.length,
 					rawItem: docs[0],
 					allFileNames: allNames,
+					categories: combinedCategories,
 				});
 			}
 		}
@@ -174,20 +215,32 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 				documentCount: 1,
 				rawItem: doc,
 				allFileNames: [doc.file_name],
+				categories: extractCategories(doc),
 			});
 		}
 
 		return rows;
 	}, [knowledgeList]);
 
+	const hasActiveFilters =
+		searchQuery.trim() !== "" || statusFilter !== "ALL" || categoryFilter !== "ALL";
+
+	const handleResetFilters = () => {
+		setSearchQuery("");
+		setStatusFilter("ALL");
+		setCategoryFilter("ALL");
+	};
+
 	const filteredList = displayRows
 		?.filter((item) => isTypeMatch(item.type, type))
 		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
+		?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
 		?.filter(
 			(item) =>
 				item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
 				item.allFileNames.some((f) => f.toLowerCase().includes(searchQuery.toLowerCase())) ||
-				item.description.toLowerCase().includes(searchQuery.toLowerCase()),
+				item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+				item.categories.some((c) => c.toLowerCase().includes(searchQuery.toLowerCase())),
 		)
 		.sort((a, b) => {
 			const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
@@ -227,60 +280,75 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 	return (
 		<div className="w-full mt-6">
 			{/* Filters */}
-			<div className="flex items-center justify-between mb-4">
+			<div className="flex flex-wrap items-center justify-between gap-3 mb-4">
 				<SearchBar
-					containerClassName="max-w-md"
+					containerClassName="max-w-md w-full sm:w-80"
 					value={searchQuery}
 					onChange={(e) => setSearchQuery(e.target.value)}
-					placeholder="Search for knowledge title or filename..."
+					placeholder="Search title, filename, or category..."
 				/>
-				<div className="flex items-center gap-3">
+				<div className="flex flex-wrap items-center gap-2.5">
+					{/* Reset Filters button */}
+					{hasActiveFilters && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={handleResetFilters}
+							className="text-xs text-red-600 hover:text-red-700 bg-white hover:bg-red-50 border-red-200 hover:border-red-300 rounded-lg cursor-pointer h-9 px-3 gap-1.5 shadow-none transition-colors"
+						>
+							<RiFilterOffLine className="size-3.5 text-red-500" />
+							Reset
+						</Button>
+					)}
+
+					{/* Category Filter */}
 					<DropdownMenu>
 						<DropdownMenuTrigger
 							render={
 								<Button
 									variant="outline"
-									className="w-50 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200"
+									className="min-w-44 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 shadow-none cursor-pointer"
 								/>
 							}
 						>
 							<RiDatabase2Line className="size-4 shrink-0 text-gray-500" />
 							<span className="truncate">
-								{categoryFilter === "ALL" ? "Filter by category" : categoryFilter}
+								{categoryFilter === "ALL" ? "All Categories" : categoryFilter}
 							</span>
 						</DropdownMenuTrigger>
-						<DropdownMenuContent className="w-50">
+						<DropdownMenuContent className="w-56 max-h-80 overflow-y-auto rounded-lg border border-gray-200 shadow-none p-1">
 							<DropdownMenuRadioGroup value={categoryFilter} onValueChange={setCategoryFilter}>
 								<DropdownMenuRadioItem closeOnClick value="ALL">
 									All Categories
 								</DropdownMenuRadioItem>
-								<DropdownMenuRadioItem closeOnClick value="Acne" disabled>
-									Acne (Coming Soon)
-								</DropdownMenuRadioItem>
-								<DropdownMenuRadioItem closeOnClick value="Skin Whitening" disabled>
-									Skin Whitening (Coming Soon)
-								</DropdownMenuRadioItem>
+								{availableCategories.map((cat) => (
+									<DropdownMenuRadioItem key={cat.id} closeOnClick value={cat.name}>
+										{cat.name}
+									</DropdownMenuRadioItem>
+								))}
 							</DropdownMenuRadioGroup>
 						</DropdownMenuContent>
 					</DropdownMenu>
 
+					{/* Status Filter */}
 					<DropdownMenu>
 						<DropdownMenuTrigger
 							render={
 								<Button
 									variant="outline"
-									className="w-45 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200"
+									className="min-w-36 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 shadow-none cursor-pointer"
 								/>
 							}
 						>
 							<RiMoneyDollarCircleLine className="size-4 shrink-0 text-gray-500" />
 							<span className="truncate">
 								{statusFilter === "ALL"
-									? "Filter by status"
+									? "All Status"
 									: statusFilter.charAt(0) + statusFilter.slice(1).toLowerCase()}
 							</span>
 						</DropdownMenuTrigger>
-						<DropdownMenuContent className="w-45">
+						<DropdownMenuContent className="w-44 rounded-lg border border-gray-200 shadow-none p-1">
 							<DropdownMenuRadioGroup value={statusFilter} onValueChange={setStatusFilter}>
 								<DropdownMenuRadioItem closeOnClick value="ALL">
 									All Status
@@ -304,7 +372,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 			</div>
 
 			{/* Table */}
-			<div className="border border-gray-100 rounded-md bg-white overflow-hidden">
+			<div className="border border-gray-100 rounded-lg bg-white overflow-hidden shadow-none">
 				<Table className="[&_tr]:border-gray-100">
 					<TableHeader className="bg-gray-50/50">
 						<TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
@@ -338,8 +406,21 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 
 						{!isLoading && !isError && filteredList?.length === 0 && (
 							<TableRow>
-								<TableCell colSpan={6} className="text-center py-8 text-gray-500">
-									No knowledge base documents found.
+								<TableCell colSpan={6} className="text-center py-12 text-gray-500">
+									<div className="flex flex-col items-center justify-center gap-2">
+										<p className="text-sm">No knowledge base documents matching your filters.</p>
+										{hasActiveFilters && (
+											<Button
+												type="button"
+												variant="outline"
+												size="sm"
+												onClick={handleResetFilters}
+												className="mt-1 text-xs cursor-pointer"
+											>
+												Clear all filters
+											</Button>
+										)}
+									</div>
 								</TableCell>
 							</TableRow>
 						)}
@@ -367,7 +448,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 											{row.isBatch && row.documentCount && row.documentCount > 1 && (
 												<Badge
 													variant="secondary"
-													className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] px-1.5 py-0 shrink-0 font-normal"
+													className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] px-1.5 py-0 shrink-0 font-normal rounded-lg"
 												>
 													{row.documentCount} files
 												</Badge>
@@ -377,7 +458,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 									<TableCell>
 										<Badge
 											variant="secondary"
-											className="bg-gray-100 text-gray-700 hover:bg-gray-100"
+											className="bg-gray-100 text-gray-700 hover:bg-gray-100 rounded-lg"
 										>
 											{row.type === "GENERAL" ? "OTHER" : row.type}
 										</Badge>
@@ -406,7 +487,7 @@ export function KnowledgeTable({ type = "PRODUCT" }: { type?: string }) {
 												onClick={() => handleRowClick(row)}
 												variant="outline"
 												size="md"
-												className="border-gray-200 font-medium cursor-pointer"
+												className="border-gray-200 font-medium cursor-pointer rounded-lg shadow-none"
 											>
 												<RiEyeLine className="mr-2 h-4 w-4" />
 												View

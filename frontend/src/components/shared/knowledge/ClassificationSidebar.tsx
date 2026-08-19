@@ -1,8 +1,8 @@
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
-import { useUpdateKnowledgeStatus, useApproveKnowledge, useEditKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
+import { useApproveKnowledge, useEditKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { RiCheckLine, RiCloseLine, RiLoader4Line } from "@remixicon/react";
+import { RiCheckLine, RiLoader4Line } from "@remixicon/react";
 import { useSession } from "@/hooks/use-session";
 import { VisibilitySettings } from "@/app/dashboard/knowledge/api/types";
 
@@ -14,7 +14,6 @@ interface ClassificationSidebarProps {
 }
 
 export function ClassificationSidebar({ knowledge, pendingCategories, pendingVisibilitySettings, pendingTitle }: ClassificationSidebarProps) {
-	const updateStatus = useUpdateKnowledgeStatus();
 	const approveKnowledge = useApproveKnowledge();
 	const editKnowledge = useEditKnowledge();
 	const { user } = useSession();
@@ -30,10 +29,6 @@ export function ClassificationSidebar({ knowledge, pendingCategories, pendingVis
 		if (typeof window !== "undefined") {
 			localStorage.removeItem(`chat_preview_${knowledge.id}`);
 		}
-	};
-
-	const handleReject = () => {
-		updateStatus.mutate({ id: knowledge.id, status: "REJECTED" });
 	};
 
 	return (
@@ -60,22 +55,13 @@ export function ClassificationSidebar({ knowledge, pendingCategories, pendingVis
 				/>
 			</div>
 
-			{/* Manual Approval Action Card when status is PENDING or PROCESSING */}
+			{/* Manual Approval Action Card when status is PENDING */}
 			{knowledge.status === "PENDING" && hasWriteAccess && (
 				<div className="flex items-center gap-2 shrink-0">
 					<Button
-						onClick={handleReject}
-						disabled={updateStatus.isPending}
-						variant="outline"
-						className="text-red-600 hover:text-red-700 border-red-200 hover:bg-red-50 gap-2"
-					>
-						<RiCloseLine className="size-4" />
-						Reject
-					</Button>
-					<Button
 						onClick={handleApprove}
 						disabled={approveKnowledge.isPending || editKnowledge.isPending}
-						className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+						className="bg-blue-600 hover:bg-blue-700 text-white gap-2 cursor-pointer shadow-none rounded-lg"
 					>
 						{approveKnowledge.isPending || editKnowledge.isPending ? (
 							<>
