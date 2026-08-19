@@ -1,7 +1,7 @@
 import uuid
 import enum
 from typing import Optional
-from sqlalchemy import String, Integer, Enum as SQLEnum, ForeignKey, CheckConstraint, Boolean
+from sqlalchemy import String, Integer, Enum as SQLEnum, ForeignKey, CheckConstraint, Boolean, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from .base import Base, TimestampMixin, SoftDeleteMixin
@@ -71,10 +71,15 @@ class UserAccess(Base, TimestampMixin):
 class UserTokenUsage(Base, TimestampMixin):
     __tablename__ = "user_token_usage"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    year_month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("branches.id", ondelete="CASCADE"), nullable=True, index=True)
+    year_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (
         CheckConstraint("tokens_used >= 0", name="chk_tokens_used_positive"),
+        UniqueConstraint("user_id", "branch_id", "year_month", name="uq_user_branch_year_month"),
     )
