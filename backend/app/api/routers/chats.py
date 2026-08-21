@@ -17,6 +17,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user, get_current_user_from_proxy, get_current_user_flexible
 from app.models.user import User, UserType, UserTokenUsage
 from app.models.chat import ChatSession, ChatMessage, ChatStatus
+from app.models.config import AppConfig
 from app.schemas.chat import (
     ChatSessionCreate, ChatSessionUpdate, ChatSessionResponse,
     ChatHistoryResponse, ChatMessageCreate, ChatMessageResponse
@@ -143,6 +144,12 @@ async def has_chats_read_access(user: User, db: AsyncSession) -> bool:
     result = await db.execute(stmt)
     return "chats:read" in result.scalars().all()
 
+async def _is_file_attachments_allowed(db: AsyncSession) -> bool:
+    stmt = select(AppConfig.value).where(AppConfig.key == "AI_PROMPT_FILE_ATTACHMENTS")
+    res = await db.execute(stmt)
+    val = res.scalar_one_or_none()
+    return val == "true"
+
 async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
     session_dict = {
         "id": session.id,
@@ -154,6 +161,7 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
         "feedback": session.feedback,
         "has_data_issue": session.has_data_issue,
         "is_feedback_read": session.is_feedback_read,
+        "allow_file_attachments": await _is_file_attachments_allowed(db),
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "query": "",
@@ -340,8 +348,10 @@ async def create_chat_session(
             db.add(sess)
             background_tasks.add_task(summarize_chat_session, sess.id)
 
+    allow_attachments = await _is_file_attachments_allowed(db)
     if valid_session:
         await db.commit()
+        setattr(valid_session, "allow_file_attachments", allow_attachments)
         return valid_session
 
     session = ChatSession(
@@ -351,6 +361,7 @@ async def create_chat_session(
     db.add(session)
     await db.commit()
     await db.refresh(session)
+    setattr(session, "allow_file_attachments", allow_attachments)
     return session
 
 @router.put("/{session_id}", response_model=ChatSessionResponse)
@@ -390,6 +401,7 @@ async def update_chat_session(
         from app.core.broadcaster import broadcaster
         await broadcaster.publish("feedback_submitted")
         
+    setattr(session, "allow_file_attachments", await _is_file_attachments_allowed(db))
     return session
 
 @router.get("/{session_id}/messages", response_model=List[ChatMessageResponse])
@@ -472,6 +484,11 @@ async def create_chat_message(
         
     attachments = None
     if files:
+        if not await _is_file_attachments_allowed(db):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File attachments are disabled by system configuration"
+            )
         attachments = {}
         for file in files:
             if file.content_type not in ALLOWED_MIME_TYPES:

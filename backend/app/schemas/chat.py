@@ -26,6 +26,7 @@ class ChatSessionResponse(BaseModel):
     feedback: Optional[str] = None
     has_data_issue: bool = False
     is_feedback_read: bool = False
+    allow_file_attachments: Optional[bool] = False
     created_at: datetime
     updated_at: datetime
     
