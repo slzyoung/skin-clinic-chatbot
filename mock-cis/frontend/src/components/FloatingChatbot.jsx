@@ -25,6 +25,8 @@ export default function FloatingChatbot({
 	const [input, setInput] = useState("");
 	const [sessionId, setSessionId] = useState(null);
 	const [sessionStatus, setSessionStatus] = useState("ACTIVE");
+	const [allowFileAttachments, setAllowFileAttachments] = useState(false);
+	const [selectedFiles, setSelectedFiles] = useState([]);
 	const [isLoading, setIsLoading] = useState(false);
 
 	// Feedback states
@@ -35,6 +37,7 @@ export default function FloatingChatbot({
 	const [manualClose, setManualClose] = useState(false);
 
 	const chatEndRef = useRef(null);
+	const fileInputRef = useRef(null);
 
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -62,6 +65,7 @@ export default function FloatingChatbot({
 			const data = await res.json();
 			setSessionId(data.id);
 			setSessionStatus(data.status || "ACTIVE");
+			setAllowFileAttachments(Boolean(data.allow_file_attachments));
 
 			// Fetch existing messages if resuming an active session
 			const msgRes = await fetch(`${apiBaseUrl}/api/chats/${data.id}/messages`, {
@@ -77,6 +81,7 @@ export default function FloatingChatbot({
 							id: m.id,
 							role: m.role.toLowerCase(),
 							content: m.content,
+							attachments: m.attachments || null,
 						})),
 					);
 				} else {
@@ -118,33 +123,80 @@ export default function FloatingChatbot({
 		setFeedbackSubmitted(false);
 		setManualClose(false);
 		setSessionId(null);
+		setSelectedFiles([]);
 		setMessages([]);
 		await initChat();
 	};
 
-	const handleSend = async (e) => {
-		e.preventDefault();
-		if (!input.trim() || !sessionId || !token || isLoading) return;
+	const handleFileChange = (e) => {
+		if (!e.target.files || e.target.files.length === 0) return;
+		const filesArray = Array.from(e.target.files);
+		setSelectedFiles((prev) => [...prev, ...filesArray]);
+		if (fileInputRef.current) fileInputRef.current.value = "";
+	};
 
-		const userMessage = { id: Date.now().toString(), role: "user", content: input };
+	const handleRemoveFile = (indexToRemove) => {
+		setSelectedFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+	};
+
+	const handleSend = async (e) => {
+		if (e) e.preventDefault();
+		const trimmed = input.trim();
+		if ((!trimmed && selectedFiles.length === 0) || !sessionId || !token || isLoading) return;
+
+		const currentInput = trimmed;
+		const currentFiles = [...selectedFiles];
+		
+		const attachmentsMeta = currentFiles.length > 0
+			? currentFiles.reduce((acc, f) => {
+				acc[f.name] = { content_type: f.type, status: "processed" };
+				return acc;
+			}, {})
+			: null;
+
+		const userMessage = { 
+			id: Date.now().toString(), 
+			role: "user", 
+			content: currentInput,
+			attachments: attachmentsMeta
+		};
 		setMessages((prev) => [...prev, userMessage]);
 		setInput("");
+		setSelectedFiles([]);
 		setIsLoading(true);
 
 		try {
-			const payload = JSON.stringify({
-				role: "user",
-				content: userMessage.content
-			});
+			let res;
+			if (currentFiles.length > 0) {
+				const formData = new FormData();
+				formData.append("role", "user");
+				formData.append("content", currentInput);
+				currentFiles.forEach((file) => {
+					formData.append("files", file);
+				});
 
-			const res = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages/stream`, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${token}`,
-				},
-				body: payload,
-			});
+				res = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+					body: formData,
+				});
+			} else {
+				const payload = JSON.stringify({
+					role: "user",
+					content: currentInput
+				});
+
+				res = await fetch(`${apiBaseUrl}/api/chats/${sessionId}/messages/stream`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${token}`,
+					},
+					body: payload,
+				});
+			}
 
 			if (!res.ok) {
 				const errorData = await res.json().catch(() => ({}));
@@ -443,6 +495,27 @@ export default function FloatingChatbot({
 									className={`fc-message-row ${msg.role === "user" ? "fc-row-user" : "fc-row-assistant"}`}
 								>
 									<div className={`fc-bubble ${msg.role === "user" ? "fc-user" : "fc-assistant"}`}>
+										{msg.attachments && Object.keys(msg.attachments).length > 0 && (
+											<div className="fc-message-attachments">
+												{Object.keys(msg.attachments).map((filename, i) => (
+													<div key={i} className="fc-attachment-badge" title={filename}>
+														<svg
+															xmlns="http://www.w3.org/2000/svg"
+															viewBox="0 0 24 24"
+															fill="none"
+															stroke="currentColor"
+															strokeWidth="2"
+															strokeLinecap="round"
+															strokeLinejoin="round"
+															className="fc-attachment-icon"
+														>
+															<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+														</svg>
+														<span className="fc-attachment-name">{filename}</span>
+													</div>
+												))}
+											</div>
+										)}
 										{msg.content}
 									</div>
 								</div>
@@ -461,7 +534,71 @@ export default function FloatingChatbot({
 
 						{/* Input Area */}
 						<div className="fc-footer">
+							{selectedFiles.length > 0 && (
+								<div className="fc-selected-files-tray">
+									{selectedFiles.map((file, idx) => (
+										<div key={idx} className="fc-file-chip">
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="2"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												className="fc-chip-icon"
+											>
+												<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+												<polyline points="14 2 14 8 20 8"></polyline>
+											</svg>
+											<span className="fc-chip-name">{file.name}</span>
+											<button
+												type="button"
+												className="fc-chip-remove"
+												onClick={() => handleRemoveFile(idx)}
+												title="Remove file"
+											>
+												×
+											</button>
+										</div>
+									))}
+								</div>
+							)}
 							<form onSubmit={handleSend} className="fc-input-wrapper">
+								{allowFileAttachments && (
+									<>
+										<input
+											type="file"
+											ref={fileInputRef}
+											onChange={handleFileChange}
+											multiple
+											accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.jpg,.jpeg,.png"
+											style={{ display: "none" }}
+											id="fc-file-input"
+										/>
+										<button
+											type="button"
+											className="fc-attach-btn"
+											onClick={() => fileInputRef.current?.click()}
+											disabled={isLoading || !sessionId}
+											title="Attach files"
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="2"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												width="18"
+												height="18"
+											>
+												<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+											</svg>
+										</button>
+									</>
+								)}
 								<input
 									type="text"
 									value={input}
@@ -469,7 +606,7 @@ export default function FloatingChatbot({
 									placeholder="Describe what your concern is..."
 									disabled={isLoading || !sessionId}
 								/>
-								<button type="submit" disabled={isLoading || !input.trim() || !sessionId}>
+								<button type="submit" disabled={isLoading || (!input.trim() && selectedFiles.length === 0) || !sessionId}>
 									<svg
 										xmlns="http://www.w3.org/2000/svg"
 										viewBox="0 0 24 24"
