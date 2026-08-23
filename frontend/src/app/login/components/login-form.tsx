@@ -40,18 +40,10 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
 			login(credentials, {
 				onSuccess: ({ userProfile }) => {
 					const fromParam = searchParams.get("from");
-					let defaultTarget = "/login";
+					let target = "/dashboard/knowledge";
 
-					if (userProfile.type === "STAFF") {
-						defaultTarget = "/dashboard/knowledge";
-					}
-
-					// Check if fromParam is allowed for user
-					let target = defaultTarget;
-					if (fromParam && fromParam.startsWith("/")) {
-						if (fromParam.startsWith("/dashboard") && userProfile.type === "STAFF") {
-							target = fromParam;
-						}
+					if (fromParam && fromParam.startsWith("/") && !fromParam.startsWith("/login")) {
+						target = fromParam;
 					}
 
 					router.push(target);
