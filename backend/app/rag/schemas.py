@@ -14,7 +14,6 @@ class UserContext(BaseModel):
 class ChatRequest(BaseModel):
     query: str = Field(..., description="User question or medical query string")
     categories: Optional[List[str]] = Field(default=[], description="Optional list of category filters (e.g. ['Acne Care', 'Brightening'])")
-    document_type: Optional[str] = Field(None, description="Optional document category type filter ('Product', 'Treatment', or 'Promotional')")
     top_k: int = Field(8, description="Number of context passages to retrieve")
     history: List[ChatMessage] = Field(default=[], description="Multi-turn conversation chat history context")
     user_context: Optional[UserContext] = Field(None, description="Context properties of the querying user used for visibility and exclusion filtering")
@@ -34,7 +33,6 @@ class DocumentListItem(BaseModel):
     knowledge_id: str = Field(..., description="Unique document ID (UUID)")
     file_name: str = Field(..., description="Filename of the ingested document")
     product_name: Optional[str] = Field(None, description="Extracted product name")
-    type: Optional[str] = Field("Product", description="Document Category Type (Product, Treatment, Promotional)")
     status: str = Field(..., description="'Approved' or 'On review'")
     processed_at: Optional[str] = Field(None, description="ISO timestamp of when document was processed")
     chunks_count: int = Field(..., description="Number of text chunks in document")
@@ -58,7 +56,6 @@ class PendingDocumentResponse(BaseModel):
     file_name: str = Field(..., description="Filename of the staged document")
     file_hash: Optional[str] = Field(None, description="SHA-256 Checksum hash of the document content")
     title: Optional[str] = Field(None, description="AI Recommended Title for Knowledge Header (e.g. 'Standard Operating Procedure (SOP) Brightening Center')")
-    type: Optional[str] = Field("Product", description="Document Category Type (Product, Treatment, Promotional, General)")
     status: str = Field(..., description="'Approved' or 'On review'")
     summary: Optional[str] = Field("", description="Document content in markdown format")
     image_url: Optional[str] = Field(None, description="Image URL of the document or product in MinIO")

@@ -443,7 +443,6 @@ async def upload_knowledge_file(
     request: Request,
     background_tasks: BackgroundTasks,
     file: List[UploadFile] = File(...),
-    category_type: str = Form("Product"),
     prompt: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:write")),
@@ -475,7 +474,6 @@ async def upload_knowledge_file(
     return await ingest_document(
         background_tasks=background_tasks,
         file=file,
-        category_type=category_type,
         prompt=prompt,
         pipeline=pipeline,
         llm=llm
@@ -500,7 +498,7 @@ async def update_knowledge_status(
         
         file_name = "document.pdf"
         summary = ""
-        k_type = KnowledgeType.PRODUCT
+        k_type = KnowledgeType.GENERAL
         
         if target_file and os.path.exists(target_file):
             try:
@@ -509,11 +507,6 @@ async def update_knowledge_status(
                 if isinstance(data, dict):
                     file_name = data.get("file_name", file_name)
                     summary = data.get("summary", "")
-                    raw_type = str(data.get("type", "PRODUCT")).upper()
-                    if "TREATMENT" in raw_type:
-                        k_type = KnowledgeType.TREATMENT
-                    elif "PROMO" in raw_type:
-                        k_type = KnowledgeType.PROMOTIONAL
             except Exception:
                 pass
                 
