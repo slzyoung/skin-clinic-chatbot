@@ -35,7 +35,7 @@ export const useUpdateConfig = () => {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: configKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: configKeys.all });
       queryClient.invalidateQueries({ queryKey: branchKeys.all });
       queryClient.invalidateQueries({ queryKey: userKeys.all });
     },

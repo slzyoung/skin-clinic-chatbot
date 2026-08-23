@@ -10,10 +10,12 @@ export function GlobalMonthlyUsage() {
 
 	const isLoading = isUsageLoading || isConfigsLoading;
 
-	// Check if global limit config is active from configs or usage endpoint
+	// Check if global limit config is active from configs (authoritative) or usage endpoint
+	const globalConfigItem = configs?.find((c) => c.key === "GLOBAL_TOKEN_LIMIT_ACTIVE");
 	const isGlobalLimitActive =
-		configs?.find((c) => c.key === "GLOBAL_TOKEN_LIMIT_ACTIVE")?.value === "true" ||
-		usage?.is_global_active === true;
+		globalConfigItem !== undefined
+			? globalConfigItem.value === "true"
+			: usage?.is_global_active === true;
 
 	const tokensUsed = usage?.tokens_used ?? 0;
 	const tokenLimit = usage?.token_limit ?? 1000000;
