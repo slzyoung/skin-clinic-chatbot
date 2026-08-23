@@ -142,8 +142,11 @@ async def get_current_user_flexible(
     return await get_current_user(request, db)
 
 class RequireAccess:
-    def __init__(self, required_access: str):
-        self.required_access = required_access
+    def __init__(self, required_access: str | list[str]):
+        if isinstance(required_access, str):
+            self.required_accesses = [required_access]
+        else:
+            self.required_accesses = required_access
 
     async def __call__(self, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
         from app.models.user import UserType, Role, UserRole, RoleAccess, Access, UserAccess
@@ -166,9 +169,11 @@ class RequireAccess:
         
         union_stmt = stmt_acc.union(stmt_user_acc)
         result = await db.execute(union_stmt)
-        user_accesses = result.scalars().all()
+        user_accesses = set(result.scalars().all())
         
-        if self.required_access not in user_accesses:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Required access: {self.required_access}")
+        # Check if user has at least one of the required accesses
+        if not any(req in user_accesses for req in self.required_accesses):
+            req_str = ", ".join(self.required_accesses)
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Required access: {req_str}")
             
         return current_user
