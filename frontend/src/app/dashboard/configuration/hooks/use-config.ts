@@ -4,13 +4,23 @@ import { api } from "@/lib/axios";
 import { getErrorMessage } from "@/lib/utils";
 import { configKeys, branchKeys } from "../api/keys";
 import { userKeys } from "@/app/dashboard/users/api/keys";
-import type { ConfigResponse, ConfigUpdate } from "../api/types";
+import type { ConfigResponse, ConfigUpdate, GlobalMonthlyUsageResponse } from "../api/types";
 
 export const useConfigs = () => {
   return useQuery({
     queryKey: configKeys.lists(),
     queryFn: async (): Promise<ConfigResponse[]> => {
       const response = await api.get('/config/');
+      return response.data;
+    },
+  });
+};
+
+export const useGlobalMonthlyUsage = () => {
+  return useQuery({
+    queryKey: configKeys.usage(),
+    queryFn: async (): Promise<GlobalMonthlyUsageResponse> => {
+      const response = await api.get('/config/usage');
       return response.data;
     },
   });

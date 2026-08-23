@@ -1,13 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import List
+from datetime import datetime, timezone
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
-from app.models.user import User
+from app.models.user import User, UserTokenUsage
 from app.models.config import AppConfig
-from app.schemas.config import ConfigUpdate, ConfigResponse, LLMValidateRequest, FetchModelsRequest, ModelInfo
+from app.models.ingestion_usage import IngestionTokenUsage
+from app.schemas.config import (
+    ConfigUpdate,
+    ConfigResponse,
+    GlobalMonthlyUsageResponse,
+    LLMValidateRequest,
+    FetchModelsRequest,
+    ModelInfo,
+)
 from app.core.security import encrypt_api_key, decrypt_api_key
 import urllib.request
 import urllib.error
@@ -28,6 +37,58 @@ async def _resolve_api_key(api_key: str, db: AsyncSession) -> str:
     return api_key
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+@router.get("/usage", response_model=GlobalMonthlyUsageResponse)
+async def get_global_monthly_usage(
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(RequireAccess("configuration:read"))
+):
+    current_ym = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    # 1. Sum chat tokens used for current month
+    stmt_user = select(func.sum(UserTokenUsage.tokens_used)).where(UserTokenUsage.year_month == current_ym)
+    res_user = await db.execute(stmt_user)
+    chat_tokens = res_user.scalar() or 0
+
+    # 2. Sum ingestion tokens used for current month
+    stmt_ingest = select(func.sum(IngestionTokenUsage.tokens_used)).where(IngestionTokenUsage.year_month == current_ym)
+    res_ingest = await db.execute(stmt_ingest)
+    ingest_tokens = res_ingest.scalar() or 0
+
+    total_used = chat_tokens + ingest_tokens
+
+    # 3. Check if global token limit is active
+    stmt_active = select(AppConfig.value).where(AppConfig.key == "GLOBAL_TOKEN_LIMIT_ACTIVE")
+    res_active = await db.execute(stmt_active)
+    active_val = res_active.scalar_one_or_none()
+    is_global_active = (active_val or "false").lower() == "true"
+
+    if is_global_active:
+        stmt_thresh = select(AppConfig.value).where(AppConfig.key == "GLOBAL_TOKEN_THRESHOLD")
+        res_thresh = await db.execute(stmt_thresh)
+        thresh_val = res_thresh.scalar_one_or_none()
+        limit = int(thresh_val) if (thresh_val and thresh_val.isdigit()) else 1000000
+
+        remaining = max(0, limit - total_used)
+        percentage = round(min(100.0, (total_used / limit * 100)), 1) if limit > 0 else 0.0
+
+        return GlobalMonthlyUsageResponse(
+            year_month=current_ym,
+            tokens_used=total_used,
+            token_limit=limit,
+            remaining=remaining,
+            percentage=percentage,
+            is_global_active=True
+        )
+
+    return GlobalMonthlyUsageResponse(
+        year_month=current_ym,
+        tokens_used=total_used,
+        token_limit=None,
+        remaining=None,
+        percentage=None,
+        is_global_active=False
+    )
 
 @router.get("/", response_model=List[ConfigResponse])
 async def list_config(
