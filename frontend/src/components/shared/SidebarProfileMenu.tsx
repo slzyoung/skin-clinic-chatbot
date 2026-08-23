@@ -2,19 +2,34 @@
 
 import { useLogout } from "@/app/login/hooks/use-logout";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+	SidebarMenu,
+	SidebarMenuButton,
+	SidebarMenuItem,
+	useSidebar,
+} from "@/components/ui/sidebar";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import { RiLogoutBoxRLine, RiNotification3Line } from "@remixicon/react";
+import {
+	RiLogoutBoxRLine,
+	RiNotification3Line,
+	RiArrowUpSLine,
+} from "@remixicon/react";
 import Link from "next/link";
-
-import { Separator } from "../ui/separator";
 
 export function SidebarProfileMenu() {
 	const { mutate: logout, isPending: isLoggingOut } = useLogout();
 	const { data: user } = useCurrentUser();
+	const { state } = useSidebar();
+	const isCollapsed = state === "collapsed";
 
 	const userName = user?.name || "User";
-	const userRole = user?.roles?.[0]?.name || "User";
+	const userRole = user?.roles?.[0]?.name || "Staff";
 	const initials =
 		userName
 			.split(" ")
@@ -24,48 +39,62 @@ export function SidebarProfileMenu() {
 			.substring(0, 2) || "U";
 
 	return (
-		<SidebarMenu>
+		<SidebarMenu className="gap-2 group-data-[collapsible=icon]:gap-1">
 			<SidebarMenuItem>
 				<SidebarMenuButton
 					render={<Link href="/dashboard/notifications" />}
-					className="text-zinc-500 hover:text-blue-600 hover:bg-blue-50"
+					className="text-zinc-600 hover:text-blue-600 hover:bg-blue-50 font-medium group-data-[collapsible=icon]:justify-center"
 					tooltip="Notifications"
 				>
-					<RiNotification3Line className="size-4" />
+					<RiNotification3Line className="size-4 shrink-0" />
 					<span className="font-medium group-data-[collapsible=icon]:hidden">Notifications</span>
 				</SidebarMenuButton>
 			</SidebarMenuItem>
-			<Separator className="my-3" />
-			<SidebarMenuItem className="flex items-center flex-row group-data-[collapsible=icon]:justify-center">
-				<SidebarMenuButton
-					size="lg"
-					className="h-auto min-h-12 py-1 hover:bg-transparent hover:text-inherit active:bg-transparent cursor-default p-0 flex-1 group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center"
-				>
-					<Avatar className="size-10 shrink-0 group-data-[collapsible=icon]:size-8 rounded-md after:rounded-md">
-						<AvatarFallback className="rounded-md">{initials}</AvatarFallback>
-					</Avatar>
-					<div className="flex flex-col gap-1 ml-2 group-data-[collapsible=icon]:hidden">
-						<span className="font-semibold text-zinc-900 text-xs whitespace-normal wrap-break-word text-left">
-							{userName}
-						</span>
-						<span className="text-[10px] text-zinc-500 whitespace-normal wrap-break-word text-left capitalize">
-							{userRole.toLowerCase()}
-						</span>
-					</div>
-				</SidebarMenuButton>
-			</SidebarMenuItem>
-			<Separator className="my-3" />
-			<SidebarMenuItem>
-				<SidebarMenuButton
-					onClick={() => logout()}
-					disabled={isLoggingOut}
-					className="text-zinc-500 hover:text-red-600 hover:bg-red-50"
-					tooltip="Logout"
-				>
-					<RiLogoutBoxRLine className="size-4" />
-					<span className="font-medium group-data-[collapsible=icon]:hidden">Logout</span>
-				</SidebarMenuButton>
+			<SidebarMenuItem className="mt-1 group-data-[collapsible=icon]:mt-0">
+				<DropdownMenu>
+					<DropdownMenuTrigger
+						className="h-auto py-2 px-2.5 hover:bg-zinc-100 active:bg-zinc-200 cursor-pointer rounded-lg flex items-center justify-between w-full group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:mx-auto data-popup-open:bg-zinc-100 outline-none text-left transition-colors border-0 bg-transparent"
+					>
+						<div className="flex items-center gap-2.5 overflow-hidden flex-1 min-w-0 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:flex-none">
+							<Avatar className="size-9 shrink-0 group-data-[collapsible=icon]:size-8 rounded-md after:rounded-md">
+								<AvatarFallback className="rounded-md bg-blue-50 text-blue-600 font-semibold text-xs border border-blue-100">
+									{initials}
+								</AvatarFallback>
+							</Avatar>
+							<div className="flex flex-col gap-0.5 text-left group-data-[collapsible=icon]:hidden overflow-hidden flex-1 min-w-0">
+								<span className="font-medium text-zinc-900 text-xs truncate">
+									{userName}
+								</span>
+								<span className="text-[11px] text-zinc-500 truncate capitalize">
+									{userRole.toLowerCase()}
+								</span>
+							</div>
+						</div>
+						<RiArrowUpSLine className="size-4 text-zinc-400 shrink-0 group-data-[collapsible=icon]:hidden ml-1 transition-transform group-data-[state=open]:rotate-180" />
+					</DropdownMenuTrigger>
+					<DropdownMenuContent
+						side={isCollapsed ? "right" : "top"}
+						align={isCollapsed ? "end" : "center"}
+						sideOffset={isCollapsed ? 12 : 6}
+						className={
+							isCollapsed
+								? "w-36 rounded-md p-1 shadow-md border border-gray-200 bg-white z-50"
+								: "w-(--anchor-width) min-w-40 rounded-md p-1 shadow-none border border-gray-200 bg-white z-50"
+						}
+					>
+						<DropdownMenuItem
+							onClick={() => logout()}
+							disabled={isLoggingOut}
+							variant="destructive"
+							className="cursor-pointer text-red-600 hover:bg-red-50 hover:text-red-700 rounded px-2.5 py-2 text-xs font-medium gap-2 flex items-center transition-colors w-full"
+						>
+							<RiLogoutBoxRLine className="size-4 text-red-500 shrink-0" />
+							<span>{isLoggingOut ? "Logging out..." : "Log out"}</span>
+						</DropdownMenuItem>
+					</DropdownMenuContent>
+				</DropdownMenu>
 			</SidebarMenuItem>
 		</SidebarMenu>
 	);
 }
+
