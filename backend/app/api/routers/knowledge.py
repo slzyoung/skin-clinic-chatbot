@@ -1,5 +1,5 @@
 from loguru import logger
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.category import Category, UserCategoryExclusion
@@ -14,7 +14,8 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType
 from app.models.knowledge import Knowledge, KnowledgeStatus, KnowledgeType
-from app.schemas.knowledge import KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse
+from app.models.project import Project
+from app.schemas.knowledge import KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse, KnowledgeProjectUpdate
 from app.services.token_service import check_ingestion_quota, record_ingestion_token_usage
 from datetime import datetime, timezone
 
@@ -48,11 +49,15 @@ async def get_ingestion_quota_endpoint(
 
 @router.get("/", response_model=List[KnowledgeResponse])
 async def list_knowledge(
+    project_id: Optional[uuid.UUID] = Query(None, description="Optional project filter"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:read"))
 ):
     # 1. Fetch DB records
-    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None)).order_by(Knowledge.created_at.desc())
+    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None))
+    if project_id:
+        stmt = stmt.where(Knowledge.project_id == project_id)
+    stmt = stmt.order_by(Knowledge.created_at.desc())
     result = await db.execute(stmt)
     db_items = list(result.scalars().all())
 
@@ -102,6 +107,7 @@ async def list_knowledge(
             ai_confidence=item.ai_confidence,
             uploaded_by=item.uploaded_by,
             approved_by=item.approved_by,
+            project_id=item.project_id,
             metadata_=item_metadata,
             created_at=item.created_at,
             updated_at=item.updated_at
@@ -277,6 +283,7 @@ async def get_knowledge_batch(
     """Fetch all knowledge documents uploaded in a specific batch."""
     from sqlalchemy import or_
     stmt = select(Knowledge).where(
+        Knowledge.deleted_at.is_(None),
         or_(
             Knowledge.metadata_.op("->>")("batch_id") == batch_id,
             Knowledge.metadata_.op("->>")("upload_batch_id") == batch_id
@@ -285,8 +292,19 @@ async def get_knowledge_batch(
     result = await db.execute(stmt)
     docs = list(result.scalars().all())
     
+    # Query soft-deleted IDs for this batch so they are never resurrected by directory scanning
+    del_stmt = select(Knowledge.id).where(
+        Knowledge.deleted_at.is_not(None),
+        or_(
+            Knowledge.metadata_.op("->>")("batch_id") == batch_id,
+            Knowledge.metadata_.op("->>")("upload_batch_id") == batch_id
+        )
+    )
+    del_res = await db.execute(del_stmt)
+    deleted_ids = {str(d_id) for d_id in del_res.scalars().all()}
+    
     enriched_docs = []
-    seen_ids = set()
+    seen_ids = set(deleted_ids)
 
     for knowledge in docs:
         seen_ids.add(str(knowledge.id))
@@ -443,7 +461,8 @@ async def upload_knowledge_file(
     request: Request,
     background_tasks: BackgroundTasks,
     file: List[UploadFile] = File(...),
-    category_type: str = Form("Product"),
+    category_type: Optional[str] = Form("Product"),
+    project_id: Optional[uuid.UUID] = Form(None),
     prompt: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:write")),
@@ -472,14 +491,32 @@ async def upload_knowledge_file(
         documents_count=len(upload_list)
     )
 
-    return await ingest_document(
+    ingest_res = await ingest_document(
         background_tasks=background_tasks,
         file=file,
-        category_type=category_type,
+        category_type=category_type or "Product",
         prompt=prompt,
         pipeline=pipeline,
         llm=llm
     )
+
+    if project_id and isinstance(ingest_res, dict):
+        docs = ingest_res.get("documents", [])
+        for doc in docs:
+            k_id = doc.get("knowledge_id")
+            if k_id:
+                try:
+                    k_uuid = uuid.UUID(str(k_id))
+                    stmt = select(Knowledge).where(Knowledge.id == k_uuid)
+                    res = await db.execute(stmt)
+                    k_obj = res.scalar_one_or_none()
+                    if k_obj:
+                        k_obj.project_id = project_id
+                        await db.commit()
+                except Exception:
+                    pass
+
+    return ingest_res
 
 @router.put("/{knowledge_id}/status", response_model=KnowledgeResponse)
 @router.patch("/{knowledge_id}/status", response_model=KnowledgeResponse)
@@ -641,6 +678,32 @@ async def refine_knowledge(
         return await refine_approved_document(str(knowledge_id), payload, pipeline, bm25, vector_store, llm)
     else:
         raise HTTPException(status_code=404, detail="Document not found for refinement.")
+
+@router.put("/{knowledge_id}/project", response_model=KnowledgeResponse)
+@router.patch("/{knowledge_id}/project", response_model=KnowledgeResponse)
+async def update_knowledge_project(
+    knowledge_id: uuid.UUID,
+    payload: KnowledgeProjectUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write"))
+):
+    """Attach or detach a knowledge document to/from a project workspace."""
+    stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
+    result = await db.execute(stmt)
+    knowledge = result.scalar_one_or_none()
+    if not knowledge:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    
+    if payload.project_id:
+        p_stmt = select(Project).where(Project.id == payload.project_id, Project.deleted_at.is_(None))
+        p_res = await db.execute(p_stmt)
+        if not p_res.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Project not found")
+            
+    knowledge.project_id = payload.project_id
+    await db.commit()
+    await db.refresh(knowledge)
+    return knowledge
 
 @router.delete("/{knowledge_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_knowledge(
