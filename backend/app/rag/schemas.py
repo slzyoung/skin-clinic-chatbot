@@ -17,6 +17,8 @@ class ChatRequest(BaseModel):
     top_k: int = Field(8, description="Number of context passages to retrieve")
     history: List[ChatMessage] = Field(default=[], description="Multi-turn conversation chat history context")
     user_context: Optional[UserContext] = Field(None, description="Context properties of the querying user used for visibility and exclusion filtering")
+    attachment_text: Optional[str] = Field(None, description="Extracted text from attached patient document/profile (auto-populated by backend when file is uploaded)")
+
 
 class ChatResponse(BaseModel):
     query: str = Field(..., description="User query string")
@@ -57,6 +59,9 @@ class PendingDocumentResponse(BaseModel):
     file_hash: Optional[str] = Field(None, description="SHA-256 Checksum hash of the document content")
     title: Optional[str] = Field(None, description="AI Recommended Title for Knowledge Header (e.g. 'Standard Operating Procedure (SOP) Brightening Center')")
     status: str = Field(..., description="'Approved' or 'On review'")
+    document_type: Optional[str] = Field(None, description="Document type e.g. 'PRODUCT', 'TREATMENT', 'PROMOTIONAL', 'SOP', 'GENERAL'")
+    valid_from: Optional[str] = Field(None, description="Start date of promotional validity period (YYYY-MM-DD)")
+    valid_until: Optional[str] = Field(None, description="End/expiration date of promotional validity period (YYYY-MM-DD)")
     summary: Optional[str] = Field("", description="Document content in markdown format")
     image_url: Optional[str] = Field(None, description="Image URL of the document or product in MinIO")
     text_accuracy: str = Field(..., description="AI confidence score / text accuracy percentage")
@@ -86,12 +91,18 @@ class EditApprovedDocumentRequest(BaseModel):
     categories: Optional[List[Any]] = Field(default=[], description="Updated list of document categories (for manual save)")
     visibility_settings: Optional[VisibilitySettings] = Field(None, description="Updated visibility settings (Clinics, Doctor Types, Doctors)")
     title: Optional[str] = Field(None, description="Updated document title")
+    document_type: Optional[str] = Field(None, description="Updated document type")
+    valid_from: Optional[str] = Field(None, description="Updated valid from date (YYYY-MM-DD)")
+    valid_until: Optional[str] = Field(None, description="Updated valid until / expiry date (YYYY-MM-DD)")
 
     model_config = {
         "json_schema_extra": {
             "example": {
                 "summary": "### Ringkasan Dokumen Produk\n\nProduk ini digunakan untuk merawat kulit jerawat dan menyamarkan noda hitam.",
                 "categories": ["Acne Care", "Dark Spot"],
+                "document_type": "PROMOTIONAL",
+                "valid_from": "2026-08-01",
+                "valid_until": "2026-08-31",
                 "visibility_settings": {
                     "clinics": ["all"],
                     "doctor_types": ["all"],
@@ -108,6 +119,9 @@ class ApprovedDocumentResponse(BaseModel):
     file_hash: Optional[str] = Field(None, description="SHA-256 Checksum hash")
     title: Optional[str] = Field(None, description="Document title")
     status: str = Field("Approved", description="Document status")
+    document_type: Optional[str] = Field(None, description="Document type e.g. 'PRODUCT', 'TREATMENT', 'PROMOTIONAL', 'SOP', 'GENERAL'")
+    valid_from: Optional[str] = Field(None, description="Start date of promotional validity period (YYYY-MM-DD)")
+    valid_until: Optional[str] = Field(None, description="End/expiration date of promotional validity period (YYYY-MM-DD)")
     summary: str = Field("", description="Document summary")
     image_url: Optional[str] = Field(None, description="Image URL of the document or product in MinIO")
     batch_summary: Optional[str] = Field(None, description="Batch Executive Summary if multi-file")

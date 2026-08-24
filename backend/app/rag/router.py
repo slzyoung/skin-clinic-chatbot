@@ -3,7 +3,8 @@ import json
 import asyncio
 from typing import List, Optional, Dict, Any
 from loguru import logger
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Path, Body
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Path, Body, Request
+from pydantic import BaseModel, Field, model_validator
 
 import uuid
 
@@ -99,8 +100,12 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
     parsed_p = os.path.join(approved_dir, f"{knowledge_id}_parsed.json")
     if os.path.exists(parsed_p):
         return parsed_p
+    
+    clean_k_id = knowledge_id.strip().lower()
+    fallback_match = None
+
     for f in os.listdir(approved_dir):
-        if f.endswith(".json"):
+        if f.endswith(".json") and f != "bm25_index.pkl":
             full_p = os.path.join(approved_dir, f)
             name_no_ext = f[:-5]
             if f.startswith(knowledge_id) or name_no_ext == knowledge_id or name_no_ext.replace("_parsed", "") == knowledge_id:
@@ -108,15 +113,26 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
             try:
                 with open(full_p, "r", encoding="utf-8") as fp:
                     data = json.load(fp)
-                if isinstance(data, dict) and (data.get("knowledge_id") == knowledge_id or data.get("file_name") == knowledge_id):
-                    return full_p
+                if isinstance(data, dict):
+                    doc_kid = str(data.get("knowledge_id", "")).strip().lower()
+                    doc_fname = str(data.get("file_name", "")).strip().lower()
+                    doc_title = str(data.get("title", "")).strip().lower()
+                    
+                    if clean_k_id in (doc_kid, doc_fname, doc_title):
+                        return full_p
+                    if doc_title and (clean_k_id in doc_title or doc_title in clean_k_id):
+                        fallback_match = full_p
                 elif isinstance(data, list) and data:
                     meta = data[0].get("metadata", {})
-                    if meta.get("knowledge_id") == knowledge_id or meta.get("source_file") == knowledge_id:
+                    doc_kid = str(meta.get("knowledge_id", "")).strip().lower()
+                    doc_source = str(meta.get("source_file", "")).strip().lower()
+                    doc_title = str(meta.get("title", "")).strip().lower()
+                    if clean_k_id in (doc_kid, doc_source, doc_title):
                         return full_p
             except Exception:
                 pass
-    return None
+    return fallback_match
+
 
 def detect_duplicate_lifecycle(file_hash: str, file_name: str) -> Dict[str, Any]:
     """
@@ -384,28 +400,36 @@ async def process_ingestion_background(
 
                     FLEXIBLE & COMPREHENSIVE STRUCTURING GUIDELINES:
                     1. **Adaptive Structure for Any Document Type**:
-                       - Documents can be of ANY nature (e.g. Skincare/Cosmetics, Treatment Protocols, SOP / Clinic Guidelines, Training Slides / Presentations, Research / Clinical Literature, Price Lists, FAQ, Device/Equipment Guides, etc.).
+                       - Documents can be of ANY nature (e.g. Skincare/Cosmetics, Treatment Protocols, SOP / Clinic Guidelines, Promotional/Discounts/Flyer, Training Slides / Presentations, Research / Clinical Literature, Price Lists, FAQ, Device/Equipment Guides, etc.).
                        - Dynamically structure the Markdown using clear hierarchical headers (`# [Document Title]`, `## Section`, `### Subsection`), bold key terms (`**`), structured bullet points (`-`), and crisp Markdown tables (`| Col 1 | Col 2 |`) tailored to the document's actual topic.
                     2. **100% Content & Information Preservation**:
-                       - ALL key points, steps, specifications, numbers, ingredients/substances, parameters, tables, questions/answers, and details present in the raw text MUST be fully retained and organized.
+                       - ALL key points, steps, promo terms, specifications, numbers, ingredients/substances, parameters, tables, questions/answers, and details present in the raw text MUST be fully retained and organized.
                        - DO NOT omit, over-condense, or skip substantive sections. Ensure all factual information from the uploaded file is thoroughly represented.
-                    3. **Professional Markdown Formatting**:
+                    3. **Promotional Period Extraction (For Promo/Flyer Documents)**:
+                       - If this document contains promotional programs, discounts, flash sales, or vouchers with validity dates, extract the start date (`valid_from`) and end date (`valid_until`) in strict `YYYY-MM-DD` format (e.g. "2026-08-01", "2026-08-31").
+                       - If no expiration date exists or if it is a general document, set `valid_from` and `valid_until` to null.
+                       - Set `document_type` to `"PROMOTIONAL"` for promotional flyers/discounts, `"PRODUCT"` for product catalog, `"TREATMENT"` for clinic treatments, `"SOP"` for SOP guidelines, or `"GENERAL"` otherwise.
+                    4. **Professional Markdown Formatting**:
                        - Fix any OCR noise, broken line breaks, or formatting typos while preserving 100% factual accuracy.
                        - Start directly with `# [Document Title]`. Do NOT add meta introductions like "Here is the summary".
-                    4. **DO NOT Include Category Sections in Markdown Body**:
-                       - DO NOT add sections like "Kategori Terkait", "Related Categories", "Categories", or "Tags" in the `summary` markdown text.
+                    5. **DO NOT Include Category Sections in Markdown Body**:
                        - Categories belong ONLY in the `suggested_categories` JSON field, as the user interface already displays and manages categories separately via UI badge tags.
 
                     Perform the following tasks:
-                    1. **AI Recommended Title (`title`)**: Provide a clean, short, professional document title WITHOUT any prefixes like "Knowledge Ingestment" or "Knowledge Base" (e.g. "Standard Operating Procedure (SOP) Brightening Center" or "ERHA Acne Spot Gel Protocol").
-                    2. **Structured Full Document Markdown (`summary`)**: Present the complete content in beautifully organized Markdown matching the document's domain (WITHOUT category lists at the bottom).
-                    3. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
-                    4. **Dynamic Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary in Indonesian explaining exactly what this specific document covers and its main points.
-                    5. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
+                    1. **AI Recommended Title (`title`)**: Provide a clean, short, professional document title WITHOUT any prefixes like "Knowledge Ingestment" or "Knowledge Base".
+                    2. **Document Type (`document_type`)**: "PRODUCT" | "TREATMENT" | "PROMOTIONAL" | "SOP" | "GENERAL".
+                    3. **Validity Period (`valid_from` & `valid_until`)**: Date strings in "YYYY-MM-DD" format or null.
+                    4. **Structured Full Document Markdown (`summary`)**: Present the complete content in beautifully organized Markdown matching the document's domain.
+                    5. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
+                    6. **Dynamic Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary in Indonesian.
+                    7. **Text Accuracy (`text_accuracy`)**: Grade the overall text confidence score (e.g. "99%" or "100%").
 
                     Return a valid JSON object ONLY:
                     {{
-                        "title": "Standard Operating Procedure (SOP) Brightening Center",
+                        "title": "Promo Diskon Kemerdekaan ERHA AcneAct",
+                        "document_type": "PROMOTIONAL",
+                        "valid_from": "2026-08-01",
+                        "valid_until": "2026-08-31",
                         "summary": "# Document Title\\n\\n## 1. Section 1\\n- Content...",
                         "feedback": "Dokumen ini memuat panduan lengkap mengenai [topik dokumen], mencakup [poin-poin utama yang dibahas].",
                         "text_accuracy": "100%",
@@ -452,6 +476,9 @@ async def process_ingestion_background(
                     text_accuracy = parsed_review.get("text_accuracy", "100%")
                     feedback = parsed_review.get("feedback", feedback)
                     suggested_categories = parsed_review.get("suggested_categories", [])
+                    extracted_doc_type = parsed_review.get("document_type") or "GENERAL"
+                    extracted_valid_from = parsed_review.get("valid_from")
+                    extracted_valid_until = parsed_review.get("valid_until")
                             
                 except Exception as llm_err:
                     timing_metrics["llm_review_ms"] = int((_time.time() - t0_llm) * 1000)
@@ -462,6 +489,9 @@ async def process_ingestion_background(
                     if not suggested_categories and db_categories:
                         suggested_categories = [db_categories[0]]
                     feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan. Pemrosesan analisis AI otomatis sementara tertunda (kuota token API perlu diperbarui). Seluruh isi teks dokumen dapat ditinjau di bawah."
+                    extracted_doc_type = "GENERAL"
+                    extracted_valid_from = None
+                    extracted_valid_until = None
                 
         # Define document-level visibility settings
         visibility_settings = {
@@ -470,7 +500,7 @@ async def process_ingestion_background(
             "doctors": ["all"]
         }
 
-        # Inject metadata cleanly into every chunk with granular category priority and visibility settings
+        # Inject metadata cleanly into every chunk with granular category priority, dates, and visibility settings
         cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
         for chunk in enriched_chunks:
             if isinstance(chunk, dict):
@@ -483,6 +513,12 @@ async def process_ingestion_background(
                 chunk["metadata"]["clinics"] = visibility_settings["clinics"]
                 chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
                 chunk["metadata"]["doctors"] = visibility_settings["doctors"]
+                if extracted_doc_type:
+                    chunk["metadata"]["document_type"] = extracted_doc_type
+                if extracted_valid_from:
+                    chunk["metadata"]["valid_from"] = str(extracted_valid_from).strip()
+                if extracted_valid_until:
+                    chunk["metadata"]["valid_until"] = str(extracted_valid_until).strip()
                 
                 # Chunk-level category priority, falling back to smart content matching or document-level categories
                 chunk_specific_cat = chunk.get("chunk_category")
@@ -502,7 +538,6 @@ async def process_ingestion_background(
                     
                 chunk.pop("chunk_category", None)
                 chunk["metadata"].pop("suggested_categories", None)
-                chunk["metadata"].pop("document_type", None)
 
         # Preserve image_url, s3_key, storage_key and prepend visual image tag if present
         doc_image_url = None
@@ -545,6 +580,9 @@ async def process_ingestion_background(
             "file_hash": file_hash,
             "title": recommended_title,
             "status": "On review",
+            "document_type": extracted_doc_type,
+            "valid_from": extracted_valid_from,
+            "valid_until": extracted_valid_until,
             "text_accuracy": text_accuracy,
             "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
             "summary": summary,
@@ -1184,7 +1222,7 @@ async def refine_pending_document(
         updated_data["knowledge_id"] = k_id
         
         # Preserve core physical document properties from initial staging
-        for prop in ["file_name", "file_hash", "batch_id", "title", "image_url", "s3_key", "storage_key", "batch_summary", "initial_prompt", "visibility_settings"]:
+        for prop in ["file_name", "file_hash", "batch_id", "title", "document_type", "valid_from", "valid_until", "image_url", "s3_key", "storage_key", "batch_summary", "initial_prompt", "visibility_settings"]:
             if prop in staged_data and staged_data.get(prop) is not None:
                 if prop not in updated_data or updated_data.get(prop) is None:
                     updated_data[prop] = staged_data.get(prop)
@@ -1207,6 +1245,9 @@ async def refine_pending_document(
         doc_batch_id = updated_data.get("batch_id") or staged_data.get("batch_id")
         doc_file_name = updated_data.get("file_name") or staged_data.get("file_name", k_id)
         doc_title = updated_data.get("title") or staged_data.get("title") or doc_file_name
+        doc_type = updated_data.get("document_type") or staged_data.get("document_type")
+        doc_valid_from = updated_data.get("valid_from") or staged_data.get("valid_from")
+        doc_valid_until = updated_data.get("valid_until") or staged_data.get("valid_until")
 
         for chunk in updated_data.get("chunks", []):
             if isinstance(chunk, dict):
@@ -1216,6 +1257,12 @@ async def refine_pending_document(
                 chunk["metadata"]["source_file"] = doc_file_name
                 chunk["metadata"]["title"] = doc_title
                 chunk["metadata"]["product_name"] = doc_title
+                if doc_type:
+                    chunk["metadata"]["document_type"] = doc_type
+                if doc_valid_from:
+                    chunk["metadata"]["valid_from"] = str(doc_valid_from).strip()
+                if doc_valid_until:
+                    chunk["metadata"]["valid_until"] = str(doc_valid_until).strip()
                 if doc_file_hash:
                     chunk["metadata"]["file_hash"] = doc_file_hash
                 if doc_batch_id:
@@ -1419,6 +1466,9 @@ async def get_approved_document_details(knowledge_id: str):
             file_hash=data.get("file_hash") if isinstance(data, dict) else None,
             title=title,
             status="Approved",
+            document_type=data.get("document_type") if isinstance(data, dict) else None,
+            valid_from=data.get("valid_from") if isinstance(data, dict) else None,
+            valid_until=data.get("valid_until") if isinstance(data, dict) else None,
             summary=summary,
             image_url=data.get("image_url") if isinstance(data, dict) else None,
             batch_summary=data.get("batch_summary") if isinstance(data, dict) else None,
@@ -1456,6 +1506,9 @@ async def edit_approved_document(
         updated_summary = request.summary if request.summary is not None else existing_doc.get("summary", "")
         updated_categories = request.categories if (request.categories is not None and len(request.categories) > 0) else existing_doc.get("categories", [])
         updated_title = request.title if request.title is not None else existing_doc.get("file_name", knowledge_id)
+        updated_doc_type = request.document_type if request.document_type is not None else existing_doc.get("document_type")
+        updated_valid_from = request.valid_from if request.valid_from is not None else existing_doc.get("valid_from")
+        updated_valid_until = request.valid_until if request.valid_until is not None else existing_doc.get("valid_until")
         updated_chunks = existing_doc.get("chunks", [])
 
         vis_settings = request.visibility_settings.model_dump() if request.visibility_settings else existing_doc.get("visibility_settings", {
@@ -1471,12 +1524,20 @@ async def edit_approved_document(
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 chunk["metadata"]["source_file"] = updated_title
+                chunk["metadata"]["title"] = updated_title
+                chunk["metadata"]["product_name"] = updated_title
                 if primary_cat:
                     chunk["metadata"]["category"] = primary_cat
                 if updated_categories:
                     chunk["metadata"]["categories"] = updated_categories
                 if updated_summary:
                     chunk["metadata"]["summary"] = updated_summary
+                if updated_doc_type:
+                    chunk["metadata"]["document_type"] = updated_doc_type
+                if updated_valid_from:
+                    chunk["metadata"]["valid_from"] = str(updated_valid_from).strip()
+                if updated_valid_until:
+                    chunk["metadata"]["valid_until"] = str(updated_valid_until).strip()
                 if vis_settings:
                     chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
                     chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
@@ -1489,6 +1550,9 @@ async def edit_approved_document(
             "file_hash": existing_doc.get("file_hash") if isinstance(existing_doc, dict) else None,
             "title": updated_title,
             "status": "Approved",
+            "document_type": updated_doc_type,
+            "valid_from": updated_valid_from,
+            "valid_until": updated_valid_until,
             "summary": updated_summary,
             "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
             "batch_summary": existing_doc.get("batch_summary") if isinstance(existing_doc, dict) else None,
@@ -1546,6 +1610,9 @@ async def edit_pending_document(
         updated_summary = request.summary if request.summary is not None else existing_doc.get("summary", "")
         updated_categories = request.categories if (request.categories is not None and len(request.categories) > 0) else existing_doc.get("suggested_categories", [])
         updated_title = request.title if request.title is not None else existing_doc.get("file_name", existing_doc.get("title", knowledge_id))
+        updated_doc_type = request.document_type if request.document_type is not None else existing_doc.get("document_type")
+        updated_valid_from = request.valid_from if request.valid_from is not None else existing_doc.get("valid_from")
+        updated_valid_until = request.valid_until if request.valid_until is not None else existing_doc.get("valid_until")
 
         # Normalize suggested_categories to list of dicts for pending json
         normalized_categories = []
@@ -1557,6 +1624,13 @@ async def edit_pending_document(
                 
         existing_doc["summary"] = updated_summary
         existing_doc["title"] = updated_title
+        if updated_doc_type is not None:
+            existing_doc["document_type"] = updated_doc_type
+        if updated_valid_from is not None:
+            existing_doc["valid_from"] = updated_valid_from
+        if updated_valid_until is not None:
+            existing_doc["valid_until"] = updated_valid_until
+
         if updated_categories is not None and len(updated_categories) > 0:
             existing_doc["suggested_categories"] = normalized_categories
             
@@ -1581,6 +1655,12 @@ async def edit_pending_document(
                     chunk["metadata"]["category"] = primary_cat["name"] if isinstance(primary_cat, dict) else primary_cat
                 if updated_summary:
                     chunk["metadata"]["summary"] = updated_summary
+                if updated_doc_type:
+                    chunk["metadata"]["document_type"] = updated_doc_type
+                if updated_valid_from:
+                    chunk["metadata"]["valid_from"] = str(updated_valid_from).strip()
+                if updated_valid_until:
+                    chunk["metadata"]["valid_until"] = str(updated_valid_until).strip()
                 if vis_settings:
                     chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
                     chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
@@ -1588,6 +1668,8 @@ async def edit_pending_document(
 
         with open(pending_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+
+        return existing_doc
 
         return existing_doc
     except HTTPException:
@@ -1771,6 +1853,9 @@ async def approve_document(
             k_id = data.get("knowledge_id", target_id) if isinstance(data, dict) else target_id
             file_name = data.get("file_name", target_id) if isinstance(data, dict) else target_id
             doc_title = data.get("title", file_name) if isinstance(data, dict) else file_name
+            doc_type = data.get("document_type") if isinstance(data, dict) else None
+            doc_valid_from = data.get("valid_from") if isinstance(data, dict) else None
+            doc_valid_until = data.get("valid_until") if isinstance(data, dict) else None
             
             for chunk in chunks:
                 if isinstance(chunk, dict):
@@ -1780,6 +1865,12 @@ async def approve_document(
                     chunk["metadata"]["source_file"] = doc_title
                     chunk["metadata"]["title"] = doc_title
                     chunk["metadata"]["product_name"] = doc_title
+                    if doc_type:
+                        chunk["metadata"]["document_type"] = doc_type
+                    if doc_valid_from:
+                        chunk["metadata"]["valid_from"] = str(doc_valid_from).strip()
+                    if doc_valid_until:
+                        chunk["metadata"]["valid_until"] = str(doc_valid_until).strip()
                     
                     # Ensure categories are preserved
                     cats = data.get("suggested_categories", data.get("categories", []))
@@ -1824,6 +1915,9 @@ async def approve_document(
                 "file_hash": data.get("file_hash") if isinstance(data, dict) else None,
                 "title": doc_title,
                 "status": "Approved",
+                "document_type": doc_type,
+                "valid_from": doc_valid_from,
+                "valid_until": doc_valid_until,
                 "summary": data.get("summary", "") if isinstance(data, dict) else "",
                 "image_url": data.get("image_url") if isinstance(data, dict) else None,
                 "batch_summary": data.get("batch_summary") if isinstance(data, dict) else None,
@@ -2010,19 +2104,108 @@ async def search_hybrid(
 
 @router.post("/chat", response_model=ChatResponse, tags=["Generation"])
 async def chat_endpoint(
-    request: ChatRequest,
+    request: Request,
     pipeline: GenerationPipeline = Depends(get_generation_pipeline)
 ):
     """
     Production Unified RAG Chat Endpoint. Single entry point for query processing,
     dynamic complexity routing, evidence validation, clinical safety gate, and LLM response synthesis.
+
+    Supports two Content-Type modes:
+    - application/json: Standard ChatRequest JSON body (backward-compatible)
+    - multipart/form-data: Form fields + optional file upload for patient document attachment
     """
+    from fastapi import Request as _Req
+
     if not pipeline:
         raise HTTPException(status_code=500, detail="Generation pipeline is not initialized.")
 
+    content_type = request.headers.get("content-type", "")
+
+    # --- Mode 1: JSON body (backward-compatible) ---
+    if "application/json" in content_type:
+        body = await request.json()
+        chat_req = ChatRequest(**body)
+
+    # --- Mode 2: Multipart/form-data (file upload support) ---
+    elif "multipart/form-data" in content_type:
+        form = await request.form()
+
+        query = form.get("query", "")
+        if not query:
+            raise HTTPException(status_code=400, detail="Field 'query' is required.")
+
+        top_k = int(form.get("top_k", "8"))
+        categories_raw = form.get("categories", "[]")
+        history_raw = form.get("history", "[]")
+
+        try:
+            categories = json.loads(categories_raw) if isinstance(categories_raw, str) else []
+        except Exception:
+            categories = []
+
+        try:
+            history = json.loads(history_raw) if isinstance(history_raw, str) else []
+        except Exception:
+            history = []
+
+        # Parse user_context if provided
+        user_context_raw = form.get("user_context")
+        user_context = None
+        if user_context_raw:
+            try:
+                user_context = json.loads(user_context_raw) if isinstance(user_context_raw, str) else None
+            except Exception:
+                user_context = None
+
+        # Extract text from uploaded file if present
+        attachment_text = None
+        uploaded_file = form.get("file")
+        if uploaded_file and hasattr(uploaded_file, "read"):
+            try:
+                from app.rag.services.attachment_parser import AttachmentParser
+                parser = AttachmentParser()
+                extracted_text, attach_meta = await parser.extract_from_upload(uploaded_file)
+                if extracted_text and not extracted_text.startswith("[Error") and not extracted_text.startswith("[Dokumen tidak"):
+                    attachment_text = extracted_text
+                    logger.info(
+                        f"📎 [ChatEndpoint] Extracted {attach_meta.get('chars', 0)} chars "
+                        f"from '{attach_meta.get('filename', '?')}' via {attach_meta.get('method', '?')} "
+                        f"in {attach_meta.get('extraction_ms', 0)}ms"
+                    )
+                else:
+                    logger.warning(f"⚠️ [ChatEndpoint] File extraction returned fallback text: {extracted_text[:100]}")
+            except Exception as e:
+                logger.error(f"❌ [ChatEndpoint] AttachmentParser failed: {e}")
+
+        chat_req = ChatRequest(
+            query=query,
+            categories=categories,
+            top_k=top_k,
+            history=history,
+            user_context=user_context,
+            attachment_text=attachment_text
+        )
+    else:
+        # Fallback: try to parse as JSON
+        try:
+            body = await request.json()
+            chat_req = ChatRequest(**body)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Unsupported Content-Type. Use application/json or multipart/form-data.")
+
+    # --- Build enriched query with attachment text ---
+    effective_query = chat_req.query
+    if chat_req.attachment_text:
+        effective_query = (
+            f"{chat_req.query}\n\n"
+            f"--- DOKUMEN PASIEN TERLAMPIR ---\n"
+            f"{chat_req.attachment_text}"
+        )
+
     raw_history = []
-    if request.history:
-        for msg in request.history:
+    if chat_req.history:
+        for msg in chat_req.history:
             if isinstance(msg, dict):
                 r = msg.get("role", "")
                 c = msg.get("content", "")
@@ -2033,24 +2216,24 @@ async def chat_endpoint(
                 raw_history.append({"role": r, "content": c})
 
     filter_metadata = {}
-    if request.categories:
-        valid_cats = [c.strip() for c in request.categories if c and c.strip().lower() not in ("string", "")]
+    if chat_req.categories:
+        valid_cats = [c.strip() for c in chat_req.categories if c and c.strip().lower() not in ("string", "")]
         if valid_cats:
             filter_metadata["categories"] = valid_cats
         
-    if request.user_context:
-        filter_metadata["clinics"] = request.user_context.branch_ids + ["all"]
-        filter_metadata["doctor_types"] = [request.user_context.dr_type, "all"]
-        filter_metadata["doctors"] = [request.user_context.user_id, "all"]
-        if request.user_context.excluded_categories:
-            filter_metadata["excluded_categories"] = request.user_context.excluded_categories
+    if chat_req.user_context:
+        filter_metadata["clinics"] = chat_req.user_context.branch_ids + ["all"]
+        filter_metadata["doctor_types"] = [chat_req.user_context.dr_type, "all"]
+        filter_metadata["doctors"] = [chat_req.user_context.user_id, "all"]
+        if chat_req.user_context.excluded_categories:
+            filter_metadata["excluded_categories"] = chat_req.user_context.excluded_categories
 
     parsed_filter = filter_metadata if filter_metadata else None
     
     try:
         response = pipeline.generate_answer(
-            query=request.query,
-            top_k=request.top_k,
+            query=effective_query,
+            top_k=chat_req.top_k,
             filter_metadata=parsed_filter,
             rerank=False,
             history=raw_history
@@ -2060,7 +2243,7 @@ async def chat_endpoint(
             return response
         elif isinstance(response, dict):
             return ChatResponse(
-                query=response.get("query", request.query),
+                query=response.get("query", chat_req.query),
                 answer=response.get("answer", ""),
                 context=response.get("context", ""),
                 results=response.get("results", []),
@@ -2072,6 +2255,454 @@ async def chat_endpoint(
         logger.error(f"Unified Chat generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# =============================================================================
+# QUERY GENERAL ENDPOINT (Knowledge Base Explorer + Editor via Prompt)
+# Akses tergantung RBAC role dari CIS. System prompt dari AppConfig DB.
+# =============================================================================
+# =============================================================================
+# QUERY GENERAL ENDPOINT (Knowledge Base Explorer, Editor & Deletion via Prompt)
+# Akses tergantung RBAC role dari CIS. System prompt dari AppConfig DB.
+# =============================================================================
+
+class QueryGeneralRequest(BaseModel):
+    """Request schema for Query General endpoint (Simplified: Prompt-only)."""
+    prompt: str = Field(
+        ..., 
+        description="Prompt teks dari user untuk menelusuri (read), mengedit (update), atau menghapus (delete) dokumen KB",
+        example="Apakah ada produk ERHA Age Corrector di database?"
+    )
+    history: List[dict] = Field(
+        default=[], 
+        description="Riwayat percakapan sebelumnya (opsional)"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_query_alias(cls, values):
+        if isinstance(values, dict):
+            # Backward-compatibility: if client sent 'query' instead of 'prompt', map it
+            if "prompt" not in values and "query" in values:
+                values["prompt"] = values["query"]
+        return values
+
+class QueryGeneralResponse(BaseModel):
+    """Response schema for Query General endpoint."""
+    prompt: str = Field(..., description="Prompt yang dikirimkan user")
+    answer: str = Field(..., description="Jawaban dan konfirmasi dari AI")
+    action: str = Field("read", description="Aksi yang dijalankan: 'read', 'edit_applied', 'delete_applied'")
+    target_knowledge_id: Optional[str] = Field(None, description="ID dokumen yang diproses (jika ada update/delete)")
+    total_found: int = Field(0, description="Jumlah data relevan yang ditemukan di KB")
+    results: List[Dict[str, Any]] = Field(default=[], description="Potongan knowledge base yang ditemukan")
+
+def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
+    """
+    Parses the LLM response to extract a JSON action block (edit or delete).
+    Returns the parsed action dict if found, None otherwise.
+    """
+    import re as _re
+    pattern = r'```json\s*\n?\s*(\{[^`]+?\})\s*\n?\s*```'
+    matches = _re.findall(pattern, llm_answer, _re.DOTALL)
+    
+    for match in matches:
+        try:
+            parsed = json.loads(match.strip())
+            if isinstance(parsed, dict):
+                action = parsed.get("action")
+                if action == "edit" and parsed.get("knowledge_id"):
+                    # Support summary, categories, title, valid_until, valid_from, document_type
+                    if parsed.get("field") in ("summary", "categories", "title", "valid_until", "valid_from", "document_type", "periode"):
+                        return parsed
+                elif action == "delete":
+                    return parsed
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+def _apply_kb_edit(
+    knowledge_id: str,
+    field: str,
+    new_value: str,
+    vector_store,
+    bm25_index
+) -> Dict[str, Any]:
+    """
+    Applies an edit to an approved KB document and re-indexes.
+    Reuses the same logic as edit_approved_document endpoint.
+    """
+    approved_file = resolve_approved_file(knowledge_id)
+    if not approved_file:
+        return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di approved KB."}
+
+    try:
+        with open(approved_file, "r", encoding="utf-8") as f:
+            existing_doc = json.load(f)
+
+        doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
+        old_value = None
+        
+        if field == "summary":
+            old_value = existing_doc.get("summary", "")
+            existing_doc["summary"] = new_value
+        elif field == "title":
+            old_value = existing_doc.get("title", existing_doc.get("file_name", ""))
+            existing_doc["title"] = new_value
+        elif field in ("valid_until", "expiry_date", "end_date", "periode"):
+            old_value = existing_doc.get("valid_until")
+            existing_doc["valid_until"] = str(new_value).strip()
+        elif field in ("valid_from", "start_date"):
+            old_value = existing_doc.get("valid_from")
+            existing_doc["valid_from"] = str(new_value).strip()
+        elif field == "document_type":
+            old_value = existing_doc.get("document_type")
+            existing_doc["document_type"] = str(new_value).strip()
+        elif field == "categories":
+            old_value = existing_doc.get("categories", [])
+            try:
+                parsed_cats = json.loads(new_value) if isinstance(new_value, str) else new_value
+                if isinstance(parsed_cats, list):
+                    existing_doc["categories"] = parsed_cats
+                else:
+                    existing_doc["categories"] = [str(parsed_cats)]
+            except (json.JSONDecodeError, ValueError):
+                existing_doc["categories"] = [new_value]
+
+        chunks = existing_doc.get("chunks", [])
+        primary_cat = existing_doc.get("categories", [None])[0] if existing_doc.get("categories") else None
+        
+        for chunk in chunks:
+            if isinstance(chunk, dict):
+                if "metadata" not in chunk:
+                    chunk["metadata"] = {}
+                chunk["metadata"]["knowledge_id"] = doc_kid
+                if field == "title":
+                    chunk["metadata"]["source_file"] = new_value
+                    chunk["metadata"]["title"] = new_value
+                    chunk["metadata"]["product_name"] = new_value
+                if primary_cat:
+                    chunk["metadata"]["category"] = primary_cat
+                if existing_doc.get("categories"):
+                    chunk["metadata"]["categories"] = existing_doc["categories"]
+                if field == "summary":
+                    chunk["metadata"]["summary"] = new_value
+                if field in ("valid_until", "expiry_date", "end_date", "periode"):
+                    chunk["metadata"]["valid_until"] = str(new_value).strip()
+                if field in ("valid_from", "start_date"):
+                    chunk["metadata"]["valid_from"] = str(new_value).strip()
+                if field == "document_type":
+                    chunk["metadata"]["document_type"] = str(new_value).strip()
+
+        with open(approved_file, "w", encoding="utf-8") as f:
+            json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+
+        if vector_store:
+            logger.info(f"[QUERY-GENERAL] Re-indexing PGVector for '{doc_kid}'...")
+            vector_store.delete_document(doc_kid)
+            vector_store.insert_chunks(chunks)
+
+        if bm25_index:
+            logger.info(f"[QUERY-GENERAL] Re-indexing BM25 for '{doc_kid}'...")
+            bm25_index.remove_file_chunks(doc_kid)
+            bm25_index.add_chunks(chunks)
+            bm25_index.save(settings.bm25_index_path)
+
+        if vector_store and hasattr(vector_store, "upsert_knowledge_category"):
+            vector_store.upsert_knowledge_category(
+                knowledge_id=doc_kid,
+                file_name=existing_doc.get("title", existing_doc.get("file_name", doc_kid)),
+                categories=existing_doc.get("categories", []),
+                summary=existing_doc.get("summary", "")
+            )
+
+        logger.info(f"[QUERY-GENERAL] Successfully edited '{doc_kid}' field='{field}'")
+        return {
+            "success": True,
+            "knowledge_id": doc_kid,
+            "field": field,
+            "old_value": str(old_value)[:200] if old_value else None,
+            "new_value": str(new_value)[:200]
+        }
+
+    except Exception as e:
+        logger.error(f"[QUERY-GENERAL] Failed to apply edit for '{knowledge_id}': {e}")
+        return {"success": False, "error": str(e)}
+
+def _apply_kb_delete(
+    knowledge_id: str,
+    vector_store,
+    bm25_index
+) -> Dict[str, Any]:
+    """
+    Deletes an approved or pending document, removes JSON files, and clears PGVector & BM25 indices.
+    Supports single document deletion by ID/name, or batch deletion of all expired promos.
+    """
+    pending_dir = "data/pending"
+    approved_dir = "data/output"
+    was_deleted = False
+    deleted_title = None
+    target_kid = knowledge_id
+
+    clean_target = (knowledge_id or "").strip().lower()
+
+    # 1. Batch Delete Expired Promos if requested
+    if clean_target in ("expired", "expired_promos", "promo_expired", "promo expired", "promo bulan lalu", "semua promo expired", "promo yang sudah expired"):
+        from datetime import datetime, timezone
+        from app.rag.services.rag_retriever import parse_date_safely
+        today = datetime.now(timezone.utc).date()
+        deleted_items = []
+
+        for folder in [pending_dir, approved_dir]:
+            if os.path.exists(folder):
+                for f in os.listdir(folder):
+                    if f.endswith(".json") and f != "bm25_index.pkl":
+                        f_path = os.path.join(folder, f)
+                        try:
+                            with open(f_path, "r", encoding="utf-8") as fp:
+                                f_data = json.load(fp)
+                            is_expired = False
+                            vu = f_data.get("valid_until") or f_data.get("expiry_date")
+                            if vu:
+                                parsed_vu = parse_date_safely(vu)
+                                if parsed_vu and parsed_vu < today:
+                                    is_expired = True
+                            
+                            if is_expired:
+                                doc_id = str(f_data.get("knowledge_id", f.replace(".json", "")))
+                                doc_title = str(f_data.get("title", f_data.get("file_name", doc_id)))
+                                os.remove(f_path)
+                                if vector_store:
+                                    vector_store.delete_document(doc_id)
+                                if bm25_index:
+                                    bm25_index.remove_file_chunks(doc_id)
+                                deleted_items.append(f"{doc_title} (expired: {vu})")
+                                was_deleted = True
+                                logger.info(f"[QUERY-GENERAL] Deleted expired promo file: {doc_title} ({f_path})")
+                        except Exception as err:
+                            logger.warning(f"[QUERY-GENERAL] Error checking file {f} for expiry deletion: {err}")
+
+        if bm25_index and deleted_items:
+            bm25_index.save(settings.bm25_index_path)
+
+        if deleted_items:
+            return {
+                "success": True,
+                "knowledge_id": "expired_promos",
+                "title": f"{len(deleted_items)} Promo Expired Dihapus: {'; '.join(deleted_items)}"
+            }
+        else:
+            return {
+                "success": True,
+                "knowledge_id": "none",
+                "title": "Tidak ada dokumen promo expired yang ditemukan di database."
+            }
+
+    # 2. Regular Single/Specific Document Deletion
+    for folder in [pending_dir, approved_dir]:
+        if os.path.exists(folder):
+            for f in os.listdir(folder):
+                if f.endswith(".json") and f != "bm25_index.pkl":
+                    f_path = os.path.join(folder, f)
+                    try:
+                        with open(f_path, "r", encoding="utf-8") as fp:
+                            f_data = json.load(fp)
+                        doc_id = str(f_data.get("knowledge_id", "")).strip().lower() if isinstance(f_data, dict) else ""
+                        doc_title = str(f_data.get("title", f_data.get("file_name", ""))) if isinstance(f_data, dict) else ""
+                        f_no_ext = f.replace(".json", "").replace("_parsed", "").lower()
+
+                        if clean_target in (doc_id, f_no_ext, f.lower(), doc_title.lower()) or (doc_title and clean_target in doc_title.lower()):
+                            os.remove(f_path)
+                            was_deleted = True
+                            deleted_title = doc_title or f
+                            target_kid = f_data.get("knowledge_id") or knowledge_id
+                            logger.info(f"[QUERY-GENERAL] Deleted JSON file {f_path} for knowledge_id='{target_kid}'")
+                    except Exception as err:
+                        logger.warning(f"[QUERY-GENERAL] Error checking file {f}: {err}")
+
+    if vector_store:
+        try:
+            vector_store.delete_document(target_kid)
+            logger.info(f"[QUERY-GENERAL] Deleted PGVector embeddings for '{target_kid}'")
+        except Exception as e:
+            logger.warning(f"[QUERY-GENERAL] Vector store delete error for '{target_kid}': {e}")
+
+    if bm25_index:
+        try:
+            bm25_index.remove_file_chunks(target_kid)
+            bm25_index.save(settings.bm25_index_path)
+            logger.info(f"[QUERY-GENERAL] Removed BM25 chunks for '{target_kid}'")
+        except Exception as e:
+            logger.warning(f"[QUERY-GENERAL] BM25 delete error for '{target_kid}': {e}")
+
+    if was_deleted:
+        return {"success": True, "knowledge_id": target_kid, "title": deleted_title}
+    return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di database."}
+
+
+
+async def _resolve_query_general_prompt(db_session) -> str:
+    """
+    Resolves the system prompt for Query General:
+    1. AppConfig DB key: AI_PROMPT_QUERY_GENERAL (admin-configurable via CIS)
+    2. DEFAULT_QUERY_GENERAL_PROMPT (hardcoded fallback)
+    """
+    try:
+        from app.models.config import AppConfig
+        from sqlalchemy import select
+        stmt = select(AppConfig.value).where(AppConfig.key == "AI_PROMPT_QUERY_GENERAL")
+        result = await db_session.execute(stmt)
+        db_prompt = result.scalar_one_or_none()
+        if db_prompt and db_prompt.strip():
+            return db_prompt.strip()
+    except Exception as e:
+        logger.warning(f"[QUERY-GENERAL] Failed to fetch system prompt from DB: {e}")
+
+    from app.rag.services.rag_generator import DEFAULT_QUERY_GENERAL_PROMPT
+    return DEFAULT_QUERY_GENERAL_PROMPT
+
+
+@router.post("/query-general", response_model=QueryGeneralResponse, tags=["Query General"])
+async def query_general_endpoint(
+    request: QueryGeneralRequest,
+    pipeline: GenerationPipeline = Depends(get_generation_pipeline),
+    vector_store: BaseVectorStoreAdapter = Depends(get_vector_store),
+    bm25: BM25Index = Depends(get_bm25_index)
+):
+    """
+    Query General Endpoint — Knowledge Base Explorer, Editor & Deletion via Natural Language Prompt.
+
+    Endpoint ini digunakan pada menu Ingest Dokumen (mode Switch Prompt General) untuk:
+    - **Read**: Menelusuri dan memverifikasi data produk/treatment/promo yang ada di KB
+    - **Update/Edit**: Mengubah judul, kategori, deskripsi, atau periode promo (valid_until/valid_from) via prompt
+    - **Delete**: Menghapus data produk atau batch delete promo expired dari database KB via prompt
+
+    **Contoh Prompt:**
+    - Read: `"Apakah produk ERHA Acne Cleanser sudah ada di database?"`
+    - Read Promo: `"Tampilkan semua promo yang tersimpan di KB"`
+    - Update: `"Update deskripsi ERHA Acne Cleanser menjadi: Pembersih wajah jerawat aktif"`
+    - Update Promo: `"Update periode promo Merdeka sampai 15 September 2026"`
+    - Delete: `"Hapus produk ERHA Acne Cleanser dari database"`
+    - Delete Expired: `"Hapus semua promo yang sudah expired"`
+    """
+    if not pipeline:
+        raise HTTPException(status_code=500, detail="Generation pipeline is not initialized.")
+
+    try:
+        user_prompt = request.prompt
+
+        # 0. Resolve system prompt from DB (or fallback)
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db_session:
+            system_prompt = await _resolve_query_general_prompt(db_session)
+
+        # 1. Retrieve from KB without filters (admin/user sees all approved data, including expired promos for exploration)
+        search_query = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
+
+        retrieval_response = pipeline.retriever.retrieve(
+            query=search_query,
+            top_k=10,
+            filter_metadata=None,
+            rerank=False,
+            include_expired=True
+        )
+
+        results = retrieval_response.get("results", [])
+        context = retrieval_response.get("context", "")
+
+        is_context_empty = (
+            not results
+            or context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
+            or len(context.strip()) == 0
+        )
+
+        context_for_prompt = context if not is_context_empty else "(Tidak ada dokumen yang ditemukan di Knowledge Base untuk kueri ini.)"
+
+        # 2. Build prompt with resolved system prompt
+        history_str = ""
+        if request.history:
+            for msg in request.history:
+                role = "User" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content", "")
+                history_str += f"{role}: {content}\n"
+        else:
+            history_str = "No previous conversation.\n"
+
+        full_prompt = (
+            f"{system_prompt}\n\n"
+            f"--- DATA KNOWLEDGE BASE YANG DITEMUKAN ---\n"
+            f"{context_for_prompt}\n\n"
+            f"--- RIWAYAT PERCAKAPAN ---\n"
+            f"{history_str}\n"
+            f"User: {user_prompt}\n"
+            f"Assistant:"
+        )
+
+        # 3. Generate LLM response
+        import asyncio
+        answer = await asyncio.to_thread(pipeline.llm_adapter.generate, full_prompt)
+
+        # 4. Clean up output
+        from app.rag.services.guardrails import OutputGuard
+        answer = OutputGuard.redact_pii(answer)
+
+        # 5. Check if LLM response contains an edit or delete action
+        action_type = "read"
+        target_kid = None
+        
+        action_data = _extract_kb_action(answer)
+        if action_data:
+            act = action_data.get("action")
+            kid = action_data.get("knowledge_id")
+
+            target_vs = (pipeline.retriever.vector_store if pipeline.retriever and hasattr(pipeline.retriever, 'vector_store') else vector_store)
+            target_bm25 = (pipeline.retriever.bm25_index if pipeline.retriever and hasattr(pipeline.retriever, 'bm25_index') else bm25)
+
+            if act == "edit":
+                field = action_data.get("field", "summary")
+                new_val = action_data.get("new_value", "")
+                logger.info(f"[QUERY-GENERAL] Edit action detected: knowledge_id='{kid}', field='{field}'")
+                
+                edit_result = _apply_kb_edit(kid, field, new_val, target_vs, target_bm25)
+                if edit_result.get("success"):
+                    action_type = "edit_applied"
+                    target_kid = kid
+                    import re as _re
+                    answer = _re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
+                    answer += f"\n\n✅ **Perubahan berhasil diterapkan!**\n- **Dokumen ID**: `{kid}`\n- **Field**: {field}\n- **Status**: Data telah diupdate dan di-reindex ke database."
+                else:
+                    error_msg = edit_result.get("error", "Unknown error")
+                    answer += f"\n\n⚠️ **Gagal menerapkan perubahan**: {error_msg}"
+
+            elif act == "delete":
+                logger.info(f"[QUERY-GENERAL] Delete action detected: knowledge_id='{kid}'")
+                del_result = _apply_kb_delete(kid, target_vs, target_bm25)
+                if del_result.get("success"):
+                    action_type = "delete_applied"
+                    target_kid = kid
+                    doc_title = del_result.get("title", kid)
+                    import re as _re
+                    answer = _re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
+                    answer += f"\n\n🗑️ **Dokumen berhasil dihapus!**\n- **Nama Dokumen**: `{doc_title}`\n- **Dokumen ID**: `{kid}`\n- **Status**: File dan seluruh index (PGVector & BM25) telah dibersihkan."
+                else:
+                    error_msg = del_result.get("error", "Unknown error")
+                    answer += f"\n\n⚠️ **Gagal menghapus dokumen**: {error_msg}"
+
+        logger.info(
+            f"[QUERY-GENERAL] prompt='{user_prompt}' | "
+            f"action={action_type} | results={len(results)} | answer_len={len(answer)}"
+        )
+
+        return QueryGeneralResponse(
+            prompt=user_prompt,
+            answer=answer,
+            action=action_type,
+            target_knowledge_id=target_kid,
+            total_found=len(results),
+            results=results
+        )
+
+    except Exception as e:
+        logger.error(f"Query General endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 

@@ -559,6 +559,7 @@ async def create_chat_message(
     db.add(chat_session)
         
     attachments = None
+    extracted_attachment_texts = []
     if files:
         if not await _is_file_attachments_allowed(db):
             raise HTTPException(
@@ -566,10 +567,27 @@ async def create_chat_message(
                 detail="File attachments are disabled by system configuration"
             )
         attachments = {}
+        from app.rag.services.attachment_parser import AttachmentParser
+        parser = AttachmentParser()
         for file in files:
             if file.content_type not in ALLOWED_MIME_TYPES:
                 raise HTTPException(status_code=400, detail=f"File type {file.content_type} not allowed for file {file.filename}")
-            attachments[file.filename] = {"content_type": file.content_type, "status": "processed"}
+            try:
+                extracted_text, meta = await parser.extract_from_upload(file)
+                attachments[file.filename] = {
+                    "content_type": file.content_type,
+                    "status": "processed",
+                    "chars": meta.get("chars", len(extracted_text)),
+                    "pages": meta.get("pages", 1),
+                    "method": meta.get("method", "fast")
+                }
+                if extracted_text and not extracted_text.startswith("[Error") and not extracted_text.startswith("[Dokumen tidak"):
+                    extracted_attachment_texts.append(
+                        f"[Dokumen Pasien Terlampir: {file.filename}]\n{extracted_text.strip()}"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to extract attachment {file.filename}: {e}")
+                attachments[file.filename] = {"content_type": file.content_type, "status": "error", "error": str(e)}
 
     message = ChatMessage(
         session_id=session_id,
@@ -594,6 +612,11 @@ async def create_chat_message(
 
     # Build doctor-level knowledge filter (branch, dr_type, excluded categories)
     doctor_filter = await _build_doctor_filter_metadata(db, current_user)
+
+    # Effective query enriched with attachment text
+    effective_query = content
+    if extracted_attachment_texts:
+        effective_query = f"{content}\n\n" + "\n\n".join(extracted_attachment_texts)
 
     # For user message, we stream the AI response back via SSE
     async def sse_generator():
@@ -633,7 +656,7 @@ async def create_chat_message(
                 
                 # We consume the generator token by token
                 async for chunk in pipeline.generate_answer_stream(
-                    query=content,
+                    query=effective_query,
                     top_k=5,
                     rerank=True,
                     history=history,
@@ -672,6 +695,7 @@ async def create_chat_message(
                 )
                 out_tokens = count_chat_completion_tokens(ai_response_text)
                 
+                from app.services.token_service import record_knowledge_not_found_event
                 await record_chat_token_usage(
                     db=session,
                     user_id=current_user.id,
@@ -679,6 +703,20 @@ async def create_chat_message(
                     input_tokens=in_tokens,
                     output_tokens=out_tokens
                 )
+
+                # Check if knowledge was not found for admin notification
+                is_no_context = not context_chunks or len(context_chunks) == 0
+                is_missing_kw = any(phrase in ai_response_text.lower() for phrase in [
+                    "tidak ditemukan", "tidak tersedia", "mohon maaf", "belum ada data"
+                ])
+                if is_no_context or is_missing_kw:
+                    await record_knowledge_not_found_event(
+                        db=session,
+                        user_id=current_user.id,
+                        branch_id=chat_session.branch_id,
+                        user_query=content
+                    )
+
                 
             except Exception as e:
                 logger.error(f"Error streaming AI response: {e}")
@@ -749,12 +787,30 @@ async def stream_chat_message(
     db.add(chat_session)
         
     attachments = None
+    extracted_attachment_texts = []
     if files:
         attachments = {}
+        from app.rag.services.attachment_parser import AttachmentParser
+        parser = AttachmentParser()
         for file in files:
             if file.content_type not in ALLOWED_MIME_TYPES:
                 raise HTTPException(status_code=400, detail=f"File type {file.content_type} not allowed for file {file.filename}")
-            attachments[file.filename] = {"content_type": file.content_type, "status": "processed"}
+            try:
+                extracted_text, meta = await parser.extract_from_upload(file)
+                attachments[file.filename] = {
+                    "content_type": file.content_type,
+                    "status": "processed",
+                    "chars": meta.get("chars", len(extracted_text)),
+                    "pages": meta.get("pages", 1),
+                    "method": meta.get("method", "fast")
+                }
+                if extracted_text and not extracted_text.startswith("[Error") and not extracted_text.startswith("[Dokumen tidak"):
+                    extracted_attachment_texts.append(
+                        f"[Dokumen Pasien Terlampir: {file.filename}]\n{extracted_text.strip()}"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to extract attachment {file.filename}: {e}")
+                attachments[file.filename] = {"content_type": file.content_type, "status": "error", "error": str(e)}
 
     message = ChatMessage(
         session_id=session_id,
@@ -778,6 +834,11 @@ async def stream_chat_message(
 
     # Build doctor-level knowledge filter (branch, dr_type, excluded categories)
     doctor_filter = await _build_doctor_filter_metadata(db, current_user)
+
+    # Effective query enriched with attachment text
+    effective_query = content
+    if extracted_attachment_texts:
+        effective_query = f"{content}\n\n" + "\n\n".join(extracted_attachment_texts)
 
     async def sse_generator():
         try:
@@ -815,7 +876,7 @@ async def stream_chat_message(
                 context_chunks = []
                 
                 async for chunk in pipeline.generate_answer_stream(
-                    query=content,
+                    query=effective_query,
                     top_k=5,
                     rerank=True,
                     history=history,

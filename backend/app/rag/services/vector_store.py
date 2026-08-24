@@ -106,7 +106,12 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             product_name = product_name.strip()
             
             section = metadata.get("section", "General")
-            enriched_text = f"Product: {product_name} | Section: {section} | Content: {chunk['text']}"
+            sku = metadata.get("sku") or metadata.get("product_id") or metadata.get("item_code")
+            if not sku and isinstance(metadata.get("extracted_information"), dict):
+                ext_info = metadata["extracted_information"]
+                sku = ext_info.get("sku") or ext_info.get("product_id") or ext_info.get("item_code")
+            sku_header = f" | SKU: {sku}" if sku else ""
+            enriched_text = f"Product: {product_name}{sku_header} | Section: {section} | Content: {chunk['text']}"
             texts_to_embed.append(enriched_text)
             
         embeddings = self.embeddings.embed_documents(texts_to_embed)
