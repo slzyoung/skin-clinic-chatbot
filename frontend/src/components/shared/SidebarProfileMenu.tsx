@@ -1,6 +1,17 @@
 "use client";
 
+import { useMemo } from "react";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import {
+	RiArrowUpSLine,
+	RiLogoutBoxRLine,
+	RiNotification3Line,
+} from "@remixicon/react";
+
 import { useLogout } from "@/app/login/hooks/use-logout";
+import { NOTIFICATION_KEYS } from "@/app/dashboard/notifications/api/keys";
+import { FeedbackNotification } from "@/app/dashboard/notifications/api/types";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
 	DropdownMenu,
@@ -15,18 +26,26 @@ import {
 	useSidebar,
 } from "@/components/ui/sidebar";
 import { useCurrentUser } from "@/hooks/use-current-user";
-import {
-	RiLogoutBoxRLine,
-	RiNotification3Line,
-	RiArrowUpSLine,
-} from "@remixicon/react";
-import Link from "next/link";
+import { api } from "@/lib/axios";
 
 export function SidebarProfileMenu() {
 	const { mutate: logout, isPending: isLoggingOut } = useLogout();
 	const { data: user } = useCurrentUser();
 	const { state } = useSidebar();
 	const isCollapsed = state === "collapsed";
+
+	const { data: feedbacks = [] } = useQuery<FeedbackNotification[]>({
+		queryKey: NOTIFICATION_KEYS.lists(),
+		queryFn: async () => {
+			const res = await api.get("/chats/feedback");
+			return res.data;
+		},
+	});
+
+	const unreadCount = useMemo(
+		() => feedbacks.filter((f) => !f.is_feedback_read).length,
+		[feedbacks],
+	);
 
 	const userName = user?.name || "User";
 	const userRole = user?.roles?.[0]?.name || "Staff";
@@ -44,10 +63,20 @@ export function SidebarProfileMenu() {
 				<SidebarMenuButton
 					render={<Link href="/dashboard/notifications" />}
 					className="text-zinc-600 hover:text-blue-600 hover:bg-blue-50 font-medium group-data-[collapsible=icon]:justify-center"
-					tooltip="Notifications"
+					tooltip={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
 				>
-					<RiNotification3Line className="size-4 shrink-0" />
+					<div className="relative flex items-center justify-center">
+						<RiNotification3Line className="size-4 shrink-0" />
+						{unreadCount > 0 && (
+							<span className="absolute -top-1 -right-1 size-2 rounded-full bg-red-500 ring-2 ring-white group-data-[collapsible=icon]:block hidden" />
+						)}
+					</div>
 					<span className="font-medium group-data-[collapsible=icon]:hidden">Notifications</span>
+					{unreadCount > 0 && (
+						<span className="ml-auto inline-grid place-items-center size-5 rounded-full bg-red-500 text-white font-bold text-[10px] leading-none tabular-nums select-none shrink-0 group-data-[collapsible=icon]:hidden">
+							{unreadCount > 99 ? "99+" : unreadCount}
+						</span>
+					)}
 				</SidebarMenuButton>
 			</SidebarMenuItem>
 			<SidebarMenuItem className="mt-1 group-data-[collapsible=icon]:mt-0">
