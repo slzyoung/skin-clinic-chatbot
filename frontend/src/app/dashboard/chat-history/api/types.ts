@@ -22,4 +22,13 @@ export interface ChatHistoryResponse extends ChatSessionResponse {
   messages: number;
   doctor: string;
   branch: string;
+  doctor_type?: string | null;
+}
+
+export interface ChatStatsResponse {
+  doctors_reached: number;
+  total_sessions: number;
+  positive_ratings: number;
+  negative_ratings: number;
+  missing_knowledge: number;
 }

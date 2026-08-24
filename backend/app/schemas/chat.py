@@ -37,7 +37,17 @@ class ChatHistoryResponse(ChatSessionResponse):
     messages: int
     doctor: str
     branch: str
+    doctor_type: Optional[str] = None
     
+    model_config = ConfigDict(from_attributes=True)
+
+class ChatStatsResponse(BaseModel):
+    doctors_reached: int
+    total_sessions: int
+    positive_ratings: int
+    negative_ratings: int
+    missing_knowledge: int
+
     model_config = ConfigDict(from_attributes=True)
 
 class ChatMessageCreate(BaseModel):
