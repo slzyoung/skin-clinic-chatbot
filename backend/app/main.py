@@ -3,7 +3,11 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from loguru import logger
 from app.core.config import settings
+from app.core.logger import setup_logging
 from app.api.routers import auth, users, branches, categories, projects, knowledge, chats, webhooks, config, events, roles
+
+# Initialize centralized logging and interceptors immediately
+setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
