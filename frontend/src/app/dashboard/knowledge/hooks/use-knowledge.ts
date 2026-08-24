@@ -2,7 +2,7 @@ import { api } from "@/lib/axios";
 import { getErrorMessage } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { knowledgeKeys } from "../api/keys";
+import { knowledgeKeys, projectKeys } from "../api/keys";
 import type { KnowledgeResponse, KnowledgeStatus, VisibilitySettings } from "../api/types";
 
 export const useKnowledgeBaseList = () => {
@@ -122,12 +122,16 @@ export const useDeleteKnowledge = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async (id: string) => {
+		mutationFn: async (param: string | { id: string; hideToast?: boolean }) => {
+			const id = typeof param === "string" ? param : param.id;
+			const hideToast = typeof param === "string" ? false : !!param.hideToast;
 			const response = await api.delete(`/knowledge/${id}`);
-			return response.data;
+			return { data: response.data, hideToast };
 		},
-		onSuccess: () => {
-			toast.success("Knowledge deleted successfully!");
+		onSuccess: (result) => {
+			if (!result?.hideToast) {
+				toast.success("Knowledge deleted successfully!");
+			}
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 		},
@@ -179,3 +183,34 @@ export const useIngestionQuota = () => {
 	});
 };
 
+export const useUpdateKnowledgeProject = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({
+			knowledgeId,
+			projectId,
+			hideToast,
+		}: {
+			knowledgeId: string;
+			projectId: string | null;
+			hideToast?: boolean;
+		}) => {
+			const response = await api.put(`/knowledge/${knowledgeId}/project`, {
+				project_id: projectId,
+			});
+			return { data: response.data, hideToast };
+		},
+		onSuccess: (result) => {
+			if (!result?.hideToast) {
+				toast.success("Knowledge project updated successfully!");
+			}
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to update project assignment."));
+		},
+	});
+};

@@ -99,6 +99,56 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 		await tabRefs.current[currentTab]?.handleDelete();
 	};
 
+	const handleDeleteSuccess = (deletedId: string) => {
+		const remaining = batchDocuments.filter((d) => d.id !== deletedId);
+		if (remaining.length === 0) {
+			router.push("/dashboard/knowledge");
+		} else {
+			setActiveTab(remaining[0].id);
+		}
+	};
+
+	const getFileIconAndColor = (filename?: string | null) => {
+		if (!filename)
+			return { Icon: RiFileTextLine, bgColor: "bg-blue-50", textColor: "text-blue-600" };
+		const ext = filename.split(".").pop()?.toLowerCase() || "";
+		switch (ext) {
+			case "pdf":
+				return { Icon: RiFilePdf2Line, bgColor: "bg-red-50", textColor: "text-red-600" };
+			case "doc":
+			case "docx":
+				return {
+					Icon: RiFileWord2Line,
+					bgColor: "bg-blue-50",
+					textColor: "text-blue-600",
+				};
+			case "xls":
+			case "xlsx":
+			case "csv":
+				return {
+					Icon: RiFileExcel2Line,
+					bgColor: "bg-emerald-50",
+					textColor: "text-emerald-600",
+				};
+			case "png":
+			case "jpg":
+			case "jpeg":
+			case "gif":
+				return {
+					Icon: RiImage2Line,
+					bgColor: "bg-purple-50",
+					textColor: "text-purple-600",
+				};
+			case "txt":
+			default:
+				return {
+					Icon: RiFileTextLine,
+					bgColor: "bg-blue-50",
+					textColor: "text-blue-600",
+				};
+		}
+	};
+
 	return (
 		<div className="flex flex-col h-full bg-white relative">
 			{/* Header */}
@@ -140,51 +190,10 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 				</div>
 			</div>
 
-			{/* Chat Area */}
+			{/* Active Tab View */}
 			<div className="flex-1 overflow-hidden flex flex-col w-full">
 				<div className="flex-1 overflow-hidden relative">
 					{batchDocuments.map((doc) => {
-						const getFileIconAndColor = (filename?: string | null) => {
-							if (!filename)
-								return { Icon: RiFileTextLine, bgColor: "bg-blue-50", textColor: "text-blue-600" };
-							const ext = filename.split(".").pop()?.toLowerCase() || "";
-							switch (ext) {
-								case "pdf":
-									return { Icon: RiFilePdf2Line, bgColor: "bg-red-50", textColor: "text-red-600" };
-								case "doc":
-								case "docx":
-									return {
-										Icon: RiFileWord2Line,
-										bgColor: "bg-blue-50",
-										textColor: "text-blue-600",
-									};
-								case "xls":
-								case "xlsx":
-								case "csv":
-									return {
-										Icon: RiFileExcel2Line,
-										bgColor: "bg-emerald-50",
-										textColor: "text-emerald-600",
-									};
-								case "png":
-								case "jpg":
-								case "jpeg":
-								case "gif":
-									return {
-										Icon: RiImage2Line,
-										bgColor: "bg-purple-50",
-										textColor: "text-purple-600",
-									};
-								case "txt":
-								default:
-									return {
-										Icon: RiFileTextLine,
-										bgColor: "bg-blue-50",
-										textColor: "text-blue-600",
-									};
-							}
-						};
-
 						const preHeaderNode = (
 							<div className="flex flex-row flex-wrap justify-end gap-2 mb-4 self-end max-h-36 overflow-y-auto w-full pr-1">
 								{batchDocuments.map((tabDoc) => {
@@ -205,7 +214,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 													{fileName}
 												</AttachmentTitle>
 												<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
-													DOCUMENT
+													{fileName.split(".").pop() || "FILE"}
 												</AttachmentDescription>
 											</AttachmentContent>
 										</Attachment>
@@ -215,10 +224,10 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						);
 
 						const headerNode = (
-							<div className="flex flex-col gap-4 mb-4 w-full min-w-0 max-w-full overflow-hidden">
-								{/* Executive Summary Section */}
+							<div className="flex flex-col gap-4 mb-4">
+								{/* Batch Summary Box if present */}
 								{displayedSummary && (
-									<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950 mb-4">
+									<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950">
 										<div className="flex items-center gap-2 text-blue-600 mb-2">
 											<RiSparklingLine className="size-5" />
 											<h3 className="font-semibold text-sm">Executive Summary</h3>
@@ -250,6 +259,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 									setIsEditMode={(v) => setEditModes((prev) => ({ ...prev, [doc.id]: v }))}
 									headerNode={headerNode}
 									preHeaderNode={preHeaderNode}
+									onDeleteSuccess={handleDeleteSuccess}
 								/>
 							</div>
 						);

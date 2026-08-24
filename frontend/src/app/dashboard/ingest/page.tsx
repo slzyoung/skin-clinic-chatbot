@@ -6,27 +6,44 @@ import {
 	RiMedicineBottleLine,
 	RiRobot2Line,
 	RiSyringeLine,
-	RiAlertLine
+	RiAlertLine,
 } from "@remixicon/react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState, useMemo, Suspense } from "react";
 import { useUploadKnowledge, useIngestionQuota } from "../knowledge/hooks/use-knowledge";
+import { useProjects } from "../knowledge/hooks/use-projects";
 
-export default function IngestPage() {
+function IngestContent() {
 	const router = useRouter();
+	const searchParams = useSearchParams();
+	const projectId = searchParams.get("projectId") || searchParams.get("project_id");
+
+	const { data: projects = [] } = useProjects();
 	const uploadMutation = useUploadKnowledge();
 	const { data: quota } = useIngestionQuota();
 
+	const [selectedProjectId, setSelectedProjectId] = useState<string>(projectId || "none");
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
+	const [promptValue, setPromptValue] = useState("");
 
-	const handleSend = (value: string, category: string | undefined, files: File[]) => {
+	const selectedProjectName = useMemo(() => {
+		if (!selectedProjectId || selectedProjectId === "none") {
+			return "No Project";
+		}
+		const found = projects.find((p) => p.id === selectedProjectId);
+		return found ? found.name : "Select Project";
+	}, [selectedProjectId, projects]);
+
+	const handleSend = (value: string, _category: string | undefined, files: File[]) => {
 		if (files.length === 0) {
 			setErrorMsg("Please attach at least one file to ingest.");
-			return false;
-		}
-
-		if (!category) {
-			setErrorMsg("Please select a category.");
 			return false;
 		}
 
@@ -36,7 +53,11 @@ export default function IngestPage() {
 		if (value) {
 			formData.append("prompt", value);
 		}
-		formData.append("category_type", category.toUpperCase());
+
+		const targetProject = selectedProjectId !== "none" ? selectedProjectId : null;
+		if (targetProject) {
+			formData.append("project_id", targetProject);
+		}
 
 		files.forEach((file) => {
 			formData.append("file", file);
@@ -49,6 +70,10 @@ export default function IngestPage() {
 					router.push(`/dashboard/knowledge/batch/${batchId}`);
 				} else if (data.documents && data.documents.length > 0) {
 					router.push(`/dashboard/knowledge/${data.documents[0].knowledge_id}`);
+				} else if (targetProject) {
+					router.push(`/dashboard/knowledge/project/${targetProject}`);
+				} else {
+					router.push("/dashboard/knowledge");
 				}
 			},
 		});
@@ -101,14 +126,22 @@ export default function IngestPage() {
 
 			{/* Shortcuts */}
 			<div className="grid grid-cols-2 gap-3 w-full mb-4 shrink-0">
-				<button className="flex flex-col items-start p-2.5 text-left rounded-md border border-border hover:border-zinc-300 hover:bg-zinc-50 transition-colors">
+				<button
+					type="button"
+					onClick={() => setPromptValue("Can you suggest a product for this condition...")}
+					className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+				>
 					<RiMedicineBottleLine className="size-4 text-zinc-950 mb-1.5" />
 					<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Product Knowledge</h3>
 					<p className="text-[11px] leading-tight text-zinc-500">
 						Can you suggest a product for this condition...
 					</p>
 				</button>
-				<button className="flex flex-col items-start p-2.5 text-left rounded-md border border-border hover:border-zinc-300 hover:bg-zinc-50 transition-colors">
+				<button
+					type="button"
+					onClick={() => setPromptValue("Could you recommend a treatment for this condition...")}
+					className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+				>
 					<RiSyringeLine className="size-4 text-zinc-950 mb-1.5" />
 					<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Treatment Recomendation</h3>
 					<p className="text-[11px] leading-tight text-zinc-500">
@@ -120,27 +153,71 @@ export default function IngestPage() {
 			{/* Prompt Input */}
 			<div className="shrink-0 mt-4 flex flex-col items-center relative">
 				<div className="w-full">
-					<PromptInput minRows={3} onSend={handleSend} disabled={uploadMutation.isPending} />
+					<PromptInput
+						key={promptValue}
+						defaultValue={promptValue}
+						minRows={3}
+						onSend={handleSend}
+						showAttachText={true}
+						attachText="Add files"
+						disabled={uploadMutation.isPending}
+					/>
 				</div>
 
 				{errorMsg && (
-					<div className="w-full mt-2 flex items-center text-[13px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-md p-2.5">
+					<div className="w-full mt-2 flex items-center text-[13px] font-medium text-amber-600 bg-amber-50 border border-amber-200/80 rounded-lg p-2.5">
 						<RiAlertLine className="size-4 mr-1.5 shrink-0" />
 						{errorMsg}
 					</div>
 				)}
 
+				{/* Project Attachment Selector below chat prompt on right */}
+				<div className="w-full flex items-center justify-end mt-3 px-0.5">
+					<div className="flex items-center gap-2 max-w-full">
+						<span className="text-xs text-zinc-500 font-medium shrink-0">Attach to Project:</span>
+						<Select
+							value={selectedProjectId}
+							onValueChange={(val) => setSelectedProjectId(val ?? "none")}
+							disabled={uploadMutation.isPending}
+						>
+							<SelectTrigger className="h-8 text-xs border-zinc-200/80 bg-white text-zinc-700 rounded-lg px-2.5 min-w-36 max-w-56 sm:max-w-72 shadow-none hover:border-zinc-300 transition-colors">
+								<SelectValue placeholder="Select Project" className="truncate">
+									{selectedProjectName}
+								</SelectValue>
+							</SelectTrigger>
+							<SelectContent align="end" alignItemWithTrigger={false} sideOffset={4} className="bg-white max-w-xs">
+								<SelectItem value="none">
+									<span className="truncate">No Project</span>
+								</SelectItem>
+								{projects.map((p) => (
+									<SelectItem key={p.id} value={p.id}>
+										<span className="truncate" title={p.name}>{p.name}</span>
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+				</div>
+
 				{uploadMutation.isPending && (
-					<div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-md z-10 backdrop-blur-sm">
+					<div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-xl z-10 backdrop-blur-sm">
 						<span className="text-sm font-medium text-blue-600">Uploading documents...</span>
 					</div>
 				)}
 
-				<div className="mt-3 px-4 w-fit mx-auto border border-zinc-200 rounded-xl p-2.5 flex items-center justify-center text-xs text-zinc-500 bg-white">
-					<RiFileTextLine className="size-3 mr-2 text-zinc-400" />
+				<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-400 bg-zinc-50/50">
+					<RiFileTextLine className="size-3 mr-1.5 text-zinc-400" />
 					File format including PDF, docx, excel, image
 				</div>
 			</div>
 		</div>
+	);
+}
+
+export default function IngestPage() {
+	return (
+		<Suspense fallback={<div className="p-8 text-center text-sm text-gray-500">Loading ingestion...</div>}>
+			<IngestContent />
+		</Suspense>
 	);
 }
