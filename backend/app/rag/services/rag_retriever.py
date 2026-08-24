@@ -396,11 +396,9 @@ class PromptContextBuilder:
                 if valid_from and valid_until:
                     promo_header = f" | Periode Promo: {valid_from} s/d {valid_until}"
             kid = metadata.get("knowledge_id") or source_file
-            doc_type = metadata.get("document_type")
-            type_header = f" | Type: {doc_type}" if doc_type else ""
             img_header = f" | Image: {image_url}" if image_url else ""
             part = (
-                f"[{idx}] ID: {kid} | Source: {source_file} | Title: {product_name}{type_header}{promo_header}{img_header} | Section: {section} | Page: {page}\n"
+                f"[{idx}] ID: {kid} | Source: {source_file} | Title: {product_name}{promo_header}{img_header} | Section: {section} | Page: {page}\n"
                 f"Content:\n{text.strip()}"
             )
             context_parts.append(part)

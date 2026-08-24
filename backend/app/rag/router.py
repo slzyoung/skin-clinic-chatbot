@@ -61,6 +61,292 @@ def safe_json_loads(json_str: str) -> dict:
 
 router = APIRouter()
 
+def clean_duplicate_headers(text: str) -> str:
+    """
+    Cleans up accidental duplicated consecutive headers or lines in markdown text.
+    For example:
+        ERHA Acneact Acne Spot Gel
+        
+        ERHA Acneact Acne Spot Gel
+    becomes:
+        ## ERHA Acneact Acne Spot Gel
+    """
+    if not text:
+        return ""
+    lines = text.split("\n")
+    cleaned_lines = []
+    prev_line = None
+    for line in lines:
+        stripped = line.strip()
+        # Avoid repeating identical adjacent title lines (e.g. "Title\n\nTitle")
+        if stripped and prev_line and stripped.lower() == prev_line.lower():
+            continue
+        cleaned_lines.append(line)
+        if stripped:
+            prev_line = stripped
+    return "\n".join(cleaned_lines)
+
+
+def extract_sku_and_target(user_prompt: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extracts SKU value and optional product target from user prompt.
+    Supports single and multi-product target prompts.
+    """
+    import re
+    # 1. "SKU <target> : <CODE>" e.g. "SKU Acne Spot Gel: PRO-565346"
+    m0 = re.search(r'\bsku\b\s+(.+?)\s*[:=]\s*([A-Za-z0-9\-_]+)', user_prompt, re.IGNORECASE)
+    if m0:
+        middle = m0.group(1).strip(" :_-\t")
+        code = m0.group(2).strip()
+        if middle and middle.lower() not in ("nomor", "kode", "no", "nya", "dokumen", "produk", "jadi", "menjadi", ""):
+            return code, middle
+
+    # 2. "tambahkan SKU PRO-565346 (untuk|pada|di) <target>"
+    m1 = re.search(r'\bsku\b\s*(?:nomor|kode|no)?\s*[:=\s]?\s*([A-Za-z0-9\-_]+)\s+(?:pada|untuk|di|buat)\s+(.+)', user_prompt, re.IGNORECASE)
+    if m1:
+        code = m1.group(1).strip()
+        target = m1.group(2).strip(" .")
+        if code.lower() not in ("jadi", "menjadi", "none", "null", "tidak", "ada", "kosong", "baru", "untuk", "pada"):
+            return code, target
+
+    # 3. "ganti nomor SKU <target> (jadi|menjadi|adalah) <CODE>"
+    m2 = re.search(r'\bsku\b\s*(?:nomor|kode|no)?\s+(.+?)\s+(?:jadi|menjadi|adalah)\s*([A-Za-z0-9\-_]+)', user_prompt, re.IGNORECASE)
+    if m2:
+        middle = m2.group(1).strip(" :_-\t")
+        code = m2.group(2).strip()
+        if middle and middle.lower() not in ("nomor", "kode", "no", "nya", "dokumen", "produk", "jadi", "menjadi", ""):
+            return code, middle
+        if code.lower() not in ("jadi", "menjadi", "none", "null", "tidak", "ada", "kosong", "baru"):
+            return code, None
+
+    # 4. "ganti SKU (jadi|menjadi|adalah|=|:) <CODE>" or "SKU: <CODE>"
+    m3 = re.search(r'\bsku\b\s*(?:nomor|kode|no)?\s*(?:jadi|menjadi|adalah|=|:|\s)\s*([A-Za-z0-9\-_]+)', user_prompt, re.IGNORECASE)
+    if m3:
+        cand = m3.group(1).strip()
+        if cand.lower() not in ("jadi", "menjadi", "none", "null", "tidak", "ada", "kosong", "baru", "untuk", "pada", "di", "nomor", "kode", "no"):
+            return cand, None
+
+    # 5. Fallback 'kode sku ...' or 'nomor sku ...'
+    m4 = re.search(r'(?:nomor|kode)\s+sku\s*(?:jadi|menjadi|adalah|=|:|\s)?\s*([A-Za-z0-9\-_]+)', user_prompt, re.IGNORECASE)
+    if m4:
+        cand = m4.group(1).strip()
+        if cand.lower() not in ("jadi", "menjadi", "none", "null", "tidak", "ada", "kosong", "baru", "untuk", "pada"):
+            return cand, None
+
+    return None, None
+
+
+def extract_price_and_target(user_prompt: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extracts Price value and optional product target from user prompt.
+    """
+    import re
+    # 1. "harga <target> (jadi|menjadi|adalah|=|:) Rp 50.000"
+    m1 = re.search(r'\b(?:harga|price|tarif|biaya)\b\s+(.+?)\s+(?:jadi|menjadi|adalah|=|:)\s*(?:rp\.?\s*)?([0-9\.\,]+)', user_prompt, re.IGNORECASE)
+    if m1:
+        middle = m1.group(1).strip(" :_-\t")
+        raw_price = m1.group(2).strip()
+        target_hint = middle if middle.lower() not in ("nya", "produk", "dokumen", "jadi", "menjadi", "") else None
+        return f"Rp {raw_price}" if not raw_price.lower().startswith("rp") else raw_price, target_hint
+
+    # 2. "harga (jadi|menjadi|=|:|\s)* (rp 50.000) (pada|untuk|di|buat) <target>"
+    m2 = re.search(r'\b(?:harga|price|tarif|biaya)\b\s*(?:jadi|menjadi|adalah|=|:|\s)?\s*(?:rp\.?\s*)?([0-9\.\,]+)\s+(?:pada|untuk|di|buat)\s+(.+)', user_prompt, re.IGNORECASE)
+    if m2:
+        raw_price = m2.group(1).strip()
+        target = m2.group(2).strip(" .")
+        return f"Rp {raw_price}" if not raw_price.lower().startswith("rp") else raw_price, target
+
+    # 3. Simple "harga jadi Rp 50.000" or "harga: 50.000"
+    m3 = re.search(r'\b(?:harga|price|tarif|biaya)\b\s*(?:jadi|menjadi|adalah|=|:|\s)?\s*(?:rp\.?\s*)?([0-9\.\,]+)', user_prompt, re.IGNORECASE)
+    if m3:
+        raw_price = m3.group(1).strip()
+        return f"Rp {raw_price}" if not raw_price.lower().startswith("rp") else raw_price, None
+
+    return None, None
+
+
+def apply_refinements_to_content(
+    user_prompt: str,
+    summary: str,
+    chunks: List[Dict[str, Any]],
+    title: Optional[str] = None
+) -> tuple[str, List[Dict[str, Any]], Optional[str], Optional[str]]:
+    """
+    Applies deterministic field overrides for SKU, Price, and Title if commanded in user_prompt,
+    with full support for single-product and multi-product documents.
+    Ensures that modifications targeted at a specific product apply ONLY to that product's section and chunks.
+    """
+    import re
+    updated_summary = clean_duplicate_headers(summary or "")
+    updated_title = title
+    extracted_sku, sku_target = extract_sku_and_target(user_prompt)
+    extracted_price, price_target = extract_price_and_target(user_prompt)
+
+    # Split summary into product sections if multi-product
+    # Split by H2 headers (##) or "Informasi Produk" or "Product Overview"
+    product_section_pattern = r'(?=(?:^|\n)##\s+[^\n]+|(?:^|\n)Informasi Produk\s+[^\n]+)'
+    sections = [s for s in re.split(product_section_pattern, updated_summary) if s]
+
+    if len(sections) > 1 and (extracted_sku or extracted_price):
+        new_sections = []
+        for sec in sections:
+            sec_lower = sec.lower()
+            
+            # Check if this section is the target for SKU
+            is_sku_target = True
+            if sku_target:
+                sku_target_clean = sku_target.lower()
+                target_words = [w for w in re.findall(r'\b[a-zA-Z0-9]{3,}\b', sku_target_clean) if w not in ('erha', 'acneact', 'the', 'and', 'for', 'product', 'overview')]
+                if target_words:
+                    is_sku_target = any(tw in sec_lower for tw in target_words)
+
+            # Check if this section is the target for Price
+            is_price_target = True
+            if price_target:
+                price_target_clean = price_target.lower()
+                target_words = [w for w in re.findall(r'\b[a-zA-Z0-9]{3,}\b', price_target_clean) if w not in ('erha', 'acneact', 'the', 'and', 'for', 'product', 'overview')]
+                if target_words:
+                    is_price_target = any(tw in sec_lower for tw in target_words)
+
+            sec_updated = sec
+            if extracted_sku and is_sku_target:
+                if re.search(r'((?:-\s*)?\*{0,2}SKU\*{0,2}\s*:)[^\n]+', sec_updated, re.IGNORECASE):
+                    sec_updated = re.sub(r'((?:-\s*)?\*{0,2}SKU\*{0,2}\s*:)[^\n]+', r'\1 ' + extracted_sku, sec_updated, count=1, flags=re.IGNORECASE)
+                elif re.search(r'((?:-\s*)?\*{0,2}Product Name\*{0,2}\s*:[^\n]+)', sec_updated, re.IGNORECASE):
+                    sec_updated = re.sub(r'((?:-\s*)?\*{0,2}Product Name\*{0,2}\s*:[^\n]+)', r'\1\n- **SKU**: ' + extracted_sku, sec_updated, count=1, flags=re.IGNORECASE)
+                elif re.search(r'(#{0,3}\s*Product Overview\b[^\n]*)', sec_updated, re.IGNORECASE):
+                    sec_updated = re.sub(r'(#{0,3}\s*Product Overview\b[^\n]*)', r'\1\n- **SKU**: ' + extracted_sku, sec_updated, count=1, flags=re.IGNORECASE)
+
+            if extracted_price and is_price_target:
+                if re.search(r'((?:-\s*)?\*{0,2}(?:Price|Harga)\*{0,2}\s*:)[^\n]+', sec_updated, re.IGNORECASE):
+                    sec_updated = re.sub(r'((?:-\s*)?\*{0,2}(?:Price|Harga)\*{0,2}\s*:)[^\n]+', r'\1 ' + extracted_price, sec_updated, count=1, flags=re.IGNORECASE)
+                elif re.search(r'((?:-\s*)?\*{0,2}Net Content\*{0,2}\s*:[^\n]+)', sec_updated, re.IGNORECASE):
+                    sec_updated = re.sub(r'((?:-\s*)?\*{0,2}Net Content\*{0,2}\s*:[^\n]+)', r'\1\n- **Harga**: ' + extracted_price, sec_updated, count=1, flags=re.IGNORECASE)
+                elif re.search(r'(#{0,3}\s*Product Overview\b[^\n]*)', sec_updated, re.IGNORECASE):
+                    sec_updated = re.sub(r'(#{0,3}\s*Product Overview\b[^\n]*)', r'\1\n- **Harga**: ' + extracted_price, sec_updated, count=1, flags=re.IGNORECASE)
+
+            new_sections.append(sec_updated)
+        updated_summary = "".join(new_sections)
+    else:
+        # Single-product document
+        if extracted_sku:
+            if re.search(r'((?:-\s*)?\*{0,2}SKU\*{0,2}\s*:)[^\n]+', updated_summary, re.IGNORECASE):
+                updated_summary = re.sub(r'((?:-\s*)?\*{0,2}SKU\*{0,2}\s*:)[^\n]+', r'\1 ' + extracted_sku, updated_summary, count=1, flags=re.IGNORECASE)
+            else:
+                if re.search(r'((?:-\s*)?\*{0,2}Brand\*{0,2}\s*:[^\n]+)', updated_summary, re.IGNORECASE):
+                    updated_summary = re.sub(r'((?:-\s*)?\*{0,2}Brand\*{0,2}\s*:[^\n]+)', r'\1\n- **SKU**: ' + extracted_sku, updated_summary, count=1, flags=re.IGNORECASE)
+                elif re.search(r'((?:-\s*)?\*{0,2}Product Name\*{0,2}\s*:[^\n]+)', updated_summary, re.IGNORECASE):
+                    updated_summary = re.sub(r'((?:-\s*)?\*{0,2}Product Name\*{0,2}\s*:[^\n]+)', r'\1\n- **SKU**: ' + extracted_sku, updated_summary, count=1, flags=re.IGNORECASE)
+                elif re.search(r'(#{0,3}\s*Product Overview\b[^\n]*)', updated_summary, re.IGNORECASE):
+                    updated_summary = re.sub(r'(#{0,3}\s*Product Overview\b[^\n]*)', r'\1\n- **SKU**: ' + extracted_sku, updated_summary, count=1, flags=re.IGNORECASE)
+                else:
+                    updated_summary += f'\n\n- **SKU**: {extracted_sku}'
+
+        if extracted_price:
+            if re.search(r'((?:-\s*)?\*{0,2}(?:Price|Harga)\*{0,2}\s*:)[^\n]+', updated_summary, re.IGNORECASE):
+                updated_summary = re.sub(r'((?:-\s*)?\*{0,2}(?:Price|Harga)\*{0,2}\s*:)[^\n]+', r'\1 ' + extracted_price, updated_summary, count=1, flags=re.IGNORECASE)
+            else:
+                if re.search(r'((?:-\s*)?\*{0,2}Net Content\*{0,2}\s*:[^\n]+)', updated_summary, re.IGNORECASE):
+                    updated_summary = re.sub(r'((?:-\s*)?\*{0,2}Net Content\*{0,2}\s*:[^\n]+)', r'\1\n- **Harga**: ' + extracted_price, updated_summary, count=1, flags=re.IGNORECASE)
+                elif re.search(r'(#{0,3}\s*Product Overview\b[^\n]*)', updated_summary, re.IGNORECASE):
+                    updated_summary = re.sub(r'(#{0,3}\s*Product Overview\b[^\n]*)', r'\1\n- **Harga**: ' + extracted_price, updated_summary, count=1, flags=re.IGNORECASE)
+
+    # 3. Synchronize chunks with targeted SKU modifications
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            chunk_text = chunk.get("text", "")
+            chunk_meta = chunk.get("metadata", {})
+            chunk_prod = chunk_meta.get("product_name") or chunk_meta.get("entity") or ""
+            chunk_combined = (chunk_text + " " + chunk_prod).lower()
+            
+            should_update_sku = True
+            if extracted_sku and sku_target:
+                target_words = [w for w in re.findall(r'\b[a-zA-Z0-9]{3,}\b', sku_target.lower()) if w not in ('erha', 'acneact', 'the', 'and', 'for', 'product', 'overview')]
+                if target_words:
+                    should_update_sku = any(tw in chunk_combined for tw in target_words)
+
+            if should_update_sku and extracted_sku:
+                if "metadata" not in chunk or not isinstance(chunk["metadata"], dict):
+                    chunk["metadata"] = {}
+                chunk["metadata"]["sku"] = extracted_sku
+                if re.search(r'((?:-\s*)?\*{0,2}SKU\*{0,2}\s*:)[^\n]+', chunk_text, re.IGNORECASE):
+                    chunk["text"] = re.sub(r'((?:-\s*)?\*{0,2}SKU\*{0,2}\s*:)[^\n]+', r'\1 ' + extracted_sku, chunk_text, count=1, flags=re.IGNORECASE)
+                elif re.search(r'((?:-\s*)?\*{0,2}Brand\*{0,2}\s*:[^\n]+)', chunk_text, re.IGNORECASE):
+                    chunk["text"] = re.sub(r'((?:-\s*)?\*{0,2}Brand\*{0,2}\s*:[^\n]+)', r'\1\n- **SKU**: ' + extracted_sku, chunk_text, count=1, flags=re.IGNORECASE)
+
+    return updated_summary, chunks, updated_title, extracted_sku
+
+
+def align_chunks_with_multitreatment(
+    summary: str,
+    chunks: List[Dict[str, Any]],
+    doc_title: str,
+    doc_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Scans structured summary for treatment/product entities (e.g. '## 1. Acne Intensive Program', '## Acne Peel Therapy')
+    and aligns chunks so each chunk has the correct entity/treatment name in its metadata,
+    and prepends the entity header if missing from chunk text for crystal-clear RAG retrieval.
+    """
+    import re
+    if not summary or not chunks:
+        return chunks
+
+    # Extract all H2 treatment/product names from summary
+    entity_matches = re.findall(r'(?:^|\n)##\s+(?:\d+[\.\)]\s*)?([^\n]+)', summary)
+    entities = [e.strip() for e in entity_matches if e.strip() and not e.strip().lower().startswith(('kategori', 'overview', 'ringkasan', 'panduan', 'informasi'))]
+    
+    if not entities:
+        return chunks
+
+    sorted_entities = sorted(entities, key=len, reverse=True)
+
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        chunk_text = chunk.get("text", "")
+        if not chunk_text:
+            continue
+        if "metadata" not in chunk or not isinstance(chunk["metadata"], dict):
+            chunk["metadata"] = {}
+        chunk_meta = chunk["metadata"]
+        chunk_lower = chunk_text.lower()
+        
+        # 1. Exact substring match (longest entity first)
+        matched_entity = None
+        for ent in sorted_entities:
+            if ent.lower() in chunk_lower:
+                matched_entity = ent
+                break
+        
+        # 2. Token overlap score if no exact substring match
+        if not matched_entity:
+            best_score = 0
+            for ent in entities:
+                ent_words = [w for w in re.findall(r'\b[a-zA-Z0-9]{3,}\b', ent.lower()) if w not in ('erha', 'and', 'for', 'the', 'treatment', 'program', 'therapy', 'center')]
+                if ent_words:
+                    score = sum(1 for w in ent_words if w in chunk_lower) / len(ent_words)
+                    if score > best_score and score >= 0.5:
+                        best_score = score
+                        matched_entity = ent
+
+        if matched_entity:
+            chunk_meta["product_name"] = matched_entity
+            chunk_meta["entity"] = matched_entity
+            # If chunk text doesn't start with the entity header, prepend it for retrieval clarity
+            if not re.search(r'^(?:#+\s+|\d+\.\s+)' + re.escape(matched_entity), chunk_text, re.IGNORECASE):
+                chunk["text"] = f"## {matched_entity}\n\n{chunk_text}"
+        else:
+            if not chunk_meta.get("product_name"):
+                chunk_meta["product_name"] = doc_title
+
+        chunk_meta["title"] = doc_title
+        if doc_type:
+            chunk_meta["document_type"] = doc_type
+
+    return chunks
+
+
 def resolve_pending_file(knowledge_id: str) -> Optional[str]:
     pending_dir = "data/pending"
     if not os.path.exists(pending_dir):
@@ -412,13 +698,55 @@ async def process_ingestion_background(
                     4. **Professional Markdown Formatting**:
                        - Fix any OCR noise, broken line breaks, or formatting typos while preserving 100% factual accuracy.
                        - Start directly with `# [Document Title]`. Do NOT add meta introductions like "Here is the summary".
-                    5. **DO NOT Include Category Sections in Markdown Body**:
+                    5. **Zero Redundancy & Clean Natural Phrasing (STRICT)**:
+                        - Do NOT duplicate tables, bullet points, or identical sentences across different sections.
+                        - Maintain concise, clean, and distinct sections without circular phrasing.
+                        - Write in fluent, natural, and precise language suitable for clinical doctors and functional administrators, ensuring sentences are cohesive and well-connected.
+                        - For individual product documents, prioritize a clear `## Product Overview`, a fluent 1-paragraph `## Deskripsi & Fungsi Produk` (which summarizes what the product is, intended skin types, key benefits, and usage context in one cohesive narrative), and `## Active Ingredients`.
+                    6. **Dynamic Fields & Single SKU Identifier**:
+                       - If a product or document has a SKU, place `- **SKU**: [Kode SKU]` directly below Brand or Product Name.
+                       - NEVER spill/write empty placeholders (e.g. do NOT write 'SKU: None', 'Product ID: N/A', or 'Not visible'). If any information is absent, omit that field completely.
+                    7. **DO NOT Include Category Sections in Markdown Body**:
                        - Categories belong ONLY in the `suggested_categories` JSON field, as the user interface already displays and manages categories separately via UI badge tags.
+                    8. **Multi-Product / Catalog Document Structuring (CRITICAL)**:
+                       - If the document contains MULTIPLE products (e.g. Spot Gel AND Pressed Powder, or a full product series):
+                         - Give the document a collective title in `# [Title]` (e.g. `# Katalog ERHA Acneact Series` or `# Rangkaian Produk ERHA Acneact`).
+                         - Separate EACH individual product into its own distinct `## [Product Name]` section (e.g. `## ERHA Acneact Acne Spot Gel`, `## ERHA Acneact Acne Pressed Powder`).
+                         - Under each product section, provide:
+                           - `### Product Overview` with its specific `- **Product Name**`, `- **Brand**`, `- **Variant**`, `- **Product Type**`, `- **Intended Skin Types**`, `- **Net Content**`, `- **Harga**`, `- **SKU**`.
+                           - `### Deskripsi & Fungsi Produk` (Clear 1-paragraph narrative).
+                           - `### Active Ingredients` & `### Cara Penggunaan` (if present).
+                         - NEVER duplicate product titles consecutively (e.g. do NOT output `ERHA Acneact Acne Spot Gel\n\nERHA Acneact Acne Spot Gel`).
+                         - Keep each product's SKU, price, and specifications completely distinct and strictly local to that product.
+                         - Recommend ALL relevant categories in `suggested_categories` covering all products in the document.
+                    9. **Multi-Treatment / Clinic Protocol Structuring (CRITICAL)**:
+                       - If the document contains CLINICAL TREATMENTS, AESTHETIC PROCEDURES, or MULTI-TREATMENT PROTOCOLS (e.g. Acne Intensive Program, Acne Peel Therapy, Blue Light Therapy, Deep Acne Extraction, Microneedling, Facial):
+                         - Give the main title in `# [Document Title]` (e.g. `# ERHA Acne Center Treatments`).
+                         - Separate EACH individual treatment into its own distinct numbered header: `## 1. [Treatment Name]`, `## 2. [Treatment Name]`, etc.
+                         - Under EACH treatment, format all clinical details with clear, standard Markdown sections:
+                           - `- **Kategori Treatment**: [Category Name, e.g. Acne Treatment / Chemical Peel / LED Therapy / Scar Treatment / Facial Treatment]`
+                           - `### Deskripsi Treatment` (1 fluent narrative paragraph detailing what the treatment is, mechanism, and target patient).
+                           - `### Indikasi & Target Kondisi Kulit (Cocok Untuk)` (Structured compact bullet points `- ` without empty lines between items).
+                           - `### Kontraindikasi (Tidak Disarankan Untuk)` (Structured compact bullet points `- `, if present).
+                           - `### Manfaat & Hasil yang Diharapkan` (Structured compact bullet points `- `).
+                           - `### Persiapan Sebelum Tindakan (Pre-Care)` (Structured compact bullet points `- `, if present).
+                           - `### Tahapan Prosedur Treatment` (Ordered numbered list `1. ...` or compact bullet points `- `).
+                           - `### Kandungan & Bahan Aktif` (Structured compact bullet points `- [Bahan Aktif / Peeling Agent]`, if present).
+                           - `### Informasi & Parameter Prosedur` (Crisp Markdown Table `| Parameter | Keterangan |\n| :--- | :--- |\n| Durasi | ... |\n| Downtime | ... |\n| Jumlah Sesi | ... |\n| Interval | ... |`).
+                           - `### Perawatan Setelah Tindakan (Aftercare)` (Structured compact bullet points `- `).
+                           - `### Efek Samping & Pemulihan` (Structured compact bullet points `- `).
+                         - Format ALL procedure tables with clean Markdown pipes `| Parameter | Keterangan |\n| :--- | :--- |`.
+                         - Set `document_type` to `"TREATMENT"`.
+                         - Recommend ALL relevant categories in `suggested_categories` (e.g. `Acne Care`, `Scar Treatment`).
+                    10. **Clean, Compact Markdown Formatting (Zero Messiness & Zero Data Loss)**:
+                       - NEVER output loose scattered lines or double blank lines between bullet items. Every list must be tightly formatted with standard `- `.
+                       - Convert all unformatted tab-separated text into standard Markdown tables.
+                       - 100% preservation of all details: retain EVERY treatment, duration, downtime, session count, interval, preparation step, procedure step, aftercare rule, side effect, and ingredient.
 
                     Perform the following tasks:
                     1. **AI Recommended Title (`title`)**: Provide a clean, short, professional document title WITHOUT any prefixes like "Knowledge Ingestment" or "Knowledge Base".
-                    2. **Document Type (`document_type`)**: "PRODUCT" | "TREATMENT" | "PROMOTIONAL" | "SOP" | "GENERAL".
-                    3. **Validity Period (`valid_from` & `valid_until`)**: Date strings in "YYYY-MM-DD" format or null.
+                    2. **Document Type (`document_type`)**: "TREATMENT" for clinical treatments, "PRODUCT" for product catalogs, "PROMOTIONAL" for promo flyers, "SOP" for SOPs, or "GENERAL".
+                    3. **Validity Period (`valid_from` & `valid_until`)**: Date strings in "YYYY-MM-DD" format if document contains promotional validity dates, otherwise null.
                     4. **Structured Full Document Markdown (`summary`)**: Present the complete content in beautifully organized Markdown matching the document's domain.
                     5. **Multi-Category Selection (`suggested_categories`)**: Recommend ALL relevant matching categories (array of objects with "id" and "name") from Available System Categories.
                     6. **Dynamic Executive Feedback (`feedback`)**: Provide a crisp 1-2 sentence executive summary in Indonesian.
@@ -426,12 +754,12 @@ async def process_ingestion_background(
 
                     Return a valid JSON object ONLY:
                     {{
-                        "title": "Promo Diskon Kemerdekaan ERHA AcneAct",
-                        "document_type": "PROMOTIONAL",
-                        "valid_from": "2026-08-01",
-                        "valid_until": "2026-08-31",
-                        "summary": "# Document Title\\n\\n## 1. Section 1\\n- Content...",
-                        "feedback": "Dokumen ini memuat panduan lengkap mengenai [topik dokumen], mencakup [poin-poin utama yang dibahas].",
+                        "title": "ERHA Acne Center Treatments",
+                        "document_type": "TREATMENT",
+                        "valid_from": null,
+                        "valid_until": null,
+                        "summary": "# ERHA Acne Center Treatments\\n\\n## 1. Acne Intensive Program\\n- **Kategori Treatment**: Acne Treatment\\n\\n### Deskripsi Treatment\\nAcne Intensive Program merupakan perawatan komprehensif...\\n\\n### Indikasi & Target Kondisi Kulit (Cocok Untuk)\\n- Acne vulgaris ringan\\n- Mild inflammatory acne\\n\\n### Informasi & Parameter Prosedur\\n| Parameter | Keterangan |\\n| :--- | :--- |\\n| Durasi | 60–75 menit |\\n| Downtime | 1–2 hari |\\n| Jumlah Sesi | 4–8 sesi |\\n| Interval | 2 minggu sekali |",
+                        "feedback": "Dokumen ini memuat panduan lengkap mengenai 6 protokol perawatan jerawat di ERHA Acne Center.",
                         "text_accuracy": "100%",
                         "suggested_categories": [
                             {{
@@ -500,6 +828,14 @@ async def process_ingestion_background(
             "doctors": ["all"]
         }
 
+        # Align chunks with multi-treatment or multi-product sections
+        enriched_chunks = align_chunks_with_multitreatment(
+            summary=summary,
+            chunks=enriched_chunks,
+            doc_title=recommended_title,
+            doc_type=extracted_doc_type
+        )
+
         # Inject metadata cleanly into every chunk with granular category priority, dates, and visibility settings
         cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
         for chunk in enriched_chunks:
@@ -509,7 +845,8 @@ async def process_ingestion_background(
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 chunk["metadata"]["source_file"] = file_name
                 chunk["metadata"]["title"] = recommended_title
-                chunk["metadata"]["product_name"] = recommended_title
+                if not chunk["metadata"].get("product_name"):
+                    chunk["metadata"]["product_name"] = chunk.get("metadata", {}).get("entity") or recommended_title
                 chunk["metadata"]["clinics"] = visibility_settings["clinics"]
                 chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
                 chunk["metadata"]["doctors"] = visibility_settings["doctors"]
@@ -583,19 +920,18 @@ async def process_ingestion_background(
             "document_type": extracted_doc_type,
             "valid_from": extracted_valid_from,
             "valid_until": extracted_valid_until,
-            "text_accuracy": text_accuracy,
-            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
             "summary": summary,
+            "image_url": doc_image_url,
+            "text_accuracy": text_accuracy,
             "feedback": feedback,
             "batch_summary": None,
             "suggested_categories": suggested_categories,
             "visibility_settings": visibility_settings,
+            "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
             "history": history_list,
             "chunks": enriched_chunks,
             "timing_metrics": timing_metrics
         }
-        if doc_image_url:
-            staged_document["image_url"] = doc_image_url
         if doc_s3_key:
             staged_document["s3_key"] = doc_s3_key
             staged_document["storage_key"] = doc_s3_key
@@ -1101,6 +1437,36 @@ async def get_pending_details(knowledge_id: str):
                     if isinstance(c, dict) and c.get("metadata", {}).get("image_url"):
                         data["image_url"] = c["metadata"]["image_url"]
                         break
+
+            # Return in exact PendingDocumentResponse schema order
+            ordered_data = {
+                "knowledge_id": data.get("knowledge_id"),
+                "batch_id": data.get("batch_id"),
+                "file_name": data.get("file_name", "document.pdf"),
+                "file_hash": data.get("file_hash"),
+                "title": data.get("title"),
+                "status": data.get("status", "On review"),
+                "document_type": data.get("document_type"),
+                "valid_from": data.get("valid_from"),
+                "valid_until": data.get("valid_until"),
+                "summary": data.get("summary", ""),
+                "image_url": data.get("image_url"),
+                "text_accuracy": data.get("text_accuracy", "100%"),
+                "feedback": data.get("feedback", ""),
+                "batch_summary": data.get("batch_summary"),
+                "suggested_categories": data.get("suggested_categories", []),
+                "visibility_settings": data.get("visibility_settings", {
+                    "clinics": ["all"],
+                    "doctor_types": ["all"],
+                    "doctors": ["all"]
+                }),
+                "initial_prompt": data.get("initial_prompt"),
+                "history": data.get("history", []),
+                "chunks": data.get("chunks", [])
+            }
+            if data.get("timing_metrics"):
+                ordered_data["timing_metrics"] = data.get("timing_metrics")
+            return ordered_data
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read document details: {e}")
@@ -1109,13 +1475,25 @@ async def get_pending_details(knowledge_id: str):
 @router.post("/ingest/pending/{knowledge_id}/refine", tags=["Ingestion"], response_model=PendingDocumentResponse)
 async def refine_pending_document(
     knowledge_id: str,
-    request: RefineRequest,
-    llm: BaseLLMAdapter = Depends(get_llm)
+    request: str = Form(..., description="Instruksi/prompt untuk menyempurnakan dokumen"),
+    llm: BaseLLMAdapter = Depends(get_llm),
+    file_attachment: Optional[UploadFile] = None
 ):
     """
     Interactively refine a staged document's summary, feedback, or text chunks 
-    using natural language instructions (conversational feedback).
+    using natural language instructions and optional attached file content.
     """
+    # Parse request: accept plain text prompt, JSON {"prompt":"...","history":[...]}, or RefineRequest object
+    if isinstance(request, str):
+        try:
+            parsed = json.loads(request)
+            if isinstance(parsed, dict) and "prompt" in parsed:
+                request = RefineRequest.model_validate(parsed)
+            else:
+                request = RefineRequest(prompt=request, history=[])
+        except (json.JSONDecodeError, ValueError):
+            request = RefineRequest(prompt=request, history=[])
+
     pending_file = resolve_pending_file(knowledge_id)
     if not pending_file:
         raise HTTPException(status_code=404, detail=f"Pending document '{knowledge_id}' not found.")
@@ -1130,6 +1508,39 @@ async def refine_pending_document(
         raise HTTPException(status_code=500, detail="LLM adapter is not configured. Cannot perform refinement.")
         
     try:
+        # 0. Parse attached file if provided
+        attached_file_context = ""
+        attached_file_name = ""
+        if file_attachment:
+            try:
+                temp_dir = "data/temp"
+                os.makedirs(temp_dir, exist_ok=True)
+                attached_file_name = getattr(file_attachment, "filename", "attached_refine_doc")
+                temp_file_path = os.path.join(temp_dir, f"refine_{knowledge_id}_{attached_file_name}")
+                
+                content_bytes = await file_attachment.read()
+                with open(temp_file_path, "wb") as f:
+                    f.write(content_bytes)
+                
+                from app.rag.utils.parser import DocumentParser
+                parser = DocumentParser()
+                parse_res = parser.parse_file(temp_file_path)
+                
+                if parse_res and parse_res.pages:
+                    extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
+                    extracted_text = "\n\n".join(extracted_pages)
+                    attached_file_context = (
+                        f"\n\n--- NEWLY ATTACHED SUPPLEMENTARY FILE: '{attached_file_name}' ---\n"
+                        f"{extracted_text}\n"
+                        f"--- END OF ATTACHED FILE CONTENT ---\n"
+                    )
+                    logger.info(f"📄 Successfully parsed attached file '{attached_file_name}' for pending refine (knowledge_id='{knowledge_id}').")
+                
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+            except Exception as att_err:
+                logger.warning(f"Failed to parse attached file in pending refine: {att_err}")
+
         # Fetch categories from DB for LLM recommendation
         db_categories = []
         try:
@@ -1164,47 +1575,66 @@ async def refine_pending_document(
         else:
             history_str = "No previous refinement history.\n"
 
-        # Prompt Gemini to refine the staged data based on instructions & history
+        attached_prompt_note = f"\n\nNote: The user attached a new file '{attached_file_name}'. Merge and combine its facts, composition, prices, or claims with the existing staged document data." if attached_file_context else ""
+
+        # Prompt Gemini to refine the staged data based on instructions & history & attached file
         refine_prompt = f"""
-        You are an intelligent medical aesthetic AI validator for ERHA (PT Arya Noble) knowledge base.
-        You are refining a staged document's review data based on user instructions and multi-turn conversation history.
-        
-        Staged Document:
-        {json.dumps(staged_data, indent=2, ensure_ascii=False)}
-        
-        Available System Categories:
-        {json.dumps(db_categories, ensure_ascii=False)}
-        
+        You are an intelligent medical aesthetic AI editor and validator for the ERHA (PT Arya Noble) knowledge base.
+        Your task is to refine and update the staged document strictly according to the user's explicit command.
+
+        ======================================================================
+        CRITICAL USER EDIT INSTRUCTION (HIGHEST PRIORITY - YOU MUST EXECUTE THIS):
+        "{request.prompt}"
+        ======================================================================
+
         Conversation History:
         {history_str}
-        
-        Latest User Instruction:
-        "{request.prompt}"
-        
-        Refine the document with Smart Chunk Category Tagging & Invalid Category Safety Rules:
-        1. If the instruction asks to update or correct text (e.g. "perbaiki struktur", "translate ke Indonesia"), update the "summary" and the "text" in the "chunks" list.
-        2. **Smart Category Re-mapping**: If categories are added/removed/updated in "suggested_categories", evaluate each chunk's text and update its `metadata.category` and `metadata.categories` array to match ONLY the relevant category for that chunk.
-        3. **Invalid Category Alert Guard**: If a requested category has NO factual/medical basis anywhere in the document chunks (e.g. adding "Psoriasis Care" to a pure Acne document), DO NOT tag any chunk with that category. Append an executive warning note in `feedback` (e.g. "⚠️ Warning: Category 'Psoriasis Care' has no matching content in this document and was excluded from chunk search filters.").
-        4. Recalculate or update the "text_accuracy" and "feedback" to accurately reflect the changes made.
-        
-        You must return a valid JSON object ONLY. Do not wrap in markdown block code like ```json.
-        The JSON object must have EXACTLY the same structure as the Staged Document, containing these keys:
+
+        Current Staged Document Data:
+        {json.dumps(staged_data, indent=2, ensure_ascii=False)}
+        {attached_file_context}
+        Available System Categories:
+        {json.dumps(db_categories, ensure_ascii=False)}
+
+        REFINEMENT EXECUTION RULES:
+        1. **Direct Value & Text Editing (MANDATORY)**:
+           - You MUST strictly apply any modifications requested in the User Instruction (e.g. changing SKU, price, volume, ingredients, title, text, translation, or claims).
+           - If user commands "ganti nomor SKU Spot Gel jadi PRO-565346", you MUST update the SKU value for Spot Gel in the `summary` markdown and chunk text.
+           - If user commands to change price, volume, or ingredients, update the `summary` and chunks accordingly.
+        2. **Multi-Product / Multi-Treatment / Multi-Item Awareness (CRITICAL)**:
+           - When the document contains MULTIPLE products or MULTIPLE clinical treatments (e.g. Acne Intensive Program, Acne Peel Therapy, Microneedling, etc.):
+             - If the user instruction targets a SPECIFIC product or treatment (e.g. "Spot Gel" or "Acne Peel Therapy" or "Microneedling"), update ONLY that specific item's section, SKU, price, procedure parameters, and chunks.
+             - PRESERVE all other products' and treatments' sections, parameters, descriptions, and chunks completely intact without overwriting or copying values across items.
+             - If the user instruction is document-wide (e.g. translation, reformatting, disclaimer), apply it across all sections while preserving each item's specific attributes.
+             - NEVER duplicate titles consecutively (e.g. avoid repeating headers twice in a row).
+             - Keep all tables formatted in standard Markdown (`| Parameter | Keterangan |`).
+        3. **Consistency Across Summary and Chunks**:
+           - Any fact, SKU, number, or text updated in `summary` MUST also be updated in the `chunks` text so that retrieval indexing stays 100% synchronized.
+        4. **Category Management**:
+           - If the user asks to add/change categories, update `suggested_categories` and `metadata.categories` of the chunks accordingly.
+        5. **Executive Feedback**:
+           - Provide a clear, natural Indonesian sentence in `feedback` explaining what was updated based on the user's prompt (e.g. "Nomor SKU berhasil diperbarui sesuai instruksi.").
+        6. **No Regressions**:
+           - Preserve image markdown `![Title](image_url)` and other existing accurate details unless explicitly instructed to change them.
+
+        Return a valid JSON object ONLY (do not wrap in markdown code block like ```json):
         {{
-            "knowledge_id": "id",
-            "file_name": "filename",
+            "knowledge_id": "{staged_data.get('knowledge_id', knowledge_id)}",
+            "file_name": "{staged_data.get('file_name', knowledge_id)}",
+            "title": "{staged_data.get('title', 'Document Title')}",
             "status": "On review",
-            "summary": "updated summary markdown",
+            "summary": "updated summary markdown with exact user changes applied",
             "text_accuracy": "100%",
-            "feedback": "updated executive feedback bubble with any category warnings if applicable",
+            "feedback": "Perubahan berhasil diterapkan sesuai instruksi.",
             "suggested_categories": [
                 {{"id": "category_id", "name": "category_name"}}
             ],
             "chunks": [
                 {{
-                    "text": "updated chunk text",
+                    "text": "updated chunk text with exact user changes applied",
                     "metadata": {{
-                        "knowledge_id": "id",
-                        "source_file": "filename",
+                        "knowledge_id": "{staged_data.get('knowledge_id', knowledge_id)}",
+                        "source_file": "{staged_data.get('file_name', knowledge_id)}",
                         "category": "Acne Care",
                         "categories": ["Acne Care"]
                     }}
@@ -1229,6 +1659,25 @@ async def refine_pending_document(
 
         # Remove legacy type if present
         updated_data.pop("type", None)
+
+        # Apply deterministic refinements for SKU, Price, and chunk synchronization
+        cur_summary = updated_data.get("summary") or staged_data.get("summary", "")
+        cur_chunks = updated_data.get("chunks") or staged_data.get("chunks", [])
+        cur_title = updated_data.get("title") or staged_data.get("title") or staged_data.get("file_name", k_id)
+        
+        refined_summary, refined_chunks, refined_title, refined_sku = apply_refinements_to_content(
+            user_prompt=request.prompt,
+            summary=cur_summary,
+            chunks=cur_chunks,
+            title=cur_title
+        )
+        updated_data["summary"] = refined_summary
+        updated_data["chunks"] = refined_chunks
+        if refined_title:
+            updated_data["title"] = refined_title
+        if refined_sku:
+            updated_data["sku"] = refined_sku
+            updated_data["feedback"] = f"Nomor SKU berhasil diperbarui menjadi {refined_sku}."
 
         # Build updated multi-turn conversation history
         existing_hist = staged_data.get("history", [])
@@ -1256,7 +1705,8 @@ async def refine_pending_document(
                 chunk["metadata"]["knowledge_id"] = k_id
                 chunk["metadata"]["source_file"] = doc_file_name
                 chunk["metadata"]["title"] = doc_title
-                chunk["metadata"]["product_name"] = doc_title
+                if not chunk["metadata"].get("product_name"):
+                    chunk["metadata"]["product_name"] = chunk.get("metadata", {}).get("entity") or doc_title
                 if doc_type:
                     chunk["metadata"]["document_type"] = doc_type
                 if doc_valid_from:
@@ -1274,11 +1724,45 @@ async def refine_pending_document(
                     chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
                     chunk["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
         
-        # Save the updated data back
+        # Save the updated data back in exact requested schema order
+        final_updated_data = {
+            "knowledge_id": k_id,
+            "batch_id": doc_batch_id,
+            "file_name": doc_file_name,
+            "file_hash": doc_file_hash,
+            "title": doc_title,
+            "status": updated_data.get("status") or staged_data.get("status", "On review"),
+            "document_type": doc_type,
+            "valid_from": doc_valid_from,
+            "valid_until": doc_valid_until,
+            "summary": updated_data.get("summary", ""),
+            "image_url": doc_img_url,
+            "text_accuracy": updated_data.get("text_accuracy") or staged_data.get("text_accuracy", "100%"),
+            "feedback": updated_data.get("feedback") or staged_data.get("feedback", ""),
+            "batch_summary": updated_data.get("batch_summary") or staged_data.get("batch_summary"),
+            "suggested_categories": updated_data.get("suggested_categories", []),
+            "visibility_settings": vis_settings,
+            "initial_prompt": updated_data.get("initial_prompt") or staged_data.get("initial_prompt"),
+            "history": new_hist,
+            "chunks": updated_data.get("chunks", [])
+        }
+        if staged_data.get("timing_metrics"):
+            final_updated_data["timing_metrics"] = staged_data.get("timing_metrics")
+
+        # If part of a multi-file batch, re-synthesize updated batch executive summary
+        batch_id_val = final_updated_data.get("batch_id")
+        if batch_id_val and llm:
+            try:
+                b_summary = await synthesize_batch_executive_summary(batch_id_val, llm)
+                if b_summary:
+                    final_updated_data["batch_summary"] = b_summary
+            except Exception as b_err:
+                logger.warning(f"Could not update batch summary after refine: {b_err}")
+
         with open(pending_file, "w", encoding="utf-8") as f:
-            json.dump(updated_data, f, indent=4, ensure_ascii=False)
+            json.dump(final_updated_data, f, indent=4, ensure_ascii=False)
             
-        return updated_data
+        return final_updated_data
     except Exception as e:
         logger.error(f"Refinement failed for document '{knowledge_id}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to refine document: {e}")
@@ -1315,6 +1799,7 @@ async def list_all_documents():
 
                         docs.append(DocumentListItem(
                             knowledge_id=k_id,
+                            batch_id=data.get("batch_id") or first_chunk_meta.get("batch_id"),
                             file_name=data.get("file_name", fallback_id),
                             product_name=first_chunk_meta.get("product_name"),
                             status=data.get("status", "On review"),
@@ -1366,8 +1851,17 @@ async def list_all_documents():
                         doc_type = doc_type.capitalize()
 
                     if k_id not in seen_ids:
+                        batch_id_val = None
+                        if isinstance(data, dict):
+                            batch_id_val = data.get("batch_id")
+                            if not batch_id_val and chunks and isinstance(chunks[0], dict):
+                                batch_id_val = chunks[0].get("metadata", {}).get("batch_id")
+                        elif isinstance(data, list) and chunks and isinstance(chunks[0], dict):
+                            batch_id_val = chunks[0].get("metadata", {}).get("batch_id")
+
                         docs.append(DocumentListItem(
                             knowledge_id=k_id,
+                            batch_id=batch_id_val,
                             file_name=file_name,
                             product_name=product_name,
                             status="Approved",
@@ -1670,8 +2164,6 @@ async def edit_pending_document(
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
 
         return existing_doc
-
-        return existing_doc
     except HTTPException:
         raise
     except Exception as e:
@@ -1682,16 +2174,28 @@ async def edit_pending_document(
 @router.post("/ingest/approved/{knowledge_id}/refine", tags=["Ingestion"])
 async def refine_approved_document(
     knowledge_id: str,
-    request: RefineRequest,
+    request: str = Form(..., description="Instruksi/prompt untuk menyempurnakan dokumen"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index),
     vector_store: BaseVectorStoreAdapter = Depends(get_vector_store),
-    llm: BaseLLMAdapter = Depends(get_llm)
+    llm: BaseLLMAdapter = Depends(get_llm),
+    file_attachment: Optional[UploadFile] = None
 ):
     """
     Refines an approved document's summary, categories, and chunks using natural language AI instructions.
     Automatically re-indexes into PGVector & BM25, and updates PostgreSQL KnowledgeCategory table.
     """
+    # Parse request: accept plain text prompt, JSON {"prompt":"...","history":[...]}, or RefineRequest object
+    if isinstance(request, str):
+        try:
+            parsed = json.loads(request)
+            if isinstance(parsed, dict) and "prompt" in parsed:
+                request = RefineRequest.model_validate(parsed)
+            else:
+                request = RefineRequest(prompt=request, history=[])
+        except (json.JSONDecodeError, ValueError):
+            request = RefineRequest(prompt=request, history=[])
+
     approved_file = resolve_approved_file(knowledge_id)
     if not approved_file:
         raise HTTPException(status_code=404, detail=f"Approved document '{knowledge_id}' not found.")
@@ -1702,6 +2206,39 @@ async def refine_approved_document(
     try:
         with open(approved_file, "r", encoding="utf-8") as f:
             existing_doc = json.load(f)
+
+        # 0. Parse attached file if provided
+        attached_file_context = ""
+        attached_file_name = ""
+        if file_attachment:
+            try:
+                temp_dir = "data/temp"
+                os.makedirs(temp_dir, exist_ok=True)
+                attached_file_name = getattr(file_attachment, "filename", "attached_refine_doc")
+                temp_file_path = os.path.join(temp_dir, f"refine_approved_{knowledge_id}_{attached_file_name}")
+                
+                content_bytes = await file_attachment.read()
+                with open(temp_file_path, "wb") as f:
+                    f.write(content_bytes)
+                
+                from app.rag.utils.parser import DocumentParser
+                parser = DocumentParser()
+                parse_res = parser.parse_file(temp_file_path)
+                
+                if parse_res and parse_res.pages:
+                    extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
+                    extracted_text = "\n\n".join(extracted_pages)
+                    attached_file_context = (
+                        f"\n\n--- NEWLY ATTACHED SUPPLEMENTARY FILE: '{attached_file_name}' ---\n"
+                        f"{extracted_text}\n"
+                        f"--- END OF ATTACHED FILE CONTENT ---\n"
+                    )
+                    logger.info(f"📄 Successfully parsed attached file '{attached_file_name}' for approved refine (knowledge_id='{knowledge_id}').")
+                
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+            except Exception as att_err:
+                logger.warning(f"Failed to parse attached file in approved refine: {att_err}")
 
         db_categories = []
         try:
@@ -1724,28 +2261,48 @@ async def refine_approved_document(
         else:
             history_str = "No previous refinement history.\n"
 
+        attached_prompt_note = f"\n\nNote: The user attached a new file '{attached_file_name}'. Merge and combine its facts, composition, prices, or claims with the existing approved document data." if attached_file_context else ""
+
         refine_prompt = f"""
-        You are an intelligent medical aesthetic AI validator for ERHA (PT Arya Noble) knowledge base.
-        You are refining an APPROVED document based on user instructions and multi-turn conversation history.
-        
-        Document Data:
-        {json.dumps(existing_doc, indent=2, ensure_ascii=False)}
-        
-        Available Categories:
-        {json.dumps(db_categories, ensure_ascii=False)}
-        
+        You are an intelligent medical aesthetic AI editor and validator for the ERHA (PT Arya Noble) knowledge base.
+        You are refining an APPROVED document strictly according to the user's explicit command.
+
+        ======================================================================
+        CRITICAL USER EDIT INSTRUCTION (HIGHEST PRIORITY - YOU MUST EXECUTE THIS):
+        "{request.prompt}"
+        ======================================================================
+
         Conversation History:
         {history_str}
-        
-        Latest User Instruction:
-        "{request.prompt}"
-        
-        Refine the document summary, categories, or chunks according to the instruction.
-        Return a valid JSON object ONLY (do not wrap in markdown code block) with keys:
+
+        Current Document Data:
+        {json.dumps(existing_doc, indent=2, ensure_ascii=False)}
+        {attached_file_context}
+        Available Categories:
+        {json.dumps(db_categories, ensure_ascii=False)}
+
+        REFINEMENT EXECUTION RULES:
+        1. **Direct Value & Text Editing (MANDATORY)**:
+           - You MUST strictly apply any modifications requested in the User Instruction (e.g. changing SKU, price, volume, ingredients, title, text, translation, or claims).
+           - If user commands "ganti nomor SKU Spot Gel jadi PRO-565346", you MUST update the SKU value for Spot Gel in the `summary` markdown and chunk text.
+           - If user commands to change price, volume, or ingredients, update the `summary` and chunks accordingly.
+        2. **Multi-Product / Multi-Treatment / Multi-Item Awareness (CRITICAL)**:
+           - When the document contains MULTIPLE products or MULTIPLE clinical treatments (e.g. Acne Intensive Program, Acne Peel Therapy, Microneedling, etc.):
+             - If the user instruction targets a SPECIFIC product or treatment (e.g. "Spot Gel" or "Acne Peel Therapy" or "Microneedling"), update ONLY that specific item's section, SKU, price, procedure parameters, and chunks.
+             - PRESERVE all other products' and treatments' sections, parameters, descriptions, and chunks completely intact without overwriting or copying values across items.
+             - If the user instruction is document-wide (e.g. translation, reformatting, disclaimer), apply it across all sections while preserving each item's specific attributes.
+             - NEVER duplicate titles consecutively (e.g. avoid repeating headers twice in a row).
+             - Keep all tables formatted in standard Markdown (`| Parameter | Keterangan |`).
+        3. **Consistency Across Summary and Chunks**:
+           - Any fact, SKU, number, or text updated in `summary` MUST also be updated in the `chunks` text so that retrieval indexing stays 100% synchronized.
+        4. **No Regressions**:
+           - Preserve image markdown `![Title](image_url)` and other existing accurate details unless explicitly instructed to change them.
+
+        Return a valid JSON object ONLY (do not wrap in markdown code block like ```json):
         {{
-            "summary": "updated summary markdown",
+            "summary": "updated summary markdown with exact user changes applied",
             "categories": ["category_name"],
-            "chunks": [ {{ "text": "...", "metadata": {{}} }} ]
+            "chunks": [ {{ "text": "updated chunk text with exact user changes applied", "metadata": {{}} }} ]
         }}
         """
         
@@ -1765,6 +2322,18 @@ async def refine_approved_document(
         updated_chunks = parsed_refined.get("chunks", existing_doc.get("chunks", []))
         file_name = existing_doc.get("file_name", knowledge_id)
 
+        # Apply deterministic refinements for SKU, Price, and chunk synchronization
+        refined_summary, refined_chunks, refined_title, refined_sku = apply_refinements_to_content(
+            user_prompt=request.prompt,
+            summary=updated_summary,
+            chunks=updated_chunks,
+            title=existing_doc.get("title", file_name)
+        )
+        updated_summary = refined_summary
+        updated_chunks = refined_chunks
+
+        doc_type = existing_doc.get("document_type") if isinstance(existing_doc, dict) else None
+
         primary_cat = updated_categories[0] if updated_categories else None
         for chunk in updated_chunks:
             if isinstance(chunk, dict):
@@ -1777,6 +2346,8 @@ async def refine_approved_document(
                     chunk["metadata"]["categories"] = updated_categories
                 if updated_summary:
                     chunk["metadata"]["summary"] = updated_summary
+                if doc_type:
+                    chunk["metadata"]["document_type"] = doc_type
 
         approved_doc_structure = {
             "knowledge_id": knowledge_id,
@@ -1785,6 +2356,7 @@ async def refine_approved_document(
             "file_hash": existing_doc.get("file_hash") if isinstance(existing_doc, dict) else None,
             "title": existing_doc.get("title", file_name) if isinstance(existing_doc, dict) else file_name,
             "status": "Approved",
+            "document_type": doc_type,
             "summary": updated_summary,
             "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
             "batch_summary": existing_doc.get("batch_summary") if isinstance(existing_doc, dict) else None,
@@ -1792,6 +2364,16 @@ async def refine_approved_document(
             "visibility_settings": existing_doc.get("visibility_settings") if isinstance(existing_doc, dict) else None,
             "chunks": updated_chunks
         }
+        # If part of a multi-file batch, re-synthesize updated batch executive summary
+        batch_id_val = approved_doc_structure.get("batch_id")
+        if batch_id_val and llm:
+            try:
+                b_summary = await synthesize_batch_executive_summary(batch_id_val, llm)
+                if b_summary:
+                    approved_doc_structure["batch_summary"] = b_summary
+            except Exception as b_err:
+                logger.warning(f"Could not update batch summary after refine approved: {b_err}")
+
         with open(approved_file, "w", encoding="utf-8") as f:
             json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
 
@@ -1879,6 +2461,10 @@ async def approve_document(
                         chunk["metadata"]["categories"] = str_cats
                     if "summary" not in chunk["metadata"] and "summary" in data:
                         chunk["metadata"]["summary"] = data.get("summary")
+                    if data.get("image_url") and "image_url" not in chunk["metadata"]:
+                        chunk["metadata"]["image_url"] = data.get("image_url")
+                    if data.get("sku") and "sku" not in chunk["metadata"]:
+                        chunk["metadata"]["sku"] = data.get("sku")
                     
             if pipeline.vector_store:
                 logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
@@ -2230,13 +2816,20 @@ async def chat_endpoint(
 
     parsed_filter = filter_metadata if filter_metadata else None
     
+    doc_name = None
+    if getattr(chat_req, "doctor_name", None):
+        doc_name = chat_req.doctor_name
+    elif chat_req.user_context and getattr(chat_req.user_context, "doctor_name", None):
+        doc_name = chat_req.user_context.doctor_name
+
     try:
         response = pipeline.generate_answer(
             query=effective_query,
             top_k=chat_req.top_k,
             filter_metadata=parsed_filter,
             rerank=False,
-            history=raw_history
+            history=raw_history,
+            doctor_name=doc_name
         )
         
         if isinstance(response, ChatResponse):

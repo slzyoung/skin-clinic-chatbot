@@ -53,6 +53,13 @@ class CustomChunker:
         "target patient", "dosage", "composition", "packaging", "shelf life",
         "mechanism of action", "clinical studies", "side effects",
         "precautions", "interactions", "formulation",
+        # Indonesian clinical & aesthetic treatment section headers
+        "deskripsi", "cocok untuk", "tidak disarankan untuk", "manfaat",
+        "persiapan sebelum treatment", "persiapan sebelum tindakan",
+        "tahapan treatment", "tahapan prosedur", "informasi prosedur",
+        "parameter prosedur", "aftercare", "perawatan setelah tindakan",
+        "efek samping", "kandungan peeling", "kandungan", "kategori",
+        "kategori treatment", "protokol tindakan", "indikasi"
     }
 
     # =========================================================================

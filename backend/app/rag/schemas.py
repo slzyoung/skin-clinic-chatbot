@@ -10,6 +10,7 @@ class UserContext(BaseModel):
     dr_type: str = Field(..., description="The doctor type of the user")
     branch_ids: List[str] = Field(default_factory=list, description="The branch IDs the user belongs to")
     excluded_categories: List[str] = Field(default_factory=list, description="The names of categories excluded for this user")
+    doctor_name: Optional[str] = Field(None, description="The name of the doctor (e.g. 'dr. Sarah' or 'Sarah')")
 
 class ChatRequest(BaseModel):
     query: str = Field(..., description="User question or medical query string")
@@ -18,6 +19,7 @@ class ChatRequest(BaseModel):
     history: List[ChatMessage] = Field(default=[], description="Multi-turn conversation chat history context")
     user_context: Optional[UserContext] = Field(None, description="Context properties of the querying user used for visibility and exclusion filtering")
     attachment_text: Optional[str] = Field(None, description="Extracted text from attached patient document/profile (auto-populated by backend when file is uploaded)")
+    doctor_name: Optional[str] = Field(None, description="The name of the doctor (e.g. 'dr. Sarah' or 'Sarah')")
 
 
 class ChatResponse(BaseModel):
@@ -33,6 +35,7 @@ class EvaluationItem(BaseModel):
 
 class DocumentListItem(BaseModel):
     knowledge_id: str = Field(..., description="Unique document ID (UUID)")
+    batch_id: Optional[str] = Field(None, description="Batch Upload ID for grouped ingestion tracking")
     file_name: str = Field(..., description="Filename of the ingested document")
     product_name: Optional[str] = Field(None, description="Extracted product name")
     status: str = Field(..., description="'Approved' or 'On review'")

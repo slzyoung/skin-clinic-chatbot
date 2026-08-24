@@ -19,7 +19,14 @@ from loguru import logger
 
 from app.rag.services.interfaces import BaseLLMAdapter
 from app.rag.services.rag_retriever import HybridRetriever
-from app.rag.services.intent import QueryIntentDetector, QueryIntent, get_current_time_period, get_time_greeting_response
+from app.rag.services.intent import (
+    QueryIntentDetector, 
+    QueryIntent, 
+    get_current_time_period, 
+    get_time_greeting_response,
+    get_closing_response,
+    format_doctor_name
+)
 from app.rag.services.guardrails import GuardrailsPipeline
 from app.rag.config import settings
 
@@ -86,14 +93,14 @@ class OpenAIAdapter(BaseLLMAdapter):
 # --- Grounded System Prompt Configuration ---
 
 SYSTEM_PROMPT = """<role_and_persona>
-Kamu adalah ERHA Medical Assistant, asisten AI internal untuk klinik ERHA (PT Arya Noble) yang membantu Dokter mencari informasi produk, treatment, protokol klinis, dan program promosi berdasarkan knowledge base resmi ERHA.
+Kamu adalah ERHA Medical Assistant, asisten AI internal untuk klinik ERHA (PT Arya Noble) yang membantu Dokter mencari informasi produk, treatment, protokol klinis, dan program promosi berdasarkan panduan resmi ERHA.
 
 Karakteristik & Sikap:
 - Profesional, ringkas, dan langsung ke inti — dokter bekerja dalam waktu terbatas saat konsultasi dengan pasien.
 - Berbahasa Indonesia sebagai default, kecuali dokter bertanya dalam bahasa Inggris.
 - Tidak berlagak sebagai dokter atau memberikan diagnosis — kamu adalah alat bantu referensi klinis, keputusan medis akhir selalu ada di tangan dokter.
 - Tidak menggunakan emoji berlebihan atau bahasa marketing yang bombastis.
-- Sapa dokter dengan sebutan 'Dokter' atau 'Dok'.
+- Sapa dokter dengan sebutan sopan seperti 'Dokter [Nama]' (jika nama dokter tersedia di identitas pengguna) atau 'Dok' / 'Dokter' secara natural dan tidak berulang-ulang di setiap kalimat (cukup 1-2 kali di pembuka/penutup agar percakapan hangat, personal, dan tidak monoton).
 
 Kamu BUKAN:
 - Chatbot untuk pasien (akses khusus untuk Dokter/staf klinis terverifikasi via CIS).
@@ -103,12 +110,12 @@ Kamu BUKAN:
 
 <grounding_rules>
 ATURAN GROUNDING (WAJIB & PALING KRITIS — TIDAK BOLEH DILANGGAR):
-1. HANYA jawab berdasarkan potongan referensi knowledge base (context) yang diberikan pada setiap request. Jangan gunakan pengetahuan umum/training data untuk mengarang informasi produk, treatment, harga, atau protokol medis ERHA.
-2. Jika informasi yang ditanyakan TIDAK ADA di context yang diberikan:
+1. HANYA jawab berdasarkan potongan referensi panduan resmi ERHA yang diberikan pada setiap request. Jangan gunakan pengetahuan umum/training data untuk mengarang informasi produk, treatment, harga, atau protokol medis ERHA.
+2. Jika informasi yang ditanyakan TIDAK ADA di referensi yang diberikan:
    - JANGAN mengarang, menebak, atau mengekstrapolasi dari produk/treatment lain yang mirip.
-   - Sampaikan secara eksplisit dan sopan bahwa informasi belum tersedia di knowledge base, dan sarankan dokter untuk mengecek manual atau menghubungi Dept Functional terkait.
-3. Jika context yang diambil retrieval kurang relevan dengan pertanyaan (skor similarity rendah / ambigu), akui keterbatasan tersebut daripada memaksakan jawaban dari potongan yang tidak terkait.
-4. Jika ada BEBERAPA sumber yang saling bertentangan dalam context (misal brosur promosi vs dokumen klinis resmi):
+   - Sampaikan secara eksplisit dan sopan bahwa informasi belum tercantum dalam panduan resmi ERHA saat ini, dan sarankan dokter untuk mengecek manual atau menghubungi Dept Functional terkait.
+3. DILARANG KERAS menggunakan kata-kata teknis backend seperti "context", "berdasarkan context yang ada", "retrieval context", "database", "chunk", "metadata", "sistem RAG", "evidence", atau "dokumen yang di-retrieve". Gunakan bahasa profesional klinis (misal: "Berdasarkan data resmi ERHA...", "Berdasarkan katalog ERHA...", atau langsung sampaikan intinya to-the-point tanpa meta-phrasing).
+4. Jika ada BEBERAPA sumber yang saling bertentangan dalam referensi (misal brosur promosi vs dokumen klinis resmi):
    - Prioritaskan dokumen berstatus "Approved" dan bertipe klinis/protokol.
    - Beritahu dokter bahwa ada inkonsistensi yang perlu divalidasi manual — jangan memilih diam-diam tanpa penjelasan.
 5. Setiap klaim faktual (dosis, harga, komposisi, indikasi, kontraindikasi) harus bisa ditelusuri balik ke dokumen sumber spesifik. Jika tidak ada sumbernya, jangan sampaikan klaim tersebut sebagai fakta.
@@ -138,20 +145,33 @@ STRUKTUR & FORMAT JAWABAN:
    [Untuk SETIAP produk yang direkomendasikan, tampilkan:]
    ![Nama Produk](URL_GAMBAR_DARI_CONTEXT_JIKA_ADA)
    **Nama Produk**
-   Deskripsi singkat 1 baris tentang produk dan fungsinya.
+   Deskripsi singkat 1-2 baris yang dikemas secara fleksibel dan natural oleh AI berdasarkan informasi yang tersedia di context (menyorot fungsi utama, bahan aktif, atau manfaat spesifik produk).
    **Harga**: RpXXX.XXX (jika tersedia di context)
 
    ### Perawatan
    [Untuk SETIAP treatment yang direkomendasikan, tampilkan:]
    ![Nama Treatment](URL_GAMBAR_DARI_CONTEXT_JIKA_ADA)
    **Nama Treatment**
-   Deskripsi singkat 1 baris tentang treatment.
-   - **Basic Plan**: RpX.XXX.XXX | **Advance Plan**: RpX.XXX.XXX (jika tersedia)
+   Deskripsi singkat 1-2 baris yang dikemas secara fleksibel dan natural oleh AI berdasarkan informasi tindakan di context (menjelaskan solusi masalah kulit, teknologi/alat, atau manfaat klinis).
+   - **Basic Plan**: RpX.XXX.XXX | **Advance Plan**: RpX.XXX.XXX (jika tersedia di context)
 
-3. HINDARI WALL OF TEXT: Maksimal 3-5 opsi teratas, jangan membanjiri seluruh katalog.
-4. AMBIGUITAS KONDISI PASIEN: Jika pertanyaan dokter ambigu (kondisi kurang detail), tanyakan SATU pertanyaan klarifikasi terlebih dahulu.
-5. REFERENSI SUMBER: Sertakan referensi sumber singkat jika berguna.
-6. PERBANDINGAN: Sajikan dalam bentuk Markdown comparison table ringkas.
+3. FORMAT PENCARIAN LANGSUNG (NAMA PRODUK, TREATMENT, ATAU KODE SKU):
+   Ketika Dokter menanyakan informasi spesifik mengenai nama produk, nama treatment, atau kode SKU (misal: "Info produk untuk SKU ERH-ACT-100", "Detail treatment Derma Peeling", atau "Kandungan ERHA Acne Act"):
+   - Tampilkan gambar jika URL gambar valid tersedia di context: `![Nama](URL_GAMBAR)`
+   - Rangkai jawaban secara kohesif, mengalir alami, dan langsung menjawab inti pertanyaan dokter:
+     ### [Nama Produk atau Treatment]
+     - **Brand**: [Brand jika ada di context]
+     - **SKU**: [Kode SKU jika ada di context — HANYA tampilkan jika ada nilainya!]
+     - **Deskripsi & Fungsi**: [Penjelasan ringkas 1-2 baris yang menyambung secara kontekstual]
+     - **Kandungan Aktif**: [Bahan aktif utama jika produk]
+     - **Indikasi Kulit**: [Target jenis kulit / kondisi medis jika ada]
+     - **Harga**: [Jika tersedia di context]
+   - ATURAN DINAMIS: JANGAN PERNAH menampilkan field kosong atau menulis kata "None / N/A / Tidak ada". Tampilkan field HANYA jika informasinya tersedia.
+
+4. HINDARI WALL OF TEXT: Maksimal 3-5 opsi teratas, jangan membanjiri seluruh katalog.
+5. AMBIGUITAS KONDISI PASIEN: Jika pertanyaan dokter ambigu (kondisi kurang detail), tanyakan SATU pertanyaan klarifikasi terlebih dahulu.
+6. REFERENSI SUMBER: Sertakan referensi sumber singkat jika berguna.
+7. PERBANDINGAN: Sajikan dalam bentuk Markdown comparison table ringkas.
 </response_formatting_rules>
 
 <medical_claim_guardrails>
@@ -185,9 +205,12 @@ ATURAN PROGRAM PROMO & DISKON:
 </promotional_and_pricing_rules>
 
 <negative_constraints>
-- STRICTLY BAN SYSTEM/DEVELOPER JARGON: DILARANG menggunakan kata "KB", "SOP", "tercantum di chunk", "evidence", "metadata". Gunakan bahasa klinis natural.
-- NO PATIENT-FACING DISCLAIMER: Pengguna adalah Dokter, bukan pasien.
-- NO FLUFF CLOSINGS: Dilarang basa-basi penutup ("Semoga membantu Dok"). Akhiri langsung setelah substansi medis selesai.
+- STRICTLY BAN TECHNICAL/DEVELOPER JARGON: DILARANG menggunakan kata "context", "berdasarkan context yang ada", "retrieval context", "database", "chunk", "metadata", "sistem RAG", "evidence", atau "dokumen yang di-retrieve". Gunakan bahasa klinis natural (misal: "Berdasarkan panduan resmi ERHA...", atau langsung sampaikan intinya).
+- ANTI-REDUNDANSI & PERCAKAPAN BERBASIS SESI: Jika dokter hanya menyampaikan ucapan terima kasih, konfirmasi, atau menutup percakapan (misal: "terima kasih", "makasih ya dok", "baik terima kasih", "noted", "ok sip"):
+  - JANGAN PERNAH mengulang kembali daftar rekomendasi, nama produk, atau ringkasan penjelasan sebelumnya.
+  - JANGAN menutup percakapan secara kaku atau mengasumsikan dokter sedang praktik tindakan (hindari kalimat seperti "selamat berpraktik", "sukses praktiknya hari ini").
+  - Cukup balas dengan santun dan ramah sambil menjaga sesi tetap terbuka (contoh: "Sama-sama, Dok. Silakan sampaikan jika ada informasi lain yang ingin ditanyakan.").
+- NO PATIENT-FACING DISCLAIMER: Pengguna adalah Dokter/staf klinis internal, bukan pasien.
 </negative_constraints>"""
 
 
@@ -358,9 +381,6 @@ class GenerationPipeline:
             if content and not content.startswith("{"):
                 cleaned = content.replace("###", "").replace("##", "").replace("**", "").replace("\n", " ")
                 words = cleaned.split()
-                last_context = " ".join(words[:20]) if len(words) > 20 else " ".join(words)
-                break
-
         if last_context:
             return f"{last_context} {query}"
 
@@ -372,7 +392,8 @@ class GenerationPipeline:
         context: str, 
         history: List[Dict[str, str]], 
         intent: QueryIntent, 
-        intent_rules: Dict[str, Any]
+        intent_rules: Dict[str, Any],
+        doctor_name: Optional[str] = None
     ) -> str:
         """Compiles system prompt, retrieved context, intent instructions, history, and query into a grounded prompt."""
         history_str = ""
@@ -386,17 +407,22 @@ class GenerationPipeline:
 
         length_instruction = intent_rules.get("length_instruction", "Be concise and factual.")
         period = get_current_time_period()
+        doc_salutation = format_doctor_name(doctor_name)
 
         import re
         has_greeting_word = bool(re.search(r'\b(halo|hallo|hai|hi|selamat|assalamualaikum|ping)\b', query.lower()))
         
         if not history and (has_greeting_word or intent == QueryIntent.GREETING):
-            turn_greeting_rule = f"Pesan pertama atau Dokter menyapa: Balas sapaan dengan ramah ('Halo Dok! Selamat {period}')."
+            turn_greeting_rule = f"Pesan pertama atau Dokter menyapa: Balas sapaan dengan ramah ('Halo {doc_salutation}! Selamat {period}')."
         else:
-            turn_greeting_rule = "Percakapan sudah berlangsung (history > 0) atau tidak ada kata sapaan: DILARANG mengulang sapaan pembuka (seperti 'Halo Dok', 'Selamat siang'). Langsung berikan jawaban medis/produk secara singkat, padat, dan objektif."
+            turn_greeting_rule = f"Percakapan sudah berlangsung (history > 0) atau tidak ada kata sapaan: DILARANG mengulang sapaan pembuka di awal respons (seperti 'Halo Dok', 'Selamat siang'). Langsung berikan jawaban medis/produk secara singkat, padat, dan objektif. Boleh menyapa nama dokter ('{doc_salutation}') 1-2 kali secara natural di sela penjelasan agar percakapan hangat dan tidak kaku."
+
+        doctor_context_info = f"Dokter Pengguna: {doc_salutation}" if doctor_name else "Dokter Pengguna: Dokter"
 
         prompt = (
             f"{SYSTEM_PROMPT}\n\n"
+            f"--- IDENTITAS DOKTER PENGGUNA ---\n"
+            f"{doctor_context_info}\n\n"
             f"--- TURN GREETING RULE ---\n"
             f"{turn_greeting_rule}\n\n"
             f"--- CURRENT TIME CONTEXT ---\n"
@@ -435,23 +461,24 @@ class GenerationPipeline:
         safety_critical_keywords = [
             "ibu hamil", "bumil", "kehamilan", "pregnancy", "pregnant",
             "menyusui", "lactation", "breastfeeding",
-            "kontraindikasi", "contraindication",
-            "alergi", "allergy", "interaksi", "interaction"
+            "alergi", "kontraindikasi", "contraindication",
+            "efek samping parah", "bahaya", "interaksi obat", "drug interaction",
+            "retinol bumil", "tretinoin bumil", "hydroquinone bumil", "isotretinoin"
         ]
-
         is_safety_critical = any(kw in q_lower for kw in safety_critical_keywords)
 
         if is_safety_critical:
-            if context_status == "REJECTED":
-                logger.warning(f"⚠️ [CLINICAL SAFETY GATE] Safety-critical query ('{query}') with empty context. Enforcing safe non-speculative rejection.")
+            if context_status == "REJECTED" or not results:
+                logger.warning("🚨 [CLINICAL SAFETY GATE] Blocked safety-critical query due to absence of grounded evidence.")
                 return False, (
-                    "Data mengenai keamanan, kontraindikasi, atau interaksi medis untuk kondisi tersebut tidak tersedia dalam basis pengetahuan ERHA. "
-                    "Demi keamanan pasien, tidak direkomendasikan penggunaan tanpa rujukan klinis resmi."
+                    "Mohon maaf Dok, panduan resmi terkait keamanan klinis/kontraindikasi spesifik untuk kondisi ini "
+                    "belum tercantum secara lengkap dalam referensi knowledge base. "
+                    "Demi keselamatan pasien, disarankan untuk melakukan evaluasi klinis langsung atau merujuk ke pedoman farmakologi klinis resmi."
                 )
-
-            context_texts = " ".join([r.get("text", "").lower() for r in results])
-            has_safety_evidence = any(kw in context_texts for kw in ["kontraindikasi", "hamil", "menyusui", "alergi", "efek samping", "perhatian", "peringatan"])
-
+            
+            # Context is accepted, verify if the generated answer contains explicit safety instructions
+            context_text = " ".join([r.get("text", "") for r in results]).lower()
+            has_safety_evidence = any(kw in context_text for kw in ["hamil", "menyusui", "kontraindikasi", "alergi", "aman", "caution", "warning"])
             if not has_safety_evidence and "tidak disarankan" not in sanitized.lower() and "kontraindikasi" not in sanitized.lower():
                 logger.warning("⚠️ [CLINICAL SAFETY GATE] Safety-critical query lacks explicit safety text in context. Appending clinical safety notice.")
                 sanitized += "\n\n*Catatan Keamanan Klinis: Informasi spesifik mengenai kontraindikasi/keamanan kondisi ini tidak tercantum dalam dokumen rujukan. Disarankan untuk menunda tindakan/penggunaan bahan aktif hingga ada petunjuk klinis resmi.*"
@@ -469,7 +496,8 @@ class GenerationPipeline:
         rerank: bool = True,
         confidence_threshold: Optional[float] = None,
         history: List[Dict[str, str]] = [],
-        force_agent: bool = False
+        force_agent: bool = False,
+        doctor_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Unified Entry Point: Processes query via Input Guardrails, Complexity Routing,
@@ -502,7 +530,7 @@ class GenerationPipeline:
         intent, intent_rules = QueryIntentDetector.detect(query)
 
         if intent == QueryIntent.GREETING:
-            greeting_ans = get_time_greeting_response(query)
+            greeting_ans = get_time_greeting_response(query, doctor_name=doctor_name)
             llm_ms = int((_time.time() - t0_total) * 1000)
             log_rag_chat(
                 query=query,
@@ -523,7 +551,7 @@ class GenerationPipeline:
             }
 
         if intent == QueryIntent.CLOSING:
-            closing_ans = "Sama-sama, Dokter! Siap membantu kembali jika ada pertanyaan seputar produk atau protokol ERHA."
+            closing_ans = get_closing_response(doctor_name=doctor_name)
             llm_ms = int((_time.time() - t0_total) * 1000)
             log_rag_chat(
                 query=query,
@@ -602,7 +630,7 @@ class GenerationPipeline:
             }
 
         # 5. Unified Single LLM Prompt & Synthesis
-        full_prompt = self.build_prompt(query, context_for_prompt, history, intent, intent_rules)
+        full_prompt = self.build_prompt(query, context_for_prompt, history, intent, intent_rules, doctor_name=doctor_name)
         t0_llm = _time.time()
         error_msg = None
         try:
@@ -646,7 +674,8 @@ class GenerationPipeline:
         rerank: bool = True,
         confidence_threshold: Optional[float] = None,
         history: List[Dict[str, str]] = [],
-        force_agent: bool = False
+        force_agent: bool = False,
+        doctor_name: Optional[str] = None
     ):
         """Unified Entry Point for Streaming API with Output Guardrails & Safety Validation."""
         import asyncio
@@ -672,7 +701,7 @@ class GenerationPipeline:
         intent, intent_rules = QueryIntentDetector.detect(query)
 
         if intent == QueryIntent.GREETING:
-            greeting_ans = get_time_greeting_response(query)
+            greeting_ans = get_time_greeting_response(query, doctor_name=doctor_name)
             llm_ms = int((_time.time() - t0_total) * 1000)
             log_rag_chat(
                 query=query,
@@ -686,6 +715,23 @@ class GenerationPipeline:
             )
             yield json.dumps({"type": "context", "results": []}) + "\n"
             yield greeting_ans
+            return
+
+        if intent == QueryIntent.CLOSING:
+            closing_ans = get_closing_response(doctor_name=doctor_name)
+            llm_ms = int((_time.time() - t0_total) * 1000)
+            log_rag_chat(
+                query=query,
+                intent_val=intent.value,
+                top_k=top_k,
+                results=[],
+                context_status="ACCEPTED",
+                retrieval_ms=0,
+                llm_ms=llm_ms,
+                guardrails_status="PASSED"
+            )
+            yield json.dumps({"type": "context", "results": []}) + "\n"
+            yield closing_ans
             return
 
         effective_top_k = QueryIntentDetector.get_recommended_top_k(query, intent, top_k)

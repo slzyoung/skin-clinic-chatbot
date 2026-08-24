@@ -5,7 +5,7 @@ strict response length limits and tailored response constraints.
 """
 
 from enum import Enum
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 import re
 from datetime import datetime, timezone, timedelta
 from loguru import logger
@@ -40,19 +40,36 @@ def get_current_time_period() -> str:
         return "malam"
 
 
-def get_time_greeting_response(query: str = "") -> str:
+def format_doctor_name(doctor_name: Optional[str] = None) -> str:
+    """Formats doctor name cleanly, ensuring polite title like 'dr. Sarah' or 'Dok'."""
+    if not doctor_name or not str(doctor_name).strip():
+        return "Dok"
+    clean = str(doctor_name).strip()
+    if clean.lower().startswith("dr.") or clean.lower().startswith("dr ") or clean.lower().startswith("dokter"):
+        return clean
+    return f"dr. {clean}"
+
+
+def get_time_greeting_response(query: str = "", doctor_name: Optional[str] = None) -> str:
     """
     Generates a concise, polite, and objective greeting response for Doctors,
     adjusted to the current time of day and identity questions.
     """
     period = get_current_time_period()
     time_greeting = f"Selamat {period}"
+    doc_title = format_doctor_name(doctor_name)
 
     q_lower = query.lower().strip()
     if any(k in q_lower for k in ["siapa", "kamu siapa", "anda siapa", "bot apa", "kamu siapa?"]):
-        return f"Halo Dok! {time_greeting}. Saya ERHA Medical Assistant, asisten klinis yang siap membantu Dokter mencari informasi SOP tindakan medis, indikasi, dan panduan produk ERHA."
+        return f"Halo {doc_title}! {time_greeting}. Saya ERHA Medical Assistant, asisten klinis yang siap membantu Dokter mencari informasi SOP tindakan medis, indikasi, dan panduan produk ERHA."
 
-    return f"Halo Dok! {time_greeting}. Saya ERHA Medical Assistant, siap membantu Dokter terkait protokol tindakan atau produk ERHA."
+    return f"Halo {doc_title}! {time_greeting}. Saya ERHA Medical Assistant, siap membantu Dokter terkait protokol tindakan atau produk ERHA."
+
+
+def get_closing_response(doctor_name: Optional[str] = None) -> str:
+    """Generates a warm, professional closing response without repeating past recommendations."""
+    doc_title = format_doctor_name(doctor_name)
+    return f"Sama-sama, {doc_title}! Senang bisa membantu. Jika butuh referensi produk atau protokol lainnya, saya siap membantu!"
 
 
 class QueryIntent(str, Enum):
@@ -91,7 +108,8 @@ _INTENT_PATTERNS = [
     (
         QueryIntent.CLOSING,
         [
-            r"^\s*(oke|ok|okay|kalo\s+begitu|kalau\s+gitu|kalau\s+begitu|kalo\s+gitu)?\s*(terima\s*kasih|terimakasih|terimaksih|makasih|makasi|thanks|thank\s*you|thx|trims|tengkyu)(\s+dok|\s+dokter)?\s*[\.\,\!\?]*\s*$",
+            r"^\s*(oke|ok|okay|kalo\s+begitu|kalau\s+gitu|kalau\s+begitu|kalo\s+gitu|baik|baiklah|sip|siap)?\s*(terima\s*kasih|terimakasih|terimaksih|makasih|makasi|thanks|thank\s*you|thx|trims|tengkyu)(\s+banyak|\s+infonya|\s+atas\s+rekomendasinya|\s+rekomendasinya|\s+ya|\s+ya\s+dok|\s+ya\s+dokter|\s+dok|\s+dokter|\s+atas\s+infonya|\s+saran\s*nya)?\s*[\.\,\!\?]*\s*$",
+            r"^\s*(terima\s*kasih|terimakasih|makasih|thanks|thank\s*you|trims)\s+(banyak|atas\s+bantuannya|atas\s+infonya|infonya|rekomendasinya|sarannya|ya|dok|dokter)(\s+dok|\s+dokter|\s+ya|\s+ya\s+dok|\s+ya\s+dokter)?\s*[\.\,\!\?]*\s*$",
             r"^\s*(oke|ok|okay|sip|siap|baik|baiklah|mantap|noted|clear|paham|mengerti|cukup|sudah\s+cukup|cukup\s+jelas|sudah\s+jelas|sama[- ]sama)(\s+deh|\s+ya|\s+nih|\s+sip|\s+dok|\s+dokter|\s+terima\s*kasih|\s+makasih)?\s*[\.\,\!\?]*\s*$",
             r"^\s*(oke|ok|okay)\s+(dok|dokter|sip|siap|baik|noted)\s*[\.\,\!\?]*\s*$"
         ]
