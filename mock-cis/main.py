@@ -60,6 +60,13 @@ MOCK_BRANCHES = [
         "status": "1"
     },
     {
+            "id": 839,
+            "name": "Klinik Utama Erha Ultimate TRG",
+            "code": "012",
+            "ecosystem": "Erha",
+            "status": "1"
+        },
+    {
         "id": 847,
         "name": "Klinik Utama Dermies BSD",
         "code": "034",
@@ -107,6 +114,23 @@ MOCK_DOCTORS = [
                 "status": "1"
             }
         ]
+    },
+    {
+        "id": 3,
+        "name": "dr Clarissa SpDV",
+        "user_type": "1",
+        "user_type_name": "Doctor SpKK",
+        "nik": "dr00789",
+        "email": "drclarissa@gmail.com",
+        "ecosystem": "Erha",
+        "status": "1",
+        "user_branchs": [
+            {
+                "branch_id": 839,
+                "branch_code": "012",
+                "status": "1"
+            }
+        ]
     }
 ]
 
@@ -124,6 +148,13 @@ MOCK_USER_BRANCHES = [
         "branch_code": "034",
         "status": "1",
         "ecosystem": "Dermies"
+    },
+    {
+        "user_id": 3,
+        "branch_id": 839,
+        "branch_code": "012",
+        "status": "1",
+        "ecosystem": "Erha"
     }
 ]
 
