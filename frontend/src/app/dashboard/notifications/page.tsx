@@ -17,6 +17,7 @@ import {
 	RiThumbUpLine,
 	RiUserLine,
 } from "@remixicon/react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
@@ -422,15 +423,22 @@ export default function NotificationsPage() {
 
 									{/* Bottom Row: Chat Session & Branch Metadata */}
 									<div className="flex items-center gap-3 flex-wrap pl-7 pt-0.5 text-[11px] text-gray-700">
-										<span className="inline-flex items-center gap-1 font-medium">
+										<span className="inline-flex items-center gap-1 font-medium text-gray-600">
 											<RiBuildingLine className="size-3 text-gray-500" />
 											{item.branch || "Unknown Branch"}
 										</span>
 
-										<span className="inline-flex items-center gap-1 text-gray-600">
+										<Link
+											href={`/dashboard/chat-history/${item.id}`}
+											className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900 transition-colors cursor-pointer"
+											title="View chat session details"
+										>
 											<RiChat1Line className="size-3 text-gray-500" />
-											Session: <span className="font-mono font-medium text-gray-800">{item.id.slice(0, 8)}...</span>
-										</span>
+											<span>Session:</span>
+											<span className="font-mono font-medium text-gray-800 hover:text-black break-all">
+												{item.id}
+											</span>
+										</Link>
 									</div>
 								</div>
 							);
