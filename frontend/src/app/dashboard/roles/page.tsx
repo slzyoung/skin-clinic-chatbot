@@ -82,22 +82,21 @@ export default function RolesPage() {
 					<Table className="[&_tr]:border-gray-100">
 						<TableHeader className="bg-gray-50/50">
 							<TableRow>
-								<TableHead className="w-[25%]">Role Name</TableHead>
-								<TableHead className="w-[45%]">Permissions & Access</TableHead>
-								<TableHead className="w-[15%]">Assigned Staff</TableHead>
+								<TableHead className="w-[30%]">Role Name</TableHead>
+								<TableHead className="w-[55%]">Permissions & Access</TableHead>
 								<TableHead className="w-[15%] text-right">Actions</TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
 							{isLoading ? (
 								<TableRow>
-									<TableCell colSpan={4} className="text-center py-8 text-gray-500">
+									<TableCell colSpan={3} className="text-center py-8 text-gray-500">
 										Loading roles...
 									</TableCell>
 								</TableRow>
 							) : filteredRoles.length === 0 ? (
 								<TableRow>
-									<TableCell colSpan={4} className="text-center py-8 text-gray-500">
+									<TableCell colSpan={3} className="text-center py-8 text-gray-500">
 										No roles found. Click &quot;Add New Role&quot; to create one.
 									</TableCell>
 								</TableRow>
@@ -145,14 +144,6 @@ export default function RolesPage() {
 													</Badge>
 												)}
 											</div>
-										</TableCell>
-										<TableCell>
-											<span className="text-sm font-medium text-gray-700">
-												{role.user_count}{" "}
-												<span className="text-xs text-gray-500 font-normal">
-													{role.user_count === 1 ? "staff" : "staffs"}
-												</span>
-											</span>
 										</TableCell>
 										<TableCell className="text-right">
 											<div className="flex justify-end gap-2">
