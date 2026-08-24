@@ -54,10 +54,10 @@ export function BranchTokenTable() {
 				</div>
 			</div>
 
-			<div className="border border-black-50 rounded-md bg-white overflow-hidden">
-				<Table>
-					<TableHeader>
-						<TableRow className="hover:bg-transparent border-b-black-50">
+			<div className="border border-gray-200 rounded-md bg-white overflow-hidden">
+				<Table className="[&_tr]:border-gray-100">
+					<TableHeader className="bg-gray-50/50">
+						<TableRow className="hover:bg-gray-50/50 border-b-gray-100">
 							<TableHead className="w-[15%]">Branch Code</TableHead>
 							<TableHead className="w-[15%]">Ecosystem</TableHead>
 							<TableHead className="w-[25%]">Branch</TableHead>

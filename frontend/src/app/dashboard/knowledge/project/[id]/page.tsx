@@ -521,7 +521,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 					</div>
 
 					{/* Table */}
-					<div className="border border-gray-100 rounded-lg bg-white overflow-hidden shadow-none">
+					<div className="border border-gray-200 rounded-lg bg-white overflow-hidden shadow-none">
 						<Table className="[&_tr]:border-gray-100">
 							<TableHeader className="bg-gray-50/50">
 								<TableRow className="bg-gray-50/50 hover:bg-gray-50/50">

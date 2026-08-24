@@ -78,7 +78,7 @@ export default function RolesPage() {
 				</div>
 
 				{/* Table */}
-				<div className="border border-gray-100 rounded-md bg-white overflow-hidden">
+				<div className="border border-gray-200 rounded-md bg-white overflow-hidden">
 					<Table className="[&_tr]:border-gray-100">
 						<TableHeader className="bg-gray-50/50">
 							<TableRow>
