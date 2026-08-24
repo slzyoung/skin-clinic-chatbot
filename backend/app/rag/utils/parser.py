@@ -487,38 +487,29 @@ class DocumentParser:
                         "* Other visual information\n\n"
                         "Do NOT assume that the image is a product image.\n\n"
                         "## Primary Objective\n"
-                        "Extract the information that is actually useful for the Knowledge Base.\n"
-                        "First determine what kind of visual information is present, then dynamically extract the relevant information.\n\n"
+                        "## Primary Objective\n"
+                        "Extract all factual, clinical, medical, and product knowledge that is useful for the Medical Knowledge Base & RAG System.\n"
+                        "Focus strictly on substantive information: product/treatment name, active ingredients, indications/benefits, target skin type/patient, directions for use, contraindications, dosage, packaging/volume, and clinical details.\n"
+                        "Do NOT include photographic or aesthetic visual descriptions (such as background colors, tube centering, packaging graphics, cap style, or camera angles) as these are non-informative noise for medical retrieval.\n\n"
                         "## Critical Rules\n"
                         "1. Do not invent information that cannot be supported by the image.\n"
                         "2. Do not hallucinate unreadable text.\n"
-                        "3. If information is unclear, explicitly mark it as uncertain or null.\n"
-                        "4. Do not force the image into a predefined schema.\n"
-                        "5. Extract fields dynamically based on the actual content.\n"
-                        "6. Preserve important terminology and names exactly when they are readable.\n"
-                        "7. Do not make medical or clinical claims that are not explicitly supported by the image.\n"
-                        "8. Distinguish between information directly visible in the image and AI interpretation.\n"
-                        "9. The extracted information will be reviewed by an administrator before becoming approved Knowledge Base content.\n"
-                        "10. The output must be useful for semantic search and RAG retrieval.\n\n"
+                        "3. Extract fields dynamically based on the actual substantive content visible on the label/document.\n"
+                        "4. Preserve important terminology, ingredients, and names exactly as readable.\n"
+                        "5. The output must be concise, accurate, and optimized for semantic search and RAG retrieval.\n\n"
                         "## Analyze the Image\n"
                         "Determine:\n"
-                        "1. Content Type (product, screenshot, webpage, document, table, chart, diagram, infographic, form, poster, photograph, other)\n"
-                        "2. Title (Generate a concise title representing the main subject. Prefer visible title if present.)\n"
-                        "3. Summary (Concise summary based only on observable information.)\n"
-                        "4. Extracted Information (Dynamically identify important information. Do NOT use a fixed schema.)\n"
-                        "5. Searchable Knowledge (Concise textual representation of important information to be embedded & retrieved by RAG system.)\n"
-                        "6. Visual Context (Describe visual info only when it contributes meaningful context.)\n"
-                        "7. Uncertainty (Identify unreadable text, partially visible info, ambiguous info, cropped content, etc.)\n\n"
+                        "1. Title (Generate a clean, professional title representing the product/document subject. Prefer visible brand + product name.)\n"
+                        "2. Summary (Concise, structured summary of the product/document specifications, ingredients, and use cases.)\n"
+                        "3. Extracted Information (Key-value map of substantive attributes: brand, active_ingredients, skin_type, volume, benefits, usage, etc.)\n"
+                        "4. Searchable Knowledge (Dense textual paragraph summarizing all key facts to be embedded by RAG system.)\n\n"
                         "## Output Format\n"
                         "Return valid JSON ONLY using the following structure:\n"
                         "{\n"
-                        '  "content_type": "...",\n'
                         '  "title": "...",\n'
                         '  "summary": "...",\n'
                         '  "extracted_information": {},\n'
-                        '  "searchable_knowledge": "...",\n'
-                        '  "visual_context": "...",\n'
-                        '  "uncertainties": []\n'
+                        '  "searchable_knowledge": "..."\n'
                         "}\n\n"
                         "Output valid JSON ONLY without any preamble or markdown wrapper."
                     )
@@ -563,51 +554,38 @@ class DocumentParser:
                                 clean_json = "\n".join(lines).strip()
                             data = json.loads(clean_json, strict=False)
 
-                            c_type = data.get("content_type", "image")
                             img_title = data.get("title") or os.path.splitext(file_name)[0]
                             summary = data.get("summary", "")
                             ext_info = data.get("extracted_information", {})
                             searchable_k = data.get("searchable_knowledge", "")
-                            vis_context = data.get("visual_context", "")
-                            uncertainties = data.get("uncertainties", [])
 
                             extracted_meta.update({
-                                "content_type": c_type,
                                 "title": img_title,
                                 "summary": summary,
                                 "extracted_information": ext_info,
-                                "uncertainties": uncertainties,
-                                "searchable_knowledge": searchable_k,
-                                "visual_context": vis_context
+                                "searchable_knowledge": searchable_k
                             })
 
-                            # Build structured markdown combining original image reference and extracted knowledge
+                            # Build clean, high-density structured markdown for RAG
                             md_blocks = [f"![{img_title}]({image_url})\n\n# {img_title}"]
-                            md_blocks.append(f"**Content Type**: {c_type}")
 
                             if summary:
-                                md_blocks.append(f"## Summary\n{summary}")
-                            if searchable_k:
-                                md_blocks.append(f"## Searchable Knowledge\n{searchable_k}")
+                                md_blocks.append(f"## Product Overview\n{summary}")
 
                             if isinstance(ext_info, dict) and ext_info:
-                                info_lines = ["## Extracted Information"]
+                                info_lines = ["## Specifications & Key Claims"]
                                 for k, v in ext_info.items():
                                     formatted_key = k.replace("_", " ").title()
-                                    if isinstance(v, (list, dict)):
+                                    if isinstance(v, list):
+                                        info_lines.append(f"- **{formatted_key}**: {', '.join([str(i) for i in v])}")
+                                    elif isinstance(v, dict):
                                         info_lines.append(f"- **{formatted_key}**: {json.dumps(v, ensure_ascii=False)}")
                                     else:
                                         info_lines.append(f"- **{formatted_key}**: {v}")
                                 md_blocks.append("\n".join(info_lines))
 
-                            if vis_context:
-                                md_blocks.append(f"## Visual Context\n{vis_context}")
-
-                            if uncertainties:
-                                u_lines = ["## Uncertainties & Verification Needed"]
-                                for u in uncertainties:
-                                    u_lines.append(f"- {u}")
-                                md_blocks.append("\n".join(u_lines))
+                            if searchable_k:
+                                md_blocks.append(f"## Searchable Knowledge\n{searchable_k}")
 
                             extracted_text = "\n\n".join(md_blocks)
 

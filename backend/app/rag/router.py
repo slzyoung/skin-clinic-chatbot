@@ -220,7 +220,6 @@ async def process_ingestion_background(
     file_name: str,
     pipeline: IngestionPipeline,
     llm: BaseLLMAdapter,
-    doc_type_display: str = "Product",
     user_prompt: Optional[str] = None,
     file_hash: Optional[str] = None,
     batch_id: Optional[str] = None
@@ -284,8 +283,7 @@ async def process_ingestion_background(
                     chunk["metadata"]["batch_id"] = batch_id
                     chunk["metadata"]["file_hash"] = file_hash
                     chunk["metadata"]["source_file"] = file_name
-                    chunk["metadata"]["type"] = doc_type_display.lower()
-                    chunk["metadata"].pop("suggested_categories", None)
+                    chunk.pop("suggested_categories", None)
                     chunk["metadata"].pop("document_type", None)
 
             full_extracted_text = "\n\n".join([c.get("text", "") for c in enriched_chunks if isinstance(c, dict) and c.get("text")])
@@ -307,7 +305,6 @@ async def process_ingestion_background(
                 "file_name": file_name,
                 "file_hash": file_hash,
                 "title": clean_title_fallback,
-                "type": doc_type_display,
                 "status": "PARSING",
                 "text_accuracy": "100%",
                 "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
@@ -481,7 +478,8 @@ async def process_ingestion_background(
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 chunk["metadata"]["source_file"] = file_name
-                chunk["metadata"]["type"] = doc_type_display.lower()
+                chunk["metadata"]["title"] = recommended_title
+                chunk["metadata"]["product_name"] = recommended_title
                 chunk["metadata"]["clinics"] = visibility_settings["clinics"]
                 chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
                 chunk["metadata"]["doctors"] = visibility_settings["doctors"]
@@ -546,7 +544,6 @@ async def process_ingestion_background(
             "file_name": file_name,
             "file_hash": file_hash,
             "title": recommended_title,
-            "type": doc_type_display,
             "status": "On review",
             "text_accuracy": text_accuracy,
             "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
@@ -793,11 +790,6 @@ Saya tidak akan mengasumsikan komposisi, penggunaan, kontraindikasi, atau efek s
                                 "items": {"type": "string", "format": "binary"},
                                 "description": "Primary document file(s) to upload. Select 1 or multiple files (Choose File)"
                             },
-                            "category_type": {
-                                "type": "string",
-                                "default": "Product",
-                                "description": "Category Type: 'Product', 'Treatment', 'Promotional', or 'Other'"
-                            },
                             "prompt": {
                                 "type": "string",
                                 "description": "Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"
@@ -818,7 +810,6 @@ Saya tidak akan mengasumsikan komposisi, penggunaan, kontraindikasi, atau efek s
 async def ingest_document(
     background_tasks: BackgroundTasks,
     file: List[UploadFile] = File(..., description="Primary document file(s) to upload (Choose File)"),
-    category_type: str = Form("Product", description="Category Type: 'Product', 'Treatment', 'Promotional', or 'Other'"),
     prompt: Optional[str] = Form(None, description="Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"),
     replace_existing: bool = Form(False, description="Set to true if admin explicitly confirms replacing/overwriting existing PENDING draft(s)"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
@@ -837,7 +828,6 @@ async def ingest_document(
         raise HTTPException(status_code=400, detail="Please upload at least one document file.")
 
     try:
-        raw_type = (category_type or "").strip().upper()
         from app.models.knowledge import KnowledgeType
         import uuid as _uuid
         import hashlib
@@ -850,32 +840,7 @@ async def ingest_document(
             if not target_file.filename:
                 continue
 
-            if "PRODUCT" in raw_type:
-                k_type = KnowledgeType.PRODUCT
-                doc_type_display = "Product"
-            elif "TREATMENT" in raw_type:
-                k_type = KnowledgeType.TREATMENT
-                doc_type_display = "Treatment"
-            elif "PROMO" in raw_type:
-                k_type = KnowledgeType.PROMOTIONAL
-                doc_type_display = "Promotional"
-            elif "OTHER" in raw_type or "LAIN" in raw_type:
-                k_type = KnowledgeType.GENERAL
-                doc_type_display = "Other"
-            else:
-                fn_lower = target_file.filename.lower()
-                if any(w in fn_lower for w in ["product", "gel", "cream", "serum", "lotion", "cleanser", "acne", "brochure"]):
-                    k_type = KnowledgeType.PRODUCT
-                    doc_type_display = "Product"
-                elif any(w in fn_lower for w in ["treatment", "procedure", "terapi", "tindakan"]):
-                    k_type = KnowledgeType.TREATMENT
-                    doc_type_display = "Treatment"
-                elif any(w in fn_lower for w in ["promo", "discount", "voucher"]):
-                    k_type = KnowledgeType.PROMOTIONAL
-                    doc_type_display = "Promotional"
-                else:
-                    k_type = KnowledgeType.GENERAL
-                    doc_type_display = "Other"
+            k_type = KnowledgeType.GENERAL
 
             file_bytes = await target_file.read()
             file_hash = hashlib.sha256(file_bytes).hexdigest()
@@ -959,7 +924,6 @@ async def ingest_document(
 
                     if existing_doc:
                         knowledge = existing_doc
-                        knowledge.type = k_type
                         knowledge.status = KnowledgeStatus.PROCESSING
                         knowledge.ai_summary = "Processing..."
                         knowledge.original_path = file_path
@@ -1010,7 +974,6 @@ async def ingest_document(
                     target_file.filename,
                     pipeline,
                     llm,
-                    doc_type_display,
                     prompt,
                     file_hash,
                     batch_id
@@ -1022,7 +985,6 @@ async def ingest_document(
                 "knowledge_id": k_id,
                 "batch_id": batch_id,
                 "file_name": target_file.filename,
-                "type": doc_type_display,
                 "duplicate_status": "PENDING_REPLACED" if (dup_status == "PENDING" and replace_existing) else "NEW",
                 "status": status_display
             })
@@ -1069,12 +1031,10 @@ async def get_pending_details(knowledge_id: str):
                     k_doc = res.scalars().first()
                     
                 if k_doc:
-                    raw_type = k_doc.type.value if hasattr(k_doc.type, "value") else str(k_doc.type)
                     return {
                         "knowledge_id": str(k_doc.id),
                         "file_name": k_doc.file_name,
                         "title": k_doc.title,
-                        "type": raw_type.capitalize() if raw_type else "Product",
                         "status": "PROCESSING",
                         "summary": "Document processing in progress...",
                         "text_accuracy": "100%",
@@ -1093,8 +1053,7 @@ async def get_pending_details(knowledge_id: str):
         if isinstance(data, dict):
             if "knowledge_id" not in data:
                 data["knowledge_id"] = knowledge_id
-            if "type" not in data or not data["type"]:
-                data["type"] = "Product"
+            data.pop("type", None)
             if "status" not in data or not data["status"]:
                 data["status"] = "Approved" if "output" in target_file else "On review"
             if "title" not in data or not data["title"]:
@@ -1195,7 +1154,6 @@ async def refine_pending_document(
         {{
             "knowledge_id": "id",
             "file_name": "filename",
-            "type": "Product",
             "status": "On review",
             "summary": "updated summary markdown",
             "text_accuracy": "100%",
@@ -1221,14 +1179,18 @@ async def refine_pending_document(
         
         updated_data = safe_json_loads(llm_response)
 
+        # Comprehensive metadata preservation across refinement rounds
         k_id = staged_data.get("knowledge_id", knowledge_id)
         updated_data["knowledge_id"] = k_id
+        
+        # Preserve core physical document properties from initial staging
+        for prop in ["file_name", "file_hash", "batch_id", "title", "image_url", "s3_key", "storage_key", "batch_summary", "initial_prompt", "visibility_settings"]:
+            if prop in staged_data and staged_data.get(prop) is not None:
+                if prop not in updated_data or updated_data.get(prop) is None:
+                    updated_data[prop] = staged_data.get(prop)
 
-        # Preserve initial_prompt and visibility_settings
-        if "initial_prompt" not in updated_data and "initial_prompt" in staged_data:
-            updated_data["initial_prompt"] = staged_data.get("initial_prompt")
-        if "visibility_settings" not in updated_data and "visibility_settings" in staged_data:
-            updated_data["visibility_settings"] = staged_data.get("visibility_settings")
+        # Remove legacy type if present
+        updated_data.pop("type", None)
 
         # Build updated multi-turn conversation history
         existing_hist = staged_data.get("history", [])
@@ -1239,11 +1201,31 @@ async def refine_pending_document(
         new_hist.append({"role": "assistant", "content": updated_data.get("summary", "")})
         updated_data["history"] = new_hist
 
+        vis_settings = updated_data.get("visibility_settings") or staged_data.get("visibility_settings", {})
+        doc_img_url = updated_data.get("image_url") or staged_data.get("image_url")
+        doc_file_hash = updated_data.get("file_hash") or staged_data.get("file_hash")
+        doc_batch_id = updated_data.get("batch_id") or staged_data.get("batch_id")
+        doc_file_name = updated_data.get("file_name") or staged_data.get("file_name", k_id)
+        doc_title = updated_data.get("title") or staged_data.get("title") or doc_file_name
+
         for chunk in updated_data.get("chunks", []):
             if isinstance(chunk, dict):
-                if "metadata" not in chunk:
+                if "metadata" not in chunk or not isinstance(chunk["metadata"], dict):
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = k_id
+                chunk["metadata"]["source_file"] = doc_file_name
+                chunk["metadata"]["title"] = doc_title
+                chunk["metadata"]["product_name"] = doc_title
+                if doc_file_hash:
+                    chunk["metadata"]["file_hash"] = doc_file_hash
+                if doc_batch_id:
+                    chunk["metadata"]["batch_id"] = doc_batch_id
+                if doc_img_url and "image_url" not in chunk["metadata"]:
+                    chunk["metadata"]["image_url"] = doc_img_url
+                if vis_settings:
+                    chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
+                    chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
+                    chunk["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
         
         # Save the updated data back
         with open(pending_file, "w", encoding="utf-8") as f:
@@ -1280,7 +1262,7 @@ async def list_all_documents():
                         fallback_id = f.replace("_parsed.json", "").replace(".json", "")
                         k_id = str(data.get("knowledge_id", first_chunk_meta.get("knowledge_id", fallback_id)))
 
-                        doc_type = data.get("type") or first_chunk_meta.get("type") or first_chunk_meta.get("document_type") or "Product"
+                        doc_type = data.get("type") or first_chunk_meta.get("type") or first_chunk_meta.get("document_type") or None
                         if doc_type:
                             doc_type = doc_type.capitalize()
 
@@ -1288,7 +1270,6 @@ async def list_all_documents():
                             knowledge_id=k_id,
                             file_name=data.get("file_name", fallback_id),
                             product_name=first_chunk_meta.get("product_name"),
-                            type=doc_type,
                             status=data.get("status", "On review"),
                             processed_at=first_chunk_meta.get("processed_at"),
                             chunks_count=len(chunks)
@@ -1310,7 +1291,7 @@ async def list_all_documents():
                     k_id = raw_id
                     file_name = raw_id
                     product_name = None
-                    doc_type = "Product"
+                    doc_type = None
                     processed_at = None
                     chunks = []
                     
@@ -1322,7 +1303,7 @@ async def list_all_documents():
                         if chunks and isinstance(chunks[0], dict):
                             first_meta = chunks[0].get("metadata", {})
                             product_name = first_meta.get("product_name")
-                            doc_type = data.get("type") or first_meta.get("type") or first_meta.get("document_type") or doc_type
+                            doc_type = data.get("type") or first_meta.get("type") or first_meta.get("document_type") or None
                             processed_at = first_meta.get("processed_at")
                     elif isinstance(data, list):
                         chunks = data
@@ -1331,7 +1312,7 @@ async def list_all_documents():
                             k_id = str(first_meta.get("knowledge_id", k_id))
                             file_name = first_meta.get("source_file", file_name)
                             product_name = first_meta.get("product_name")
-                            doc_type = first_meta.get("type") or first_meta.get("document_type") or doc_type
+                            doc_type = first_meta.get("type") or first_meta.get("document_type") or None
                             processed_at = first_meta.get("processed_at")
                             
                     if doc_type:
@@ -1342,7 +1323,6 @@ async def list_all_documents():
                             knowledge_id=k_id,
                             file_name=file_name,
                             product_name=product_name,
-                            type=doc_type,
                             status="Approved",
                             processed_at=processed_at,
                             chunks_count=len(chunks)
@@ -1367,13 +1347,11 @@ async def list_all_documents():
                 if str_id not in seen_ids:
                     st_val = k.status.value if hasattr(k.status, "value") else str(k.status)
                     status_display = "Approved" if st_val.upper() == "APPROVED" else ("On review" if st_val.upper() in ("PENDING", "PROCESSING") else "On review")
-                    raw_type = k.type.value if hasattr(k.type, "value") else str(k.type)
                     
                     docs.append(DocumentListItem(
                         knowledge_id=str_id,
                         file_name=k.file_name or k.title or "Untitled Document",
                         product_name=k.title,
-                        type=raw_type.capitalize() if raw_type else "Product",
                         status=status_display,
                         processed_at=k.created_at.strftime("%Y-%m-%d %H:%M:%S") if k.created_at else None,
                         chunks_count=0
@@ -1494,7 +1472,7 @@ async def edit_approved_document(
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 chunk["metadata"]["source_file"] = updated_title
                 if primary_cat:
-                    chunk["metadata"]["document_type"] = primary_cat
+                    chunk["metadata"]["category"] = primary_cat
                 if updated_categories:
                     chunk["metadata"]["categories"] = updated_categories
                 if updated_summary:
@@ -1510,8 +1488,6 @@ async def edit_approved_document(
             "file_name": existing_doc.get("file_name", ""),
             "file_hash": existing_doc.get("file_hash") if isinstance(existing_doc, dict) else None,
             "title": updated_title,
-            "type": existing_doc.get("type", "Product") if isinstance(existing_doc, dict) else "Product",
-            "document_type": existing_doc.get("document_type", "product") if isinstance(existing_doc, dict) else "product",
             "status": "Approved",
             "summary": updated_summary,
             "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
@@ -1584,6 +1560,13 @@ async def edit_pending_document(
         if updated_categories is not None and len(updated_categories) > 0:
             existing_doc["suggested_categories"] = normalized_categories
             
+        vis_settings = request.visibility_settings.model_dump() if request.visibility_settings else existing_doc.get("visibility_settings", {
+            "clinics": ["all"],
+            "doctor_types": ["all"],
+            "doctors": ["all"]
+        })
+        existing_doc["visibility_settings"] = vis_settings
+
         updated_chunks = existing_doc.get("chunks", existing_doc.get("corrected_chunks", existing_doc.get("raw_chunks", [])))
         primary_cat = updated_categories[0] if updated_categories else None
         str_categories = [c["name"] if isinstance(c, dict) else c for c in normalized_categories]
@@ -1595,9 +1578,13 @@ async def edit_pending_document(
                 if str_categories:
                     chunk["metadata"]["categories"] = str_categories
                 if primary_cat:
-                    chunk["metadata"]["document_type"] = primary_cat["name"] if isinstance(primary_cat, dict) else primary_cat
+                    chunk["metadata"]["category"] = primary_cat["name"] if isinstance(primary_cat, dict) else primary_cat
                 if updated_summary:
                     chunk["metadata"]["summary"] = updated_summary
+                if vis_settings:
+                    chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
+                    chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
+                    chunk["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
 
         with open(pending_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
@@ -1703,7 +1690,7 @@ async def refine_approved_document(
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = knowledge_id
                 if primary_cat:
-                    chunk["metadata"]["document_type"] = primary_cat
+                    chunk["metadata"]["category"] = primary_cat
                 if updated_categories:
                     chunk["metadata"]["categories"] = updated_categories
                 if updated_summary:
@@ -1715,8 +1702,6 @@ async def refine_approved_document(
             "file_name": file_name,
             "file_hash": existing_doc.get("file_hash") if isinstance(existing_doc, dict) else None,
             "title": existing_doc.get("title", file_name) if isinstance(existing_doc, dict) else file_name,
-            "type": existing_doc.get("type", "Product") if isinstance(existing_doc, dict) else "Product",
-            "document_type": existing_doc.get("document_type", "product") if isinstance(existing_doc, dict) else "product",
             "status": "Approved",
             "summary": updated_summary,
             "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
@@ -1793,6 +1778,8 @@ async def approve_document(
                         chunk["metadata"] = {}
                     chunk["metadata"]["knowledge_id"] = k_id
                     chunk["metadata"]["source_file"] = doc_title
+                    chunk["metadata"]["title"] = doc_title
+                    chunk["metadata"]["product_name"] = doc_title
                     
                     # Ensure categories are preserved
                     cats = data.get("suggested_categories", data.get("categories", []))
@@ -1836,8 +1823,6 @@ async def approve_document(
                 "file_name": file_name,
                 "file_hash": data.get("file_hash") if isinstance(data, dict) else None,
                 "title": doc_title,
-                "type": data.get("type", "Product") if isinstance(data, dict) else "Product",
-                "document_type": data.get("document_type", "product") if isinstance(data, dict) else "product",
                 "status": "Approved",
                 "summary": data.get("summary", "") if isinstance(data, dict) else "",
                 "image_url": data.get("image_url") if isinstance(data, dict) else None,
@@ -1992,7 +1977,6 @@ async def delete_document_endpoint(
 async def search_hybrid(
     query: str = Query(..., description="Search query string"),
     categories: Optional[List[str]] = Query(None, description="Optional category filters (e.g. ['Acne Care'])"),
-    document_type: Optional[str] = Query(None, description="Optional document category filter ('Product', 'Treatment', or 'Promotional')"),
     top_k: int = Query(8, description="Number of passage matches to return"),
     retriever: HybridRetriever = Depends(get_hybrid_retriever)
 ):
@@ -2004,8 +1988,6 @@ async def search_hybrid(
         raise HTTPException(status_code=500, detail="Hybrid retriever is not initialized.")
         
     filter_metadata = {}
-    if document_type and document_type.strip().lower() not in ("string", ""):
-        filter_metadata["document_type"] = document_type
     if categories:
         valid_cats = [c.strip() for c in categories if c and c.strip().lower() not in ("string", "")]
         if valid_cats:
@@ -2051,8 +2033,6 @@ async def chat_endpoint(
                 raw_history.append({"role": r, "content": c})
 
     filter_metadata = {}
-    if request.document_type and request.document_type.strip().lower() not in ("string", ""):
-        filter_metadata["document_type"] = request.document_type
     if request.categories:
         valid_cats = [c.strip() for c in request.categories if c and c.strip().lower() not in ("string", "")]
         if valid_cats:
@@ -2104,6 +2084,8 @@ async def reset_database(
     Clears the entire RAG knowledge base. Drops and recreates the PGVector collection, 
     resets the BM25 index, and deletes all files inside data/pending/ and data/output/.
     """
+    errors = []
+    
     try:
         # 1. Clear vector store
         if vector_store:
@@ -2118,17 +2100,18 @@ async def reset_database(
             bm25.clear()
             bm25.save(settings.bm25_index_path)
             
-        # 3. Clean files in data/pending/ and data/output/ (delete all .json staged/approved documents)
+        # 3. Clean files in data/pending/, data/output/, data/temp/ (including images)
+        cleanup_extensions = (".json", ".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".csv", ".pptx", ".ppt", ".jpg", ".jpeg", ".png", ".webp")
         for folder in ["data/pending", "data/output", "data/temp"]:
             if os.path.exists(folder):
                 for f in os.listdir(folder):
-                    if f.endswith(".json") or f.endswith(".pdf") or f.endswith(".docx") or f.endswith(".txt") or f.endswith(".xlsx") or f.endswith(".csv"):
+                    if f.lower().endswith(cleanup_extensions):
                         try:
                             os.remove(os.path.join(folder, f))
                         except Exception as file_err:
                             logger.warning(f"Could not remove file {f}: {file_err}")
 
-        # 4. Soft-delete all records in PostgreSQL Knowledge table
+        # 4. Soft-delete all records in PostgreSQL Knowledge table (MUST succeed)
         try:
             from app.core.database import AsyncSessionLocal
             from app.models.knowledge import Knowledge
@@ -2143,7 +2126,16 @@ async def reset_database(
                     await session.commit()
                     logger.info(f"Soft-deleted {len(k_records)} Knowledge records in PostgreSQL DB.")
         except Exception as db_err:
-            logger.warning(f"Could not clear Knowledge table in DB during reset: {db_err}")
+            error_msg = f"CRITICAL: Failed to soft-delete Knowledge records in PostgreSQL: {db_err}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+
+        if errors:
+            return {
+                "status": "partial_success",
+                "message": f"Knowledge base partially cleared. {len(errors)} error(s) occurred during reset.",
+                "errors": errors
+            }
                             
         return {"status": "success", "message": "Knowledge base (PGVector, BM25, staged/approved files, and PostgreSQL Knowledge DB) has been successfully cleared."}
     except Exception as e:

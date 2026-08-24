@@ -98,8 +98,8 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             metadata = chunk.get("metadata", {})
             source_file = metadata.get("source_file", "unknown")
             
-            product_name = source_file
-            for ext in [".pdf", ".docx", ".txt", "_parsed.json"]:
+            product_name = metadata.get("product_name") or metadata.get("title") or source_file
+            for ext in [".pdf", ".docx", ".doc", ".txt", ".xlsx", ".csv", ".jpg", ".jpeg", ".png", ".webp", "_parsed.json"]:
                 product_name = product_name.replace(ext, "")
             product_name = product_name.replace("dumy-", "").replace("dummy-", "").replace("Dummy_", "").replace("dummy_", "")
             product_name = product_name.replace("-", " ").replace("_", " ")
