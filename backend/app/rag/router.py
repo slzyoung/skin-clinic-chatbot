@@ -2890,19 +2890,12 @@ async def run_rag_evaluation(
         default=None,
         description="Benchmark configuration or test dataset list (leave empty {} or null for default benchmark suite)"
     ),
-    top_k: Optional[int] = Query(None, description="Number of retrieved passages to evaluate"),
-    evaluate_generation: Optional[bool] = Query(None, description="Run LLM-as-judge evaluation for Faithfulness & Answer Relevance"),
     retriever: HybridRetriever = Depends(get_hybrid_retriever),
     pipeline: GenerationPipeline = Depends(get_generation_pipeline),
     llm: BaseLLMAdapter = Depends(get_llm)
 ):
     """
     Evaluates retrieval accuracy (Hit Rate@K, MRR@K) and LLM reliability (Faithfulness, Answer Relevance) using RAGAS Framework.
-    Supports:
-    - Direct JSON Array payload: `[{"query": "...", "expected_file": "..."}, ...]`
-    - Standard Request Object payload: `{"top_k": 5, "evaluate_generation": true, "dataset": [...]}`
-    - Query parameters: `?top_k=5&evaluate_generation=true`
-    - Empty body `{}` or `null` for official ERHA default benchmark suite.
     """
     parsed_dataset = None
     parsed_top_k = 5
@@ -2912,8 +2905,6 @@ async def run_rag_evaluation(
         if isinstance(payload, RAGEvaluationRequest):
             if payload.dataset:
                 parsed_dataset = [d.model_dump() for d in payload.dataset]
-            parsed_top_k = payload.top_k
-            parsed_eval_gen = payload.evaluate_generation
         elif isinstance(payload, list):
             parsed_dataset = []
             for item in payload:
@@ -2935,15 +2926,6 @@ async def run_rag_evaluation(
                         parsed_dataset.append(d_item)
                     else:
                         parsed_dataset.append(item)
-            if "top_k" in payload and isinstance(payload["top_k"], int):
-                parsed_top_k = payload["top_k"]
-            if "evaluate_generation" in payload and isinstance(payload["evaluate_generation"], bool):
-                parsed_eval_gen = payload["evaluate_generation"]
-
-    if top_k is not None:
-        parsed_top_k = top_k
-    if evaluate_generation is not None:
-        parsed_eval_gen = evaluate_generation
 
     try:
         results = RAGEvaluator.evaluate_full(

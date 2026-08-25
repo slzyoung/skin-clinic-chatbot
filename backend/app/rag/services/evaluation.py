@@ -194,27 +194,31 @@ Return ONLY a JSON object: {{"score": <float between 0.0 and 1.0>, "reason": "<b
 
     @staticmethod
     def evaluate_answer_relevance(
-        query: str, answer: str, llm_adapter
+        query: str, answer: str, llm_adapter, expected_answer: Optional[str] = None
     ) -> float:
         """
         Answer Relevance: checks if the answer actually addresses the user's question.
+        Compares against expected_answer if provided.
         Returns a score 0.0 - 1.0 (1.0 = perfectly relevant).
         """
         if not query or not answer or not llm_adapter:
             return 0.0
 
+        exp_str = f"\n\nEXPECTED REFERENCE ANSWER:\n{expected_answer[:1000]}" if expected_answer else ""
+
         prompt = f"""You are a relevance judge for a medical chatbot.
 
-Given the following QUESTION and ANSWER, evaluate how relevant the ANSWER is to the QUESTION.
+Given the following QUESTION and ANSWER{", and optional EXPECTED REFERENCE ANSWER" if expected_answer else ""}, evaluate how relevant and accurate the ANSWER is to the QUESTION.
 
 QUESTION:
 {query[:500]}
+{exp_str}
 
 ANSWER:
 {answer[:2000]}
 
 EVALUATION CRITERIA:
-- Score 1.0: The answer directly and completely addresses the question (including correctly informing the doctor if specific requested information is not available in official guidelines).
+- Score 1.0: The answer directly and completely addresses the question (matching key facts in expected reference answer if provided, or correctly informing the doctor if specific requested information is not available in official guidelines).
 - Score 0.7-0.9: The answer mostly addresses the question with minor gaps.
 - Score 0.4-0.6: The answer partially addresses the question but misses key aspects.
 - Score 0.0-0.3: The answer is mostly irrelevant to the question.
@@ -278,16 +282,21 @@ class RAGEvaluator:
             exp_file = item.get("expected_file", "") or item.get("expected_document", "")
             expected_ans = item.get("expected_answer")
 
+            # Dynamic top_k calculation based on Query Intent (1 for Greeting, 4 for Price, 9 for Medical/Clinical)
+            from app.rag.services.intent import QueryIntentDetector
+            intent, _ = QueryIntentDetector.detect(query)
+            effective_top_k = QueryIntentDetector.get_recommended_top_k(query, intent, top_k)
+
             # 1. Retrieval
             retrieved = retriever.retrieve(
                 query=query, 
-                top_k=top_k, 
+                top_k=effective_top_k, 
                 rerank=rerank, 
-                rerank_top_n=rerank_top_n
+                rerank_top_n=effective_top_k
             )
             results = retrieved.get("results", [])
 
-            is_hit, rr, top_source = RetrievalEvaluator.calculate_hit_and_rr(results, exp_file, top_k)
+            is_hit, rr, top_source = RetrievalEvaluator.calculate_hit_and_rr(results, exp_file, effective_top_k)
             if is_hit:
                 hit_count += 1
             mrr_sum += rr
@@ -312,7 +321,7 @@ class RAGEvaluator:
                             answer=gen_answer, context=context, llm_adapter=llm_adapter
                         )
                         r_score = GenerationEvaluator.evaluate_answer_relevance(
-                            query=query, answer=gen_answer, llm_adapter=llm_adapter
+                            query=query, answer=gen_answer, llm_adapter=llm_adapter, expected_answer=expected_ans
                         )
                         faithfulness_scores.append(f_score)
                         relevance_scores.append(r_score)

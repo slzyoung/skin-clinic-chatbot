@@ -144,8 +144,6 @@ class RAGEvaluationItem(BaseModel):
     expected_answer: Optional[str] = Field(None, description="Expected reference answer for generation evaluation (opsional)")
 
 class RAGEvaluationRequest(BaseModel):
-    top_k: int = Field(5, description="Number of retrieved passages to evaluate (Hit Rate@K & MRR@K)")
-    evaluate_generation: bool = Field(True, description="Run LLM-as-judge evaluation for Faithfulness & Answer Relevance")
     dataset: Optional[List[RAGEvaluationItem]] = Field(
         None, 
         description="Optional custom benchmark test dataset. If empty, the default official ERHA benchmark dataset will be used."
@@ -154,8 +152,6 @@ class RAGEvaluationRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "example": {
-                "top_k": 5,
-                "evaluate_generation": True,
                 "dataset": [
                     {
                         "query": "Berapa lama durasi tindakan, downtime, dan interval sesi untuk Acne Intensive Program?",
