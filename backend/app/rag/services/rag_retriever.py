@@ -527,25 +527,37 @@ class HybridRetriever:
             query_lower = query.lower()
             usage_keywords = ["how to use", "directions", "cara pakai", "cara penggunaan", "aturan pakai", "dosis", "instruksi"]
             ingredients_keywords = ["kandungan", "ingredients", "bahan aktif", "komposisi", "active ingredients"]
-            
+            treatment_keywords = ["treatment", "tindakan", "prosedur", "perawatan", "peeling", "ekstraksi", "facial", "terapi", "laser"]
+            product_keywords = ["produk", "skincare", "serum", "krim", "cream", "facial wash", "cleanser", "sunscreen", "moisturizer", "sku"]
+
             is_usage_intent = any(k in query_lower for k in usage_keywords)
             is_ingredients_intent = any(k in query_lower for k in ingredients_keywords)
-            
+            is_treatment_intent = any(k in query_lower for k in treatment_keywords)
+            is_product_intent = any(k in query_lower for k in product_keywords)
+
             boosted_hits = []
             for hit in all_reranked:
                 updated_hit = hit.copy()
-                section_upper = updated_hit.get("metadata", {}).get("section", "").upper()
+                meta = updated_hit.get("metadata", {})
+                section_upper = meta.get("section", "").upper()
+                doc_type_upper = str(meta.get("document_type", "")).upper()
                 boost = 0.0
+                
                 if is_usage_intent and any(s in section_upper for s in ["HOW TO USE", "DIRECTIONS"]):
                     boost += 0.05
                 elif is_ingredients_intent and any(s in section_upper for s in ["INGREDIENT", "KANDUNGAN", "KOMPOSISI"]):
                     boost += 0.05
-                
+                    
+                if is_treatment_intent and (doc_type_upper == "TREATMENT" or any(s in section_upper for s in ["TREATMENT", "PERAWATAN", "TINDAKAN", "PROSEDUR", "PROTOKOL"])):
+                    boost += 0.10
+                elif is_product_intent and (doc_type_upper == "PRODUCT" or any(s in section_upper for s in ["PRODUCT", "PRODUK", "KATALOG", "SKINCARE"])):
+                    boost += 0.05
+
                 if boost > 0:
                     updated_hit["rerank_score"] = updated_hit.get("rerank_score", 0.0) + boost
-                    logger.debug(f"Applied intent boost of +{boost} to section '{section_upper}' (new score: {updated_hit['rerank_score']:.4f})")
+                    logger.debug(f"Applied intent boost of +{boost} to section '{section_upper}' / doc_type '{doc_type_upper}' (new score: {updated_hit['rerank_score']:.4f})")
                 boosted_hits.append(updated_hit)
-                
+
             final_hits = sorted(boosted_hits, key=lambda h: h.get("rerank_score", 0.0), reverse=True)[:rerank_top_n]
             logger.debug(f"Reranking and intent boosting completed. Returned top {len(final_hits)} chunks.")
         else:

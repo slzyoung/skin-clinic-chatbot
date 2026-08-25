@@ -20,6 +20,9 @@ class ChatRequest(BaseModel):
     user_context: Optional[UserContext] = Field(None, description="Context properties of the querying user used for visibility and exclusion filtering")
     attachment_text: Optional[str] = Field(None, description="Extracted text from attached patient document/profile (auto-populated by backend when file is uploaded)")
     doctor_name: Optional[str] = Field(None, description="The name of the doctor (e.g. 'dr. Sarah' or 'Sarah')")
+    knowledge_id: Optional[str] = Field(None, description="Target knowledge ID to scope query strictly to this document if specified")
+    knowledge_ids: Optional[List[str]] = Field(default=[], description="Target knowledge IDs to scope query strictly to these documents")
+    batch_id: Optional[str] = Field(None, description="Target batch ID to scope query strictly to this batch")
 
 
 class ChatResponse(BaseModel):
@@ -136,13 +139,55 @@ class ApprovedDocumentResponse(BaseModel):
 # --- RAGAS-style Evaluation Schemas ---
 
 class RAGEvaluationItem(BaseModel):
+    query: str = Field(..., description="Test query string (e.g. 'Berapa lama durasi tindakan Acne Intensive Program?')")
+    expected_file: str = Field(..., description="Expected source document filename or keyword match (e.g. 'ERHA_Acne_Center_Treatments.docx')")
+    expected_answer: Optional[str] = Field(None, description="Expected reference answer for generation evaluation (opsional)")
+
+class RAGEvaluationRequest(BaseModel):
+    top_k: int = Field(5, description="Number of retrieved passages to evaluate (Hit Rate@K & MRR@K)")
+    evaluate_generation: bool = Field(True, description="Run LLM-as-judge evaluation for Faithfulness & Answer Relevance")
+    dataset: Optional[List[RAGEvaluationItem]] = Field(
+        None, 
+        description="Optional custom benchmark test dataset. If empty, the default official ERHA benchmark dataset will be used."
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "top_k": 5,
+                "evaluate_generation": True,
+                "dataset": [
+                    {
+                        "query": "Berapa lama durasi tindakan, downtime, dan interval sesi untuk Acne Intensive Program?",
+                        "expected_file": "ERHA_Acne_Center_Treatments.docx",
+                        "expected_answer": "Durasi tindakan 60-75 menit, downtime 1-2 hari, interval 2 minggu sekali."
+                    },
+                    {
+                        "query": "Apa saja kandungan aktif, indikasi, dan harga ERHA Acneact Acne Spot Gel?",
+                        "expected_file": "Katalog_Acneact.pdf",
+                        "expected_answer": "Kandungan BHA/Salicylic Acid, Sulfur. Indikasi jerawat aktif. Harga Rp 50.000."
+                    }
+                ]
+            }
+        }
+    }
+
+class RAGEvaluationQueryResult(BaseModel):
     query: str = Field(..., description="Test query string")
-    expected_file: str = Field(..., description="Expected source document filename for retrieval metrics")
-    expected_answer: Optional[str] = Field(None, description="Expected reference answer for generation metrics (Faithfulness, Answer Relevance)")
+    expected_file: str = Field(..., description="Expected reference document")
+    retrieved_source: Optional[str] = Field(None, description="Top retrieved document filename")
+    hit: bool = Field(..., description="Whether expected document was found in top-K")
+    reciprocal_rank: float = Field(..., description="1 / rank position of expected document")
+    faithfulness_score: Optional[float] = Field(None, description="Faithfulness / Groundedness score (0.0 - 1.0)")
+    relevance_score: Optional[float] = Field(None, description="Answer Relevance score (0.0 - 1.0)")
+    generated_answer: Optional[str] = Field(None, description="Generated answer from RAG pipeline")
 
 class RAGEvaluationResponse(BaseModel):
-    hit_rate: float = Field(..., description="Hit Rate@K — proportion of queries where relevant doc is in top-K")
-    mrr: float = Field(..., description="Mean Reciprocal Rank@K")
-    faithfulness: Optional[float] = Field(None, description="Faithfulness score (0-1) — are claims grounded in context?")
-    answer_relevance: Optional[float] = Field(None, description="Answer Relevance score (0-1) — does answer address the question?")
-    total_queries: int = Field(..., description="Number of queries evaluated")
+    hit_rate: float = Field(..., description="Hit Rate@K — proportion of queries where relevant doc is in top-K (0.0 - 1.0)")
+    mrr: float = Field(..., description="Mean Reciprocal Rank@K — precision of rank positioning (0.0 - 1.0)")
+    faithfulness: Optional[float] = Field(None, description="Faithfulness score (0.0 - 1.0) — zero hallucination groundedness score")
+    answer_relevance: Optional[float] = Field(None, description="Answer Relevance score (0.0 - 1.0) — directness & medical accuracy score")
+    overall_quality_score: float = Field(..., description="Composite RAG Quality Index (0 - 100%) for SLA readiness monitoring")
+    total_queries: int = Field(..., description="Total benchmark queries evaluated")
+    evaluated_at: str = Field(..., description="ISO Timestamp of benchmark execution")
+    details: List[RAGEvaluationQueryResult] = Field(default=[], description="Detailed per-query evaluation breakdowns")

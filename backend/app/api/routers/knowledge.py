@@ -446,7 +446,19 @@ async def knowledge_chat(
         excluded_categories=excluded_cats
     )
 
-    return await chat_endpoint(request=request, pipeline=pipeline)
+    from app.rag.router import run_chat_pipeline
+    return await run_chat_pipeline(
+        query=request.query,
+        attachment_text=request.attachment_text,
+        doctor_name=current_user.name or request.doctor_name,
+        user_context=request.user_context,
+        history=request.history,
+        categories=request.categories,
+        top_k=request.top_k,
+        knowledge_id=request.knowledge_id,
+        batch_id=request.batch_id,
+        pipeline=pipeline
+    )
 
 ALLOWED_MIME_TYPES = {
     "application/pdf",

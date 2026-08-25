@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from loguru import logger
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks, Path, Body, Request
 from pydantic import BaseModel, Field, model_validator
@@ -11,6 +11,7 @@ import uuid
 from app.rag.schemas import (
     ChatRequest, 
     ChatResponse, 
+    UserContext,
     EvaluationItem,
     DocumentListItem,
     PendingDocumentResponse,
@@ -18,6 +19,8 @@ from app.rag.schemas import (
     EditApprovedDocumentRequest,
     ApprovedDocumentResponse,
     RAGEvaluationItem,
+    RAGEvaluationRequest,
+    RAGEvaluationQueryResult,
     RAGEvaluationResponse
 )
 from app.rag.services.rag_pipeline import IngestionPipeline
@@ -333,12 +336,16 @@ def align_chunks_with_multitreatment(
         if matched_entity:
             chunk_meta["product_name"] = matched_entity
             chunk_meta["entity"] = matched_entity
+            chunk_meta["section"] = matched_entity
             # If chunk text doesn't start with the entity header, prepend it for retrieval clarity
             if not re.search(r'^(?:#+\s+|\d+\.\s+)' + re.escape(matched_entity), chunk_text, re.IGNORECASE):
                 chunk["text"] = f"## {matched_entity}\n\n{chunk_text}"
         else:
             if not chunk_meta.get("product_name"):
                 chunk_meta["product_name"] = doc_title
+            # If section contains raw instruction steps, clean it to General / Title
+            if str(chunk_meta.get("section", "")).strip().startswith("1."):
+                chunk_meta["section"] = doc_title
 
         chunk_meta["title"] = doc_title
         if doc_type:
@@ -1162,16 +1169,16 @@ Saya tidak akan mengasumsikan komposisi, penggunaan, kontraindikasi, atau efek s
                             "file": {
                                 "type": "array",
                                 "items": {"type": "string", "format": "binary"},
-                                "description": "Primary document file(s) to upload. Select 1 or multiple files (Choose File)"
+                                "description": "Document file(s) to upload (PDF, DOCX, XLSX, TXT, JPG, PNG)"
                             },
                             "prompt": {
                                 "type": "string",
-                                "description": "Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"
+                                "description": "Optional custom AI processing instruction"
                             },
                             "replace_existing": {
                                 "type": "boolean",
                                 "default": False,
-                                "description": "Explicit confirmation by Admin to replace/overwrite an existing PENDING draft"
+                                "description": "Set to true to overwrite existing pending draft"
                             }
                         },
                         "required": ["file"]
@@ -1183,18 +1190,14 @@ Saya tidak akan mengasumsikan komposisi, penggunaan, kontraindikasi, atau efek s
 )
 async def ingest_document(
     background_tasks: BackgroundTasks,
-    file: List[UploadFile] = File(..., description="Primary document file(s) to upload (Choose File)"),
-    prompt: Optional[str] = Form(None, description="Optional custom AI instruction for document processing (e.g. translation, reformatting, custom sectioning)"),
-    replace_existing: bool = Form(False, description="Set to true if admin explicitly confirms replacing/overwriting existing PENDING draft(s)"),
+    file: List[UploadFile] = File(..., description="Document file(s) to upload (PDF, DOCX, XLSX, TXT, JPG, PNG)"),
+    prompt: Optional[str] = Form(None, description="Optional custom AI processing instruction"),
+    replace_existing: bool = Form(False, description="Set to true to overwrite existing pending draft"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     llm: BaseLLMAdapter = Depends(get_llm)
 ):
     """
-    API endpoint to upload and stage document(s) for ingestion.
-    Supports Batch Ingestion with Batch ID, SHA-256 Checksum calculation, and 3-Way Duplicate Detection:
-    - PUBLISHED / APPROVED -> BLOCKED (Protects active clinic knowledge base)
-    - PENDING / ON REVIEW  -> Requires Admin Confirmation (replace_existing=True) to prevent silent overwrite
-    - NEW                  -> Proceed with AI staging
+    Uploads and extracts document files (PDF, DOCX, XLSX, TXT, JPG, PNG) into the staging area for review.
     """
     upload_list = file if isinstance(file, list) else [file]
     upload_list = [f for f in upload_list if f is not None and f.filename]
@@ -1377,10 +1380,10 @@ async def ingest_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/ingest/pending/{knowledge_id}", tags=["Ingestion"], response_model=PendingDocumentResponse)
-async def get_pending_details(knowledge_id: str):
+@router.get("/ingest/pending/{knowledge_id}", tags=["Ingestion"], summary="Get Pending Details", response_model=PendingDocumentResponse)
+async def get_pending_details(knowledge_id: str = Path(..., description="Pending document identifier (UUID)")):
     """
-    Retrieves the full staged review details and text chunks of a document for inspection.
+    Retrieves extracted text, summary, and metadata of a pending staged document.
     """
     target_file = resolve_pending_file(knowledge_id) or resolve_approved_file(knowledge_id)
     if not target_file:
@@ -1472,16 +1475,15 @@ async def get_pending_details(knowledge_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to read document details: {e}")
 
 
-@router.post("/ingest/pending/{knowledge_id}/refine", tags=["Ingestion"], response_model=PendingDocumentResponse)
+@router.post("/ingest/pending/{knowledge_id}/refine", tags=["Ingestion"], summary="Refine Pending Document", response_model=PendingDocumentResponse)
 async def refine_pending_document(
-    knowledge_id: str,
-    request: str = Form(..., description="Instruksi/prompt untuk menyempurnakan dokumen"),
+    knowledge_id: str = Path(..., description="Pending document identifier (UUID)"),
+    request: str = Form(..., description="Prompt instructions to refine summary"),
     llm: BaseLLMAdapter = Depends(get_llm),
-    file_attachment: Optional[UploadFile] = None
+    file_attachment: Optional[UploadFile] = File(None, description="Optional supporting file attachment")
 ):
     """
-    Interactively refine a staged document's summary, feedback, or text chunks 
-    using natural language instructions and optional attached file content.
+    Refines a pending document summary using custom natural language AI instructions.
     """
     # Parse request: accept plain text prompt, JSON {"prompt":"...","history":[...]}, or RefineRequest object
     if isinstance(request, str):
@@ -1768,10 +1770,10 @@ async def refine_pending_document(
         raise HTTPException(status_code=500, detail=f"Failed to refine document: {e}")
 
 
-@router.get("/ingest/documents", tags=["Ingestion"], response_model=List[DocumentListItem])
+@router.get("/ingest/documents", tags=["Ingestion"], summary="List All Documents", response_model=List[DocumentListItem])
 async def list_all_documents():
     """
-    List all documents in the system with their status ('Approved', 'On review', or 'Processing') and basic metadata.
+    Retrieves all knowledge base documents across Approved, On review, and Processing statuses.
     """
     pending_dir = "data/pending"
     approved_dir = "data/output"
@@ -1904,10 +1906,10 @@ async def list_all_documents():
     return docs
 
 
-@router.get("/ingest/approved/{knowledge_id}", tags=["Ingestion"], response_model=ApprovedDocumentResponse)
-async def get_approved_document_details(knowledge_id: str):
+@router.get("/ingest/approved/{knowledge_id}", tags=["Ingestion"], summary="Get Approved Document Details", response_model=ApprovedDocumentResponse)
+async def get_approved_document_details(knowledge_id: str = Path(..., description="Approved document identifier (UUID)")):
     """
-    Retrieves detail data (chunks, summary, categories) of an approved document for frontend edit form rendering.
+    Retrieves full summary, metadata, and text chunks of an approved document.
     """
     approved_file = resolve_approved_file(knowledge_id)
     if not approved_file:
@@ -1977,17 +1979,16 @@ async def get_approved_document_details(knowledge_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to read approved document: {e}")
 
 
-@router.put("/ingest/approved/{knowledge_id}", tags=["Ingestion"])
+@router.put("/ingest/approved/{knowledge_id}", tags=["Ingestion"], summary="Edit Approved Document")
 async def edit_approved_document(
-    knowledge_id: str,
-    request: EditApprovedDocumentRequest,
+    knowledge_id: str = Path(..., description="Approved document identifier"),
+    request: EditApprovedDocumentRequest = ...,
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index),
     vector_store: BaseVectorStoreAdapter = Depends(get_vector_store)
 ):
     """
-    Edits an approved document's summary and categories manually (from UI Save Form).
-    Automatically re-indexes into PGVector & BM25, and updates PostgreSQL KnowledgeCategory table.
+    Updates summary, categories, and metadata of an approved document and re-indexes vector embeddings.
     """
     approved_file = resolve_approved_file(knowledge_id)
     if not approved_file:
@@ -2085,13 +2086,13 @@ async def edit_approved_document(
         raise HTTPException(status_code=500, detail=f"Failed to update approved document: {e}")
 
 
-@router.put("/ingest/pending/{knowledge_id}", tags=["Ingestion"])
+@router.put("/ingest/pending/{knowledge_id}", tags=["Ingestion"], summary="Edit Pending Document")
 async def edit_pending_document(
-    knowledge_id: str,
-    request: EditApprovedDocumentRequest
+    knowledge_id: str = Path(..., description="Pending document identifier (UUID)"),
+    request: EditApprovedDocumentRequest = ...
 ):
     """
-    Edits a pending document's summary and categories manually (from UI Save Form).
+    Updates summary, categories, and metadata of a pending staged document.
     """
     pending_file = resolve_pending_file(knowledge_id)
     if not pending_file:
@@ -2171,19 +2172,18 @@ async def edit_pending_document(
         raise HTTPException(status_code=500, detail=f"Failed to update pending document: {e}")
 
 
-@router.post("/ingest/approved/{knowledge_id}/refine", tags=["Ingestion"])
+@router.post("/ingest/approved/{knowledge_id}/refine", tags=["Ingestion"], summary="Refine Approved Document")
 async def refine_approved_document(
-    knowledge_id: str,
-    request: str = Form(..., description="Instruksi/prompt untuk menyempurnakan dokumen"),
+    knowledge_id: str = Path(..., description="Approved document identifier (UUID)"),
+    request: str = Form(..., description="Prompt instructions to refine summary"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index),
     vector_store: BaseVectorStoreAdapter = Depends(get_vector_store),
     llm: BaseLLMAdapter = Depends(get_llm),
-    file_attachment: Optional[UploadFile] = None
+    file_attachment: Optional[UploadFile] = File(None, description="Optional supporting file attachment")
 ):
     """
-    Refines an approved document's summary, categories, and chunks using natural language AI instructions.
-    Automatically re-indexes into PGVector & BM25, and updates PostgreSQL KnowledgeCategory table.
+    Refines an approved document summary using AI prompt instructions and updates RAG index.
     """
     # Parse request: accept plain text prompt, JSON {"prompt":"...","history":[...]}, or RefineRequest object
     if isinstance(request, str):
@@ -2405,15 +2405,14 @@ async def refine_approved_document(
         raise HTTPException(status_code=500, detail=f"Failed to refine approved document: {e}")
 
 
-@router.post("/ingest/approve/{knowledge_id}", tags=["Ingestion"])
+@router.post("/ingest/approve/{knowledge_id}", tags=["Ingestion"], summary="Approve Document")
 async def approve_document(
-    knowledge_id: str = Path(..., description="Knowledge ID(s) to approve. Supports single ID (e.g. 'uuid1') or comma-separated IDs for batch approval (e.g. 'uuid1,uuid2,uuid3')"),
+    knowledge_id: str = Path(..., description="Document ID(s) to approve (supports single ID or comma-separated list)"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index)
 ):
     """
-    Approves staged document(s) and indexes them into PGVector & BM25 database.
-    Supports single document approval or comma-separated batch approval in 1 click.
+    Approves pending staged document(s) and indexes them into vector and BM25 search databases.
     """
     targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() not in ("string", "all")]
 
@@ -2549,17 +2548,15 @@ async def approve_document(
     }
 
 
-@router.delete("/ingest/documents/{knowledge_id}", tags=["Ingestion"])
+@router.delete("/ingest/documents/{knowledge_id}", tags=["Ingestion"], summary="Delete Document Endpoint")
 async def delete_document_endpoint(
-    knowledge_id: str,
+    knowledge_id: str = Path(..., description="Document ID(s) to delete (supports single ID, comma-separated list, or 'all')"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index),
     vector_store: BaseVectorStoreAdapter = Depends(get_vector_store)
 ):
     """
-    Deletes document(s) across all statuses (Pending or Approved).
-    Supports single ID, comma-separated IDs (e.g. 'id1,id2,id3'), filename, or 'all'.
-    Removes physical JSON files, PGVector embeddings, BM25 indices, and performs soft-delete in PostgreSQL.
+    Deletes document(s) from Knowledge Base and vector search index (supports single ID, comma-separated IDs, or 'all').
     """
     raw_targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() != "string"]
     if not raw_targets:
@@ -2653,145 +2650,55 @@ async def delete_document_endpoint(
     return {"status": "success", "message": f"Successfully deleted {len(deleted_ids)} document(s).", "deleted_ids": deleted_ids}
 
 
-@router.get("/search", tags=["Retrieval"])
-async def search_hybrid(
-    query: str = Query(..., description="Search query string"),
-    categories: Optional[List[str]] = Query(None, description="Optional category filters (e.g. ['Acne Care'])"),
-    top_k: int = Query(8, description="Number of passage matches to return"),
-    retriever: HybridRetriever = Depends(get_hybrid_retriever)
-):
-    """
-    Advanced Hybrid Search (PGVector Dense Embeddings + BM25 Sparse Keyword Match) 
-    with Reciprocal Rank Fusion (RRF).
-    """
-    if not retriever:
-        raise HTTPException(status_code=500, detail="Hybrid retriever is not initialized.")
-        
-    filter_metadata = {}
-    if categories:
-        valid_cats = [c.strip() for c in categories if c and c.strip().lower() not in ("string", "")]
-        if valid_cats:
-            filter_metadata["categories"] = valid_cats
-        
-    parsed_filter = filter_metadata if filter_metadata else None
-            
-    try:
-        hits = retriever.retrieve(
-            query=query, 
-            top_k=top_k, 
-            filter_metadata=parsed_filter, 
-            rerank=False,
-            rerank_top_n=top_k
-        )
-        return hits
-    except Exception as e:
-        logger.error(f"Search endpoint failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/chat", response_model=ChatResponse, tags=["Generation"])
-async def chat_endpoint(
-    request: Request,
-    pipeline: GenerationPipeline = Depends(get_generation_pipeline)
-):
-    """
-    Production Unified RAG Chat Endpoint. Single entry point for query processing,
-    dynamic complexity routing, evidence validation, clinical safety gate, and LLM response synthesis.
 
-    Supports two Content-Type modes:
-    - application/json: Standard ChatRequest JSON body (backward-compatible)
-    - multipart/form-data: Form fields + optional file upload for patient document attachment
-    """
-    from fastapi import Request as _Req
-
+async def run_chat_pipeline(
+    query: str,
+    file: Optional[UploadFile] = None,
+    attachment_text: Optional[str] = None,
+    doctor_name: Optional[str] = None,
+    history: Optional[List[Any]] = None,
+    user_context: Optional[UserContext] = None,
+    knowledge_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+    top_k: int = 8,
+    pipeline: GenerationPipeline = None
+) -> ChatResponse:
     if not pipeline:
         raise HTTPException(status_code=500, detail="Generation pipeline is not initialized.")
 
-    content_type = request.headers.get("content-type", "")
-
-    # --- Mode 1: JSON body (backward-compatible) ---
-    if "application/json" in content_type:
-        body = await request.json()
-        chat_req = ChatRequest(**body)
-
-    # --- Mode 2: Multipart/form-data (file upload support) ---
-    elif "multipart/form-data" in content_type:
-        form = await request.form()
-
-        query = form.get("query", "")
-        if not query:
-            raise HTTPException(status_code=400, detail="Field 'query' is required.")
-
-        top_k = int(form.get("top_k", "8"))
-        categories_raw = form.get("categories", "[]")
-        history_raw = form.get("history", "[]")
-
+    # 1. Extract text from uploaded file if present
+    file_attachment_text = attachment_text
+    if file and hasattr(file, "read"):
         try:
-            categories = json.loads(categories_raw) if isinstance(categories_raw, str) else []
-        except Exception:
-            categories = []
+            from app.rag.services.attachment_parser import AttachmentParser
+            parser = AttachmentParser()
+            extracted_text, attach_meta = await parser.extract_from_upload(file)
+            if extracted_text and not extracted_text.startswith("[Error") and not extracted_text.startswith("[Dokumen tidak"):
+                file_name_str = getattr(file, "filename", "File Terlampir")
+                file_attachment_text = f"[Dokumen Pasien Terlampir: {file_name_str}]\n{extracted_text.strip()}"
+                logger.info(
+                    f"📎 [ChatPipeline] Extracted {attach_meta.get('chars', 0)} chars "
+                    f"from '{file_name_str}' via {attach_meta.get('method', '?')} "
+                    f"in {attach_meta.get('extraction_ms', 0)}ms"
+                )
+        except Exception as e:
+            logger.error(f"❌ [ChatPipeline] AttachmentParser failed: {e}")
 
-        try:
-            history = json.loads(history_raw) if isinstance(history_raw, str) else []
-        except Exception:
-            history = []
-
-        # Parse user_context if provided
-        user_context_raw = form.get("user_context")
-        user_context = None
-        if user_context_raw:
-            try:
-                user_context = json.loads(user_context_raw) if isinstance(user_context_raw, str) else None
-            except Exception:
-                user_context = None
-
-        # Extract text from uploaded file if present
-        attachment_text = None
-        uploaded_file = form.get("file")
-        if uploaded_file and hasattr(uploaded_file, "read"):
-            try:
-                from app.rag.services.attachment_parser import AttachmentParser
-                parser = AttachmentParser()
-                extracted_text, attach_meta = await parser.extract_from_upload(uploaded_file)
-                if extracted_text and not extracted_text.startswith("[Error") and not extracted_text.startswith("[Dokumen tidak"):
-                    attachment_text = extracted_text
-                    logger.info(
-                        f"📎 [ChatEndpoint] Extracted {attach_meta.get('chars', 0)} chars "
-                        f"from '{attach_meta.get('filename', '?')}' via {attach_meta.get('method', '?')} "
-                        f"in {attach_meta.get('extraction_ms', 0)}ms"
-                    )
-                else:
-                    logger.warning(f"⚠️ [ChatEndpoint] File extraction returned fallback text: {extracted_text[:100]}")
-            except Exception as e:
-                logger.error(f"❌ [ChatEndpoint] AttachmentParser failed: {e}")
-
-        chat_req = ChatRequest(
-            query=query,
-            categories=categories,
-            top_k=top_k,
-            history=history,
-            user_context=user_context,
-            attachment_text=attachment_text
-        )
-    else:
-        # Fallback: try to parse as JSON
-        try:
-            body = await request.json()
-            chat_req = ChatRequest(**body)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Unsupported Content-Type. Use application/json or multipart/form-data.")
-
-    # --- Build enriched query with attachment text ---
-    effective_query = chat_req.query
-    if chat_req.attachment_text:
+    # 2. Build effective query with attachment text
+    effective_query = query
+    if file_attachment_text:
         effective_query = (
-            f"{chat_req.query}\n\n"
+            f"{query}\n\n"
             f"--- DOKUMEN PASIEN TERLAMPIR ---\n"
-            f"{chat_req.attachment_text}"
+            f"{file_attachment_text}"
         )
 
+    # 3. Format history
     raw_history = []
-    if chat_req.history:
-        for msg in chat_req.history:
+    if history:
+        for msg in history:
             if isinstance(msg, dict):
                 r = msg.get("role", "")
                 c = msg.get("content", "")
@@ -2801,42 +2708,95 @@ async def chat_endpoint(
             if r and c:
                 raw_history.append({"role": r, "content": c})
 
+    # 4. Build metadata filter for RBAC & Scope
     filter_metadata = {}
-    if chat_req.categories:
-        valid_cats = [c.strip() for c in chat_req.categories if c and c.strip().lower() not in ("string", "")]
+    if categories:
+        valid_cats = [c.strip() for c in categories if c and c.strip().lower() not in ("string", "")]
         if valid_cats:
             filter_metadata["categories"] = valid_cats
-        
-    if chat_req.user_context:
-        filter_metadata["clinics"] = chat_req.user_context.branch_ids + ["all"]
-        filter_metadata["doctor_types"] = [chat_req.user_context.dr_type, "all"]
-        filter_metadata["doctors"] = [chat_req.user_context.user_id, "all"]
-        if chat_req.user_context.excluded_categories:
-            filter_metadata["excluded_categories"] = chat_req.user_context.excluded_categories
+
+    if knowledge_id:
+        filter_metadata["knowledge_id"] = str(knowledge_id)
+    if batch_id:
+        filter_metadata["batch_id"] = str(batch_id)
+
+    if user_context:
+        filter_metadata["clinics"] = user_context.branch_ids + ["all"]
+        filter_metadata["doctor_types"] = [user_context.dr_type, "all"]
+        filter_metadata["doctors"] = [user_context.user_id, "all"]
+        if user_context.excluded_categories:
+            filter_metadata["excluded_categories"] = user_context.excluded_categories
 
     parsed_filter = filter_metadata if filter_metadata else None
-    
-    doc_name = None
-    if getattr(chat_req, "doctor_name", None):
-        doc_name = chat_req.doctor_name
-    elif chat_req.user_context and getattr(chat_req.user_context, "doctor_name", None):
-        doc_name = chat_req.user_context.doctor_name
+
+    # Doctor name for greeting
+    doc_name = doctor_name
+    if not doc_name and user_context and getattr(user_context, "doctor_name", None):
+        doc_name = user_context.doctor_name
+
+    # Check pending document context if knowledge_id is unapproved
+    pending_doc_context = None
+    if knowledge_id:
+        k_id_str = str(knowledge_id)
+        p_path = os.path.join("data/pending", f"{k_id_str}.json")
+        if not os.path.exists(p_path):
+            p_path = os.path.join("data/pending", f"{k_id_str}_parsed.json")
+        if os.path.exists(p_path):
+            try:
+                with open(p_path, "r", encoding="utf-8") as pf:
+                    p_json = json.load(pf)
+                if isinstance(p_json, dict):
+                    p_summary = p_json.get("summary", "")
+                    p_chunks = p_json.get("chunks", [])
+                    ctx_parts = []
+                    if p_summary:
+                        ctx_parts.append(f"### DOKUMEN: {p_json.get('title', k_id_str)}\n{p_summary}")
+                    for c in p_chunks[:top_k]:
+                        c_txt = c.get("text", "") if isinstance(c, dict) else str(c)
+                        if c_txt and c_txt not in p_summary:
+                            ctx_parts.append(c_txt)
+                    if ctx_parts:
+                        pending_doc_context = "\n\n---\n\n".join(ctx_parts)
+            except Exception as pe:
+                logger.warning(f"Could not load pending doc context: {pe}")
 
     try:
+        if pending_doc_context:
+            system_prompt = getattr(pipeline, "system_prompt", "")
+            preview_prompt = f"""
+            {system_prompt}
+
+            Context Dokumen yang Sedang Ditinjau:
+            {pending_doc_context}
+
+            Pertanyaan Pengguna:
+            {effective_query}
+            """
+            llm_adapter = getattr(pipeline, "llm_adapter", None)
+            if llm_adapter:
+                preview_answer = await asyncio.to_thread(llm_adapter.generate, preview_prompt)
+                return ChatResponse(
+                    query=query,
+                    answer=preview_answer.strip(),
+                    context=pending_doc_context[:2000],
+                    results=[{"text": pending_doc_context[:500], "score": 1.0, "metadata": {"knowledge_id": knowledge_id, "status": "On review"}}],
+                    agent_used=False
+                )
+
         response = pipeline.generate_answer(
             query=effective_query,
-            top_k=chat_req.top_k,
+            top_k=top_k,
             filter_metadata=parsed_filter,
             rerank=False,
             history=raw_history,
             doctor_name=doc_name
         )
-        
+
         if isinstance(response, ChatResponse):
             return response
         elif isinstance(response, dict):
             return ChatResponse(
-                query=response.get("query", chat_req.query),
+                query=response.get("query", query),
                 answer=response.get("answer", ""),
                 context=response.get("context", ""),
                 results=response.get("results", []),
@@ -2849,10 +2809,159 @@ async def chat_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/chat", response_model=ChatResponse, tags=["Generation"], summary="Chat Endpoint")
+async def chat_endpoint(
+    request: Request,
+    prompt: Optional[str] = Form(
+        None, 
+        description="Clinical query or medical instruction from doctor"
+    ),
+    file: Optional[UploadFile] = File(
+        None, 
+        description="Optional patient medical record / profile document attachment (PDF, DOCX, XLSX, TXT, JPG, PNG)"
+    ),
+    doctor_name: Optional[str] = Form(
+        None, 
+        description="Optional doctor name for personalized greeting"
+    ),
+    pipeline: GenerationPipeline = Depends(get_generation_pipeline)
+):
+    """
+    Unified RAG Chatbot endpoint for clinical medical queries and optional patient document attachment.
+    """
+    try:
+        content_type = request.headers.get("content-type", "") if hasattr(request, "headers") else ""
+
+        # Mode 1: JSON Body (application/json)
+        if "application/json" in content_type:
+            try:
+                body = await request.json()
+                q_str = body.get("prompt") or body.get("query") or ""
+                if not q_str:
+                    raise HTTPException(status_code=400, detail="Field 'prompt' or 'query' is required in JSON body.")
+
+                return await run_chat_pipeline(
+                    query=q_str,
+                    attachment_text=body.get("attachment_text"),
+                    doctor_name=body.get("doctor_name") or doctor_name,
+                    history=body.get("history"),
+                    categories=body.get("categories"),
+                    top_k=body.get("top_k", 8),
+                    knowledge_id=body.get("knowledge_id"),
+                    batch_id=body.get("batch_id"),
+                    pipeline=pipeline
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
+
+        # Mode 2: Form Data / Swagger UI
+        else:
+            if not prompt:
+                raise HTTPException(status_code=400, detail="Field 'prompt' is required.")
+
+            return await run_chat_pipeline(
+                query=prompt,
+                file=file,
+                doctor_name=doctor_name,
+                pipeline=pipeline
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unified Chat generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # =============================================================================
-# QUERY GENERAL ENDPOINT (Knowledge Base Explorer + Editor via Prompt)
-# Akses tergantung RBAC role dari CIS. System prompt dari AppConfig DB.
+# EVALUATION ENDPOINT (Automated RAGAS Benchmark & Developer Quality Monitoring)
 # =============================================================================
+
+@router.post(
+    "/evaluation", 
+    response_model=RAGEvaluationResponse, 
+    tags=["Evaluation"], 
+    summary="Run RAG Evaluation Benchmark"
+)
+async def run_rag_evaluation(
+    payload: Optional[Union[RAGEvaluationRequest, List[RAGEvaluationItem], List[Dict[str, Any]], Dict[str, Any]]] = Body(
+        default=None,
+        description="Benchmark configuration or test dataset list (leave empty {} or null for default benchmark suite)"
+    ),
+    top_k: Optional[int] = Query(None, description="Number of retrieved passages to evaluate"),
+    evaluate_generation: Optional[bool] = Query(None, description="Run LLM-as-judge evaluation for Faithfulness & Answer Relevance"),
+    retriever: HybridRetriever = Depends(get_hybrid_retriever),
+    pipeline: GenerationPipeline = Depends(get_generation_pipeline),
+    llm: BaseLLMAdapter = Depends(get_llm)
+):
+    """
+    Evaluates retrieval accuracy (Hit Rate@K, MRR@K) and LLM reliability (Faithfulness, Answer Relevance) using RAGAS Framework.
+    Supports:
+    - Direct JSON Array payload: `[{"query": "...", "expected_file": "..."}, ...]`
+    - Standard Request Object payload: `{"top_k": 5, "evaluate_generation": true, "dataset": [...]}`
+    - Query parameters: `?top_k=5&evaluate_generation=true`
+    - Empty body `{}` or `null` for official ERHA default benchmark suite.
+    """
+    parsed_dataset = None
+    parsed_top_k = 5
+    parsed_eval_gen = True
+
+    if payload is not None:
+        if isinstance(payload, RAGEvaluationRequest):
+            if payload.dataset:
+                parsed_dataset = [d.model_dump() for d in payload.dataset]
+            parsed_top_k = payload.top_k
+            parsed_eval_gen = payload.evaluate_generation
+        elif isinstance(payload, list):
+            parsed_dataset = []
+            for item in payload:
+                if isinstance(item, RAGEvaluationItem):
+                    parsed_dataset.append(item.model_dump())
+                elif isinstance(item, dict):
+                    d_item = dict(item)
+                    if "expected_file" in d_item and "expected_document" not in d_item:
+                        d_item["expected_document"] = d_item["expected_file"]
+                    parsed_dataset.append(d_item)
+        elif isinstance(payload, dict):
+            if "dataset" in payload and isinstance(payload["dataset"], list):
+                parsed_dataset = []
+                for item in payload["dataset"]:
+                    if isinstance(item, dict):
+                        d_item = dict(item)
+                        if "expected_file" in d_item and "expected_document" not in d_item:
+                            d_item["expected_document"] = d_item["expected_file"]
+                        parsed_dataset.append(d_item)
+                    else:
+                        parsed_dataset.append(item)
+            if "top_k" in payload and isinstance(payload["top_k"], int):
+                parsed_top_k = payload["top_k"]
+            if "evaluate_generation" in payload and isinstance(payload["evaluate_generation"], bool):
+                parsed_eval_gen = payload["evaluate_generation"]
+
+    if top_k is not None:
+        parsed_top_k = top_k
+    if evaluate_generation is not None:
+        parsed_eval_gen = evaluate_generation
+
+    try:
+        results = RAGEvaluator.evaluate_full(
+            retriever=retriever,
+            generation_pipeline=pipeline,
+            llm_adapter=llm,
+            dataset=parsed_dataset,
+            top_k=parsed_top_k,
+            rerank=True,
+            rerank_top_n=3,
+            evaluate_generation=parsed_eval_gen
+        )
+        return RAGEvaluationResponse(**results)
+    except Exception as e:
+        logger.error(f"RAG evaluation benchmark failed: {e}")
+        raise HTTPException(status_code=500, detail=f"RAG evaluation benchmark failed: {str(e)}")
+
+
 # =============================================================================
 # QUERY GENERAL ENDPOINT (Knowledge Base Explorer, Editor & Deletion via Prompt)
 # Akses tergantung RBAC role dari CIS. System prompt dari AppConfig DB.
@@ -3153,7 +3262,7 @@ async def _resolve_query_general_prompt(db_session) -> str:
     return DEFAULT_QUERY_GENERAL_PROMPT
 
 
-@router.post("/query-general", response_model=QueryGeneralResponse, tags=["Query General"])
+@router.post("/query-general", response_model=QueryGeneralResponse, tags=["Query General"], summary="Query General Endpoint")
 async def query_general_endpoint(
     request: QueryGeneralRequest,
     pipeline: GenerationPipeline = Depends(get_generation_pipeline),
@@ -3161,20 +3270,7 @@ async def query_general_endpoint(
     bm25: BM25Index = Depends(get_bm25_index)
 ):
     """
-    Query General Endpoint — Knowledge Base Explorer, Editor & Deletion via Natural Language Prompt.
-
-    Endpoint ini digunakan pada menu Ingest Dokumen (mode Switch Prompt General) untuk:
-    - **Read**: Menelusuri dan memverifikasi data produk/treatment/promo yang ada di KB
-    - **Update/Edit**: Mengubah judul, kategori, deskripsi, atau periode promo (valid_until/valid_from) via prompt
-    - **Delete**: Menghapus data produk atau batch delete promo expired dari database KB via prompt
-
-    **Contoh Prompt:**
-    - Read: `"Apakah produk ERHA Acne Cleanser sudah ada di database?"`
-    - Read Promo: `"Tampilkan semua promo yang tersimpan di KB"`
-    - Update: `"Update deskripsi ERHA Acne Cleanser menjadi: Pembersih wajah jerawat aktif"`
-    - Update Promo: `"Update periode promo Merdeka sampai 15 September 2026"`
-    - Delete: `"Hapus produk ERHA Acne Cleanser dari database"`
-    - Delete Expired: `"Hapus semua promo yang sudah expired"`
+    Interactively explores, edits, or deletes knowledge base documents using natural language prompt instructions.
     """
     if not pipeline:
         raise HTTPException(status_code=500, detail="Generation pipeline is not initialized.")
@@ -3299,14 +3395,13 @@ async def query_general_endpoint(
 
 
 
-@router.post("/ingest/reset", tags=["Ingestion"])
+@router.post("/ingest/reset", tags=["Ingestion"], summary="Reset Database")
 async def reset_database(
     vector_store: BaseVectorStoreAdapter = Depends(get_vector_store),
     bm25: BM25Index = Depends(get_bm25_index)
 ):
     """
-    Clears the entire RAG knowledge base. Drops and recreates the PGVector collection, 
-    resets the BM25 index, and deletes all files inside data/pending/ and data/output/.
+    Clears all documents, text chunks, and vector embeddings from the Knowledge Base.
     """
     errors = []
     
@@ -3367,51 +3462,5 @@ async def reset_database(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post(
-    "/evaluation", 
-    tags=["Evaluation"], 
-    response_model=RAGEvaluationResponse,
-    summary="Run RAG Evaluation Benchmark"
-)
-async def run_rag_evaluation(
-    dataset: List[RAGEvaluationItem] = Body(
-        ..., 
-        description="Dataset queries and expected source files for accuracy evaluation benchmark"
-    ),
-    top_k: int = Query(5, description="Number of retrieved passages to evaluate"),
-    retriever: HybridRetriever = Depends(get_hybrid_retriever),
-    generation_pipeline: GenerationPipeline = Depends(get_generation_pipeline),
-    llm: BaseLLMAdapter = Depends(get_llm)
-):
-    """
-    Runs automated RAG evaluation benchmark measuring Hit Rate@K, MRR@K, Faithfulness, and Accuracy Percentage.
-    """
-    if not dataset:
-        raise HTTPException(status_code=400, detail="Dataset must contain at least 1 evaluation item.")
 
-    formatted_dataset = []
-    for item in dataset:
-        gt = {"source_file": item.expected_file}
-        formatted_dataset.append({
-            "query": item.query,
-            "ground_truth": gt,
-            "expected_answer": item.expected_answer
-        })
-
-    eval_results = RAGEvaluator.evaluate_full(
-        retriever=retriever,
-        generation_pipeline=generation_pipeline,
-        llm_adapter=llm,
-        dataset=formatted_dataset,
-        top_k=top_k,
-        evaluate_generation=False
-    )
-
-    return RAGEvaluationResponse(
-        hit_rate=round(eval_results["hit_rate"], 4),
-        mrr=round(eval_results["mrr"], 4),
-        faithfulness=eval_results.get("faithfulness"),
-        answer_relevance=eval_results.get("answer_relevance"),
-        total_queries=eval_results["total_queries"]
-    )
 
