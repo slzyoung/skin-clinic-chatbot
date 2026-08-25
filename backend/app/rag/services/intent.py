@@ -209,6 +209,19 @@ class QueryIntentDetector:
         """
         query_clean = query.strip().lower()
 
+        # Check if query is a multi-aspect query (asks for ingredients/function/usage AND price/warnings)
+        aspect_indicators = [
+            any(k in query_clean for k in ["kandungan", "ingredient", "komposisi", "bahan aktif"]),
+            any(k in query_clean for k in ["indikasi", "fungsi", "manfaat", "kegunaan", "keunggulan"]),
+            any(k in query_clean for k in ["cara pakai", "dosis", "aturan pakai"]),
+            any(k in query_clean for k in ["harga", "biaya", "price"])
+        ]
+        aspect_count = sum(1 for a in aspect_indicators if a)
+        if aspect_count >= 2:
+            rules = QueryIntentDetector._get_rules_for_intent(QueryIntent.UNKNOWN)
+            logger.debug(f"Multi-aspect query detected ({aspect_count} aspects) -> Using UNKNOWN/General rules to answer all requested aspects.")
+            return QueryIntent.UNKNOWN, rules
+
         for intent, patterns in _INTENT_PATTERNS:
             for pattern in patterns:
                 if re.search(pattern, query_clean, re.IGNORECASE):
@@ -300,8 +313,8 @@ class QueryIntentDetector:
             }
         elif intent == QueryIntent.PRICE:
             return {
-                "max_sentences": 1,
-                "length_instruction": "Return ONLY the product price if found in context in 1 sentence.",
+                "max_sentences": 3,
+                "length_instruction": "Return the product price if found in context. If the query also asks about active ingredients or indications, summarize all requested details found in context.",
                 "missing_fallback": "Informasi mengenai topik ini belum terdaftar dalam panduan resmi ERHA saat ini, Dok. Silakan lakukan konfirmasi manual ke Dept Functional / Admin."
             }
         elif intent == QueryIntent.WARNING:

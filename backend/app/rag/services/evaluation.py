@@ -166,10 +166,10 @@ ANSWER:
 {answer[:2000]}
 
 EVALUATION CRITERIA:
-- Score 1.0: Every factual claim in the answer is directly supported by the context.
+- Score 1.0: Every factual claim in the answer is directly supported by the context. If the context does NOT contain the requested information and the answer correctly states it is not registered/available without hallucinating, score 1.0.
 - Score 0.7-0.9: Most claims are supported, with minor unsupported elaborations.
 - Score 0.4-0.6: Some claims are supported, but significant unsupported or fabricated information exists.
-- Score 0.0-0.3: The answer contains mostly fabricated information not found in the context.
+- Score 0.0-0.3: The answer contains fabricated information directly contradicting the context.
 
 Return ONLY a JSON object: {{"score": <float between 0.0 and 1.0>, "reason": "<brief explanation>"}}"""
 
@@ -214,7 +214,7 @@ ANSWER:
 {answer[:2000]}
 
 EVALUATION CRITERIA:
-- Score 1.0: The answer directly and completely addresses the question.
+- Score 1.0: The answer directly and completely addresses the question (including correctly informing the doctor if specific requested information is not available in official guidelines).
 - Score 0.7-0.9: The answer mostly addresses the question with minor gaps.
 - Score 0.4-0.6: The answer partially addresses the question but misses key aspects.
 - Score 0.0-0.3: The answer is mostly irrelevant to the question.
