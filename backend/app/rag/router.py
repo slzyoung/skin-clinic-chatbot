@@ -2983,6 +2983,7 @@ def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
     """
     Parses the LLM response to extract a JSON action block (edit or delete).
     Returns the parsed action dict if found, None otherwise.
+    Supports editing ANY field/topic requested by user.
     """
     import re as _re
     pattern = r'```json\s*\n?\s*(\{[^`]+?\})\s*\n?\s*```'
@@ -2993,10 +2994,8 @@ def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
             parsed = json.loads(match.strip())
             if isinstance(parsed, dict):
                 action = parsed.get("action")
-                if action == "edit" and parsed.get("knowledge_id"):
-                    # Support summary, categories, title, valid_until, valid_from, document_type
-                    if parsed.get("field") in ("summary", "categories", "title", "valid_until", "valid_from", "document_type", "periode"):
-                        return parsed
+                if action == "edit" and parsed.get("knowledge_id") and parsed.get("field"):
+                    return parsed
                 elif action == "delete":
                     return parsed
         except (json.JSONDecodeError, ValueError):
@@ -3011,8 +3010,9 @@ def _apply_kb_edit(
     bm25_index
 ) -> Dict[str, Any]:
     """
-    Applies an edit to an approved KB document and re-indexes.
-    Reuses the same logic as edit_approved_document endpoint.
+    Applies an edit for ANY topic/field to an approved KB document and re-indexes.
+    Preserves all other fields, metadata, and document summaries 100% intact.
+    Automatically synchronizes chunk text content for vector & BM25 search.
     """
     approved_file = resolve_approved_file(knowledge_id)
     if not approved_file:
@@ -3024,23 +3024,43 @@ def _apply_kb_edit(
 
         doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
         old_value = None
-        
-        if field == "summary":
+        clean_field = (field or "").strip().lower()
+        formatted_val = str(new_value).strip()
+
+        # Update root document JSON fields while preserving summary & other attributes
+        if clean_field in ("price", "harga", "biaya"):
+            old_value = existing_doc.get("price") or existing_doc.get("metadata", {}).get("price")
+            existing_doc["price"] = formatted_val
+            if "metadata" not in existing_doc or not isinstance(existing_doc["metadata"], dict):
+                existing_doc["metadata"] = {}
+            existing_doc["metadata"]["price"] = formatted_val
+
+        elif clean_field in ("summary", "deskripsi", "ringkasan"):
+            # Protect summary: Do not overwrite summary with AI chatbot conversational confirmation text
+            conv_phrases = ["berhasil diubah", "berhasil diperbarui", "telah diubah", "telah diperbarui", "berhasil diterapkan", "berhasil dihapus"]
+            if any(phrase in formatted_val.lower() for phrase in conv_phrases):
+                logger.warning(f"[QUERY-GENERAL] Rejected chatbot conversational response as summary value: {formatted_val}")
+                return {"success": False, "error": "Value summary tidak boleh berupa kalimat konfirmasi percakapan chatbot."}
             old_value = existing_doc.get("summary", "")
-            existing_doc["summary"] = new_value
-        elif field == "title":
+            existing_doc["summary"] = formatted_val
+
+        elif clean_field in ("title", "nama", "nama_produk"):
             old_value = existing_doc.get("title", existing_doc.get("file_name", ""))
-            existing_doc["title"] = new_value
-        elif field in ("valid_until", "expiry_date", "end_date", "periode"):
+            existing_doc["title"] = formatted_val
+
+        elif clean_field in ("valid_until", "expiry_date", "end_date", "periode", "masa_berlaku"):
             old_value = existing_doc.get("valid_until")
-            existing_doc["valid_until"] = str(new_value).strip()
-        elif field in ("valid_from", "start_date"):
+            existing_doc["valid_until"] = formatted_val
+
+        elif clean_field in ("valid_from", "start_date"):
             old_value = existing_doc.get("valid_from")
-            existing_doc["valid_from"] = str(new_value).strip()
-        elif field == "document_type":
+            existing_doc["valid_from"] = formatted_val
+
+        elif clean_field in ("document_type", "tipe", "jenis_dokumen"):
             old_value = existing_doc.get("document_type")
-            existing_doc["document_type"] = str(new_value).strip()
-        elif field == "categories":
+            existing_doc["document_type"] = formatted_val
+
+        elif clean_field in ("categories", "kategori"):
             old_value = existing_doc.get("categories", [])
             try:
                 parsed_cats = json.loads(new_value) if isinstance(new_value, str) else new_value
@@ -3049,32 +3069,83 @@ def _apply_kb_edit(
                 else:
                     existing_doc["categories"] = [str(parsed_cats)]
             except (json.JSONDecodeError, ValueError):
-                existing_doc["categories"] = [new_value]
+                existing_doc["categories"] = [formatted_val]
+
+        else:
+            # Universal fallback for ANY custom topic/field requested by admin/dept functional
+            old_value = existing_doc.get(clean_field) or existing_doc.get("metadata", {}).get(clean_field)
+            existing_doc[clean_field] = formatted_val
+            if "metadata" not in existing_doc or not isinstance(existing_doc["metadata"], dict):
+                existing_doc["metadata"] = {}
+            existing_doc["metadata"][clean_field] = formatted_val
 
         chunks = existing_doc.get("chunks", [])
         primary_cat = existing_doc.get("categories", [None])[0] if existing_doc.get("categories") else None
-        
+        import re as _re
+
         for chunk in chunks:
             if isinstance(chunk, dict):
                 if "metadata" not in chunk:
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = doc_kid
-                if field == "title":
-                    chunk["metadata"]["source_file"] = new_value
-                    chunk["metadata"]["title"] = new_value
-                    chunk["metadata"]["product_name"] = new_value
+
+                # Universal metadata assignment for the target field
+                chunk["metadata"][clean_field] = formatted_val
+
+                # Specific chunk text updates for maximum search synchronization
+                chunk_text = chunk.get("text", "")
+                if chunk_text:
+                    if clean_field in ("price", "harga", "biaya"):
+                        price_pattern = r'((?:Harga|Price|Biaya):\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
+                        if _re.search(price_pattern, chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(price_pattern, rf'\g<1>Rp {formatted_val}', chunk_text, flags=_re.IGNORECASE)
+                        else:
+                            chunk["text"] = chunk_text.strip() + f"\n- **Harga**: Rp {formatted_val}"
+
+                    elif clean_field in ("title", "nama", "nama_produk"):
+                        chunk["metadata"]["source_file"] = formatted_val
+                        chunk["metadata"]["title"] = formatted_val
+                        chunk["metadata"]["product_name"] = formatted_val
+                        if _re.search(r'^(#+\s*)(.+)$', chunk_text, _re.MULTILINE):
+                            chunk["text"] = _re.sub(r'^(#+\s*)(.+)$', rf'\g<1>{formatted_val}', chunk_text, count=1, flags=_re.MULTILINE)
+                        elif _re.search(r'(Product Name:\s*)(.+)', chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(r'(Product Name:\s*)(.+)', rf'\g<1>{formatted_val}', chunk_text, count=1, flags=_re.IGNORECASE)
+
+                    elif clean_field in ("valid_until", "expiry_date", "end_date", "periode", "masa_berlaku"):
+                        promo_pattern = r'((?:Periode Promo|Valid Until|Berlaku Hingga|Masa Berlaku):\s*)(.+)'
+                        if _re.search(promo_pattern, chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(promo_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
+                        else:
+                            chunk["text"] = chunk_text.strip() + f"\n- **Berlaku Hingga**: {formatted_val}"
+
+                    elif clean_field in ("ingredients", "kandungan", "bahan_aktif", "komposisi"):
+                        ing_pattern = r'((?:Key Ingredients|Kandungan Aktif|Bahan Aktif|Komposisi):\s*)(.+)'
+                        if _re.search(ing_pattern, chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(ing_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
+                        else:
+                            chunk["text"] = chunk_text.strip() + f"\n- **Kandungan Aktif**: {formatted_val}"
+
+                    elif clean_field in ("how_to_use", "cara_pakai", "aturan_pakai", "dosis"):
+                        use_pattern = r'((?:How to Use|Cara Pakai|Aturan Pakai|Dosis):\s*)(.+)'
+                        if _re.search(use_pattern, chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(use_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
+                        else:
+                            chunk["text"] = chunk_text.strip() + f"\n- **Cara Pakai**: {formatted_val}"
+
+                    elif clean_field in ("suitable_for", "indikasi", "cocok_untuk"):
+                        ind_pattern = r'((?:Suitable For|Indikasi|Diperuntukkan):\s*)(.+)'
+                        if _re.search(ind_pattern, chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(ind_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
+                        else:
+                            chunk["text"] = chunk_text.strip() + f"\n- **Indikasi**: {formatted_val}"
+
+                    elif clean_field in ("summary", "deskripsi", "ringkasan"):
+                        chunk["metadata"]["summary"] = formatted_val
+
                 if primary_cat:
                     chunk["metadata"]["category"] = primary_cat
                 if existing_doc.get("categories"):
                     chunk["metadata"]["categories"] = existing_doc["categories"]
-                if field == "summary":
-                    chunk["metadata"]["summary"] = new_value
-                if field in ("valid_until", "expiry_date", "end_date", "periode"):
-                    chunk["metadata"]["valid_until"] = str(new_value).strip()
-                if field in ("valid_from", "start_date"):
-                    chunk["metadata"]["valid_from"] = str(new_value).strip()
-                if field == "document_type":
-                    chunk["metadata"]["document_type"] = str(new_value).strip()
 
         with open(approved_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
