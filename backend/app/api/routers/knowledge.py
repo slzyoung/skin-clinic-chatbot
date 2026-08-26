@@ -1,11 +1,10 @@
 from loguru import logger
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_, func
 from app.models.category import Category, UserCategoryExclusion
 from app.models.branch import UserBranch
-from sqlalchemy import select, and_, func
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 import json
 import os
@@ -34,7 +33,7 @@ from app.rag.router import (
     synthesize_batch_executive_summary,
     chat_endpoint
 )
-from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatRequest, ChatResponse, UserContext
+from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatMessage, ChatRequest, ChatResponse, UserContext
 
 router = APIRouter(tags=["Knowledge"])
 
@@ -190,25 +189,29 @@ async def get_knowledge(
     knowledge = result.scalar_one_or_none()
     
     if knowledge:
-        # OUT-OF-BAND SYNC: Fetch latest AI summary from RAG JSON files
+        # OUT-OF-BAND SYNC: Fetch latest AI summary & metadata from RAG JSON files
         try:
             target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
             if target_file and os.path.exists(target_file):
                 with open(target_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 latest_summary = data.get("summary", "")
+                latest_title = data.get("title", "")
+                
+                updated = False
                 if latest_summary and knowledge.ai_summary != latest_summary:
                     knowledge.ai_summary = latest_summary
+                    updated = True
+                if latest_title and knowledge.title != latest_title:
+                    knowledge.title = latest_title
+                    updated = True
+                if updated:
                     await db.commit()
                     await db.refresh(knowledge)
-                # Inject full RAG data into metadata manually
-                knowledge_dict = KnowledgeResponse.model_validate(knowledge).model_dump(by_alias=False)
-                knowledge_dict["metadata_"] = data
-                return knowledge_dict
+                
+                knowledge.metadata_ = data
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"Error loading RAG JSON: {e}")
+            logger.warning(f"Error loading RAG JSON: {e}")
             
         return knowledge
 
@@ -443,7 +446,19 @@ async def knowledge_chat(
         excluded_categories=excluded_cats
     )
 
-    return await chat_endpoint(request=request, pipeline=pipeline)
+    from app.rag.router import run_chat_pipeline
+    return await run_chat_pipeline(
+        query=request.query,
+        attachment_text=request.attachment_text,
+        doctor_name=current_user.name or request.doctor_name,
+        user_context=request.user_context,
+        history=request.history,
+        categories=request.categories,
+        top_k=request.top_k,
+        knowledge_id=request.knowledge_id,
+        batch_id=request.batch_id,
+        pipeline=pipeline
+    )
 
 ALLOWED_MIME_TYPES = {
     "application/pdf",
@@ -654,23 +669,85 @@ async def edit_knowledge(
 async def refine_knowledge(
     request: Request,
     knowledge_id: uuid.UUID,
-    payload: RefineRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:write")),
     llm: BaseLLMAdapter = Depends(get_llm)
 ):
+    """
+    Refines either a pending (On review) or approved document using natural language prompt 
+    and optional attached file upload (PDF/Docx/TXT/Image).
+    """
+    content_type = request.headers.get("content-type", "")
+    prompt = ""
+    history = []
+    file_attachment: Optional[UploadFile] = None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        prompt = str(form.get("prompt", "") or "")
+        history_raw = form.get("history", "[]")
+        if isinstance(history_raw, str):
+            try:
+                history_json = json.loads(history_raw)
+                history = [ChatMessage(**m) if isinstance(m, dict) else m for m in history_json]
+            except Exception:
+                history = []
+        elif isinstance(history_raw, list):
+            history = [ChatMessage(**m) if isinstance(m, dict) else m for m in history_raw]
+            
+        file_obj = form.get("file")
+        if isinstance(file_obj, UploadFile):
+            file_attachment = file_obj
+    else:
+        try:
+            body = await request.json()
+            prompt = str(body.get("prompt", "") or "")
+            history_raw = body.get("history", [])
+            history = [ChatMessage(**m) if isinstance(m, dict) else m for m in history_raw]
+        except Exception:
+            prompt = ""
+            history = []
+
+    payload = RefineRequest(prompt=prompt, history=history)
+
     p_file = resolve_pending_file(str(knowledge_id))
     a_file = resolve_approved_file(str(knowledge_id))
     
     if p_file:
-        return await refine_pending_document(str(knowledge_id), payload, llm)
+        res = await refine_pending_document(str(knowledge_id), payload, llm, file_attachment=file_attachment)
     elif a_file:
         pipeline = get_ingestion_pipeline(request)
         bm25 = get_bm25_index(request)
         vector_store = get_vector_store(request)
-        return await refine_approved_document(str(knowledge_id), payload, pipeline, bm25, vector_store, llm)
+        res = await refine_approved_document(str(knowledge_id), payload, pipeline, bm25, vector_store, llm, file_attachment=file_attachment)
     else:
         raise HTTPException(status_code=404, detail="Document not found for refinement.")
+
+    # Synchronize DB record with refined output
+    try:
+        stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
+        db_res = await db.execute(stmt)
+        k_entry = db_res.scalar_one_or_none()
+        if k_entry and isinstance(res, dict):
+            if res.get("title"):
+                k_entry.title = res.get("title")
+            if res.get("summary"):
+                k_entry.ai_summary = res.get("summary")
+            if k_entry.metadata_ is None:
+                k_entry.metadata_ = {}
+            if res.get("categories") is not None:
+                k_entry.metadata_["categories"] = res.get("categories")
+            elif res.get("suggested_categories") is not None:
+                k_entry.metadata_["categories"] = [c.get("name") if isinstance(c, dict) else str(c) for c in res.get("suggested_categories", [])]
+            if res.get("visibility_settings") is not None:
+                k_entry.metadata_["visibility_settings"] = res.get("visibility_settings")
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(k_entry, "metadata_")
+            await db.commit()
+    except Exception as sync_err:
+        logger.warning(f"Failed to sync refined knowledge to DB row: {sync_err}")
+
+    return res
 
 @router.put("/{knowledge_id}/project", response_model=KnowledgeResponse)
 @router.patch("/{knowledge_id}/project", response_model=KnowledgeResponse)

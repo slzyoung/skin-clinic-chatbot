@@ -53,6 +53,13 @@ class CustomChunker:
         "target patient", "dosage", "composition", "packaging", "shelf life",
         "mechanism of action", "clinical studies", "side effects",
         "precautions", "interactions", "formulation",
+        # Indonesian clinical & aesthetic treatment section headers
+        "deskripsi", "cocok untuk", "tidak disarankan untuk", "manfaat",
+        "persiapan sebelum treatment", "persiapan sebelum tindakan",
+        "tahapan treatment", "tahapan prosedur", "informasi prosedur",
+        "parameter prosedur", "aftercare", "perawatan setelah tindakan",
+        "efek samping", "kandungan peeling", "kandungan", "kategori",
+        "kategori treatment", "protokol tindakan", "indikasi"
     }
 
     # =========================================================================
@@ -161,9 +168,9 @@ class CustomChunker:
         current_entity = ""
 
         # Regex patterns for hierarchical boundaries
-        section_h1_h2_pattern = re.compile(r"^(?:#{1,2}\s+|\d+\.\s+[A-Z])", re.IGNORECASE)
-        # Match H3/H4 headers or numbered sub-items, but NOT bold key-value pairs like **Key**: value
-        entity_h3_h4_pattern = re.compile(r"^(?:#{3,4}\s+|\d+\.\d+\s+)", re.IGNORECASE)
+        section_h1_h2_pattern = re.compile(r"^(?:#{1,2}\s+|(?:Bab|Section|Bagian|Kategori)\s+\d+)", re.IGNORECASE)
+        # Match H3/H4 headers, but NOT bold key-value pairs or numbered list items
+        entity_h3_h4_pattern = re.compile(r"^(?:#{3,4}\s+)", re.IGNORECASE)
         bold_entity_pattern = re.compile(r"^\*\*([A-Z0-9][A-Za-z0-9\s\.\-]+)\*\*\s*$", re.IGNORECASE)
 
         for page_data in pages:

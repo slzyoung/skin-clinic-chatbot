@@ -468,50 +468,30 @@ class DocumentParser:
 
                     client = OpenAI(**client_kwargs)
                     prompt_text = (
-                        "You are an AI knowledge extraction assistant for the PT Arya Noble Knowledge Base.\n\n"
-                        "Your task is to analyze the provided image and convert the useful information contained in the image into structured, searchable knowledge.\n\n"
-                        "The image may contain any type of information, including but not limited to:\n"
-                        "* Product images\n"
-                        "* Product packaging\n"
-                        "* Screenshots\n"
-                        "* Web pages\n"
-                        "* Browser interfaces\n"
-                        "* Documents\n"
-                        "* Tables\n"
-                        "* Charts\n"
-                        "* Diagrams\n"
-                        "* Posters\n"
-                        "* Forms\n"
-                        "* Clinical or educational materials\n"
-                        "* Photos containing relevant information\n"
-                        "* Other visual information\n\n"
-                        "Do NOT assume that the image is a product image.\n\n"
-                        "## Primary Objective\n"
-                        "## Primary Objective\n"
-                        "Extract all factual, clinical, medical, and product knowledge that is useful for the Medical Knowledge Base & RAG System.\n"
-                        "Focus strictly on substantive information: product/treatment name, active ingredients, indications/benefits, target skin type/patient, directions for use, contraindications, dosage, packaging/volume, and clinical details.\n"
-                        "Do NOT include photographic or aesthetic visual descriptions (such as background colors, tube centering, packaging graphics, cap style, or camera angles) as these are non-informative noise for medical retrieval.\n\n"
-                        "## Critical Rules\n"
-                        "1. Do not invent information that cannot be supported by the image.\n"
-                        "2. Do not hallucinate unreadable text.\n"
-                        "3. Extract fields dynamically based on the actual substantive content visible on the label/document.\n"
-                        "4. Preserve important terminology, ingredients, and names exactly as readable.\n"
-                        "5. The output must be concise, accurate, and optimized for semantic search and RAG retrieval.\n\n"
-                        "## Analyze the Image\n"
-                        "Determine:\n"
-                        "1. Title (Generate a clean, professional title representing the product/document subject. Prefer visible brand + product name.)\n"
-                        "2. Summary (Concise, structured summary of the product/document specifications, ingredients, and use cases.)\n"
-                        "3. Extracted Information (Key-value map of substantive attributes: brand, active_ingredients, skin_type, volume, benefits, usage, etc.)\n"
-                        "4. Searchable Knowledge (Dense textual paragraph summarizing all key facts to be embedded by RAG system.)\n\n"
-                        "## Output Format\n"
-                        "Return valid JSON ONLY using the following structure:\n"
+                        "You are an expert medical aesthetic AI knowledge engineer for PT Arya Noble (ERHA) Knowledge Base.\n\n"
+                        "Your task is to analyze the provided image and extract accurate, non-redundant, and cohesive product/clinical knowledge.\n\n"
+                        "## Critical Guidelines:\n"
+                        "1. **Dynamic Fields (NO Empty Placeholders)**: Extract fields ONLY if actual information is visible/available. If SKU is not visible, set `sku` to null. NEVER output placeholder phrases like 'None visible in the image', 'N/A', or 'Not available'.\n"
+                        "2. **Single Identifier (SKU)**: Extract only the official SKU if visible on packaging/label. Do not produce redundant ID fields.\n"
+                        "3. **Deskripsi & Fungsi Produk (Cohesive Narrative)**: Write a single, fluent, natural language paragraph explaining what the product is, intended skin types/conditions, key benefits, and usage context. This paragraph will serve as the primary concise description when the AI recommends products to doctors.\n"
+                        "4. **Active Ingredients**: List only the specific active ingredients/compounds.\n"
+                        "5. **No Visual Fluff**: Do NOT describe background color, packaging graphics, lighting, or photography angles.\n\n"
+                        "## Output Format (Valid JSON ONLY):\n"
                         "{\n"
-                        '  "title": "...",\n'
-                        '  "summary": "...",\n'
-                        '  "extracted_information": {},\n'
-                        '  "searchable_knowledge": "..."\n'
-                        "}\n\n"
-                        "Output valid JSON ONLY without any preamble or markdown wrapper."
+                        '  "title": "ERHA Acneact Gentle Acne Moisturizer",\n'
+                        '  "product_name": "ERHA Acneact Gentle Acne Moisturizer",\n'
+                        '  "brand": "ERHA",\n'
+                        '  "sku": null,\n'
+                        '  "variant": "Gentle Acne Moisturizer",\n'
+                        '  "product_type": "Moisturizer / Pelembap Wajah",\n'
+                        '  "intended_skin_types": ["Oily skin", "Acne-prone skin", "Sensitive skin"],\n'
+                        '  "net_content": "30 g",\n'
+                        '  "deskripsi_fungsi": "ERHA Acneact Gentle Acne Moisturizer adalah pelembap ringan dalam rangkaian Acneact yang diformulasikan khusus untuk kulit berminyak dan berjerawat. Digunakan setelah pembersih dan serum dalam rutinitas pagi maupun malam hari untuk menjaga hidrasi kulit optimal dengan tekstur yang nyaman, cepat meresap, dan tidak menyumbat pori-pori.",\n'
+                        '  "active_ingredients": [\n'
+                        '    "Granactive Acne Peptide",\n'
+                        '    "Salicylic Acid (BHA)"\n'
+                        '  ]\n'
+                        "}"
                     )
 
                     completion_kwargs = {
@@ -554,38 +534,65 @@ class DocumentParser:
                                 clean_json = "\n".join(lines).strip()
                             data = json.loads(clean_json, strict=False)
 
-                            img_title = data.get("title") or os.path.splitext(file_name)[0]
-                            summary = data.get("summary", "")
-                            ext_info = data.get("extracted_information", {})
-                            searchable_k = data.get("searchable_knowledge", "")
+                            img_title = data.get("title") or data.get("product_name") or os.path.splitext(file_name)[0]
+                            p_name = data.get("product_name") or img_title
+                            brand = data.get("brand") or "ERHA"
+                            sku_val = data.get("sku")
+                            # Normalize SKU - ignore none/null/not visible strings
+                            clean_sku = str(sku_val).strip() if sku_val and str(sku_val).strip().lower() not in ["none", "null", "none visible in the image", "not visible", "n/a", "-"] else None
+
+                            variant = data.get("variant")
+                            p_type = data.get("product_type")
+                            skin_types = data.get("intended_skin_types") or []
+                            net_content = data.get("net_content")
+                            deskripsi_fungsi = data.get("deskripsi_fungsi") or data.get("searchable_knowledge") or data.get("summary") or ""
+                            active_ing = data.get("active_ingredients") or []
 
                             extracted_meta.update({
                                 "title": img_title,
-                                "summary": summary,
-                                "extracted_information": ext_info,
-                                "searchable_knowledge": searchable_k
+                                "product_name": p_name,
+                                "brand": brand,
+                                "sku": clean_sku,
+                                "active_ingredients": active_ing,
+                                "searchable_knowledge": deskripsi_fungsi
                             })
 
-                            # Build clean, high-density structured markdown for RAG
+                            # Build clean, high-density structured markdown dynamically (WITHOUT empty fields)
                             md_blocks = [f"![{img_title}]({image_url})\n\n# {img_title}"]
 
-                            if summary:
-                                md_blocks.append(f"## Product Overview\n{summary}")
+                            overview_lines = ["## Product Overview"]
+                            if p_name:
+                                overview_lines.append(f"- **Product Name**: {p_name}")
+                            if brand:
+                                overview_lines.append(f"- **Brand**: {brand}")
+                            if clean_sku:
+                                overview_lines.append(f"- **SKU**: {clean_sku}")
+                            if variant and str(variant).strip().lower() not in ["none", "null", "n/a"]:
+                                overview_lines.append(f"- **Variant**: {variant}")
+                            if p_type and str(p_type).strip().lower() not in ["none", "null", "n/a"]:
+                                overview_lines.append(f"- **Product Type**: {p_type}")
+                            if skin_types:
+                                if isinstance(skin_types, list):
+                                    overview_lines.append(f"- **Intended Skin Types**: {', '.join([str(s) for s in skin_types if s])}")
+                                elif str(skin_types).strip().lower() not in ["none", "null", "n/a"]:
+                                    overview_lines.append(f"- **Intended Skin Types**: {skin_types}")
+                            if net_content and str(net_content).strip().lower() not in ["none", "null", "n/a"]:
+                                overview_lines.append(f"- **Net Content**: {net_content}")
+                            md_blocks.append("\n".join(overview_lines))
 
-                            if isinstance(ext_info, dict) and ext_info:
-                                info_lines = ["## Specifications & Key Claims"]
-                                for k, v in ext_info.items():
-                                    formatted_key = k.replace("_", " ").title()
-                                    if isinstance(v, list):
-                                        info_lines.append(f"- **{formatted_key}**: {', '.join([str(i) for i in v])}")
-                                    elif isinstance(v, dict):
-                                        info_lines.append(f"- **{formatted_key}**: {json.dumps(v, ensure_ascii=False)}")
-                                    else:
-                                        info_lines.append(f"- **{formatted_key}**: {v}")
-                                md_blocks.append("\n".join(info_lines))
+                            if deskripsi_fungsi:
+                                md_blocks.append(f"## Deskripsi & Fungsi Produk\n{deskripsi_fungsi}")
 
-                            if searchable_k:
-                                md_blocks.append(f"## Searchable Knowledge\n{searchable_k}")
+                            if active_ing:
+                                ing_lines = ["## Active Ingredients"]
+                                if isinstance(active_ing, list):
+                                    for ing in active_ing:
+                                        if ing and str(ing).strip():
+                                            ing_lines.append(f"- {ing}")
+                                else:
+                                    ing_lines.append(f"- {active_ing}")
+                                if len(ing_lines) > 1:
+                                    md_blocks.append("\n".join(ing_lines))
 
                             extracted_text = "\n\n".join(md_blocks)
 
