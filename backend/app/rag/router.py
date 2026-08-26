@@ -2994,8 +2994,8 @@ def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
             if isinstance(parsed, dict):
                 action = parsed.get("action")
                 if action == "edit" and parsed.get("knowledge_id"):
-                    # Support summary, categories, title, valid_until, valid_from, document_type
-                    if parsed.get("field") in ("summary", "categories", "title", "valid_until", "valid_from", "document_type", "periode"):
+                    # Support price, summary, categories, title, valid_until, valid_from, document_type, periode
+                    if parsed.get("field") in ("price", "harga", "biaya", "summary", "categories", "title", "valid_until", "valid_from", "document_type", "periode"):
                         return parsed
                 elif action == "delete":
                     return parsed
@@ -3024,23 +3024,38 @@ def _apply_kb_edit(
 
         doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
         old_value = None
+        clean_field = (field or "").strip().lower()
         
-        if field == "summary":
+        if clean_field in ("price", "harga", "biaya"):
+            old_value = existing_doc.get("price") or existing_doc.get("metadata", {}).get("price")
+            formatted_price = str(new_value).strip()
+            existing_doc["price"] = formatted_price
+            if "metadata" not in existing_doc or not isinstance(existing_doc["metadata"], dict):
+                existing_doc["metadata"] = {}
+            existing_doc["metadata"]["price"] = formatted_price
+
+        elif clean_field == "summary":
+            # Protect summary: Do not overwrite summary with AI chatbot conversational confirmation text
+            conv_phrases = ["berhasil diubah", "berhasil diperbarui", "telah diubah", "telah diperbarui", "berhasil diterapkan", "berhasil dihapus"]
+            if any(phrase in str(new_value).lower() for phrase in conv_phrases):
+                logger.warning(f"[QUERY-GENERAL] Rejected chatbot conversational response as summary value: {new_value}")
+                return {"success": False, "error": "Value summary tidak boleh berupa kalimat konfirmasi percakapan chatbot."}
             old_value = existing_doc.get("summary", "")
             existing_doc["summary"] = new_value
-        elif field == "title":
+
+        elif clean_field == "title":
             old_value = existing_doc.get("title", existing_doc.get("file_name", ""))
             existing_doc["title"] = new_value
-        elif field in ("valid_until", "expiry_date", "end_date", "periode"):
+        elif clean_field in ("valid_until", "expiry_date", "end_date", "periode"):
             old_value = existing_doc.get("valid_until")
             existing_doc["valid_until"] = str(new_value).strip()
-        elif field in ("valid_from", "start_date"):
+        elif clean_field in ("valid_from", "start_date"):
             old_value = existing_doc.get("valid_from")
             existing_doc["valid_from"] = str(new_value).strip()
-        elif field == "document_type":
+        elif clean_field == "document_type":
             old_value = existing_doc.get("document_type")
             existing_doc["document_type"] = str(new_value).strip()
-        elif field == "categories":
+        elif clean_field == "categories":
             old_value = existing_doc.get("categories", [])
             try:
                 parsed_cats = json.loads(new_value) if isinstance(new_value, str) else new_value
@@ -3053,13 +3068,31 @@ def _apply_kb_edit(
 
         chunks = existing_doc.get("chunks", [])
         primary_cat = existing_doc.get("categories", [None])[0] if existing_doc.get("categories") else None
-        
+        import re as _re
+
         for chunk in chunks:
             if isinstance(chunk, dict):
                 if "metadata" not in chunk:
                     chunk["metadata"] = {}
                 chunk["metadata"]["knowledge_id"] = doc_kid
-                if field == "title":
+
+                if clean_field in ("price", "harga", "biaya"):
+                    formatted_val = str(new_value).strip()
+                    chunk["metadata"]["price"] = formatted_val
+                    chunk_text = chunk.get("text", "")
+                    if chunk_text:
+                        price_pattern = r'((?:Harga|Price|Biaya):\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
+                        if _re.search(price_pattern, chunk_text, _re.IGNORECASE):
+                            chunk["text"] = _re.sub(
+                                price_pattern,
+                                rf'\g<1>Rp {formatted_val}',
+                                chunk_text,
+                                flags=_re.IGNORECASE
+                            )
+                        else:
+                            chunk["text"] = chunk_text.strip() + f"\n- **Harga**: Rp {formatted_val}"
+
+                if clean_field == "title":
                     chunk["metadata"]["source_file"] = new_value
                     chunk["metadata"]["title"] = new_value
                     chunk["metadata"]["product_name"] = new_value
@@ -3067,13 +3100,13 @@ def _apply_kb_edit(
                     chunk["metadata"]["category"] = primary_cat
                 if existing_doc.get("categories"):
                     chunk["metadata"]["categories"] = existing_doc["categories"]
-                if field == "summary":
+                if clean_field == "summary":
                     chunk["metadata"]["summary"] = new_value
-                if field in ("valid_until", "expiry_date", "end_date", "periode"):
+                if clean_field in ("valid_until", "expiry_date", "end_date", "periode"):
                     chunk["metadata"]["valid_until"] = str(new_value).strip()
-                if field in ("valid_from", "start_date"):
+                if clean_field in ("valid_from", "start_date"):
                     chunk["metadata"]["valid_from"] = str(new_value).strip()
-                if field == "document_type":
+                if clean_field == "document_type":
                     chunk["metadata"]["document_type"] = str(new_value).strip()
 
         with open(approved_file, "w", encoding="utf-8") as f:

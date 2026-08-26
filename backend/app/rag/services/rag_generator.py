@@ -252,12 +252,17 @@ ATURAN UTAMA:
 
 ACTION COMMANDS:
 1. UPDATE / EDIT DATA:
-Jika user meminta update/ubah/edit data atau periode promo, jelaskan perubahannya dan sertakan blok JSON di akhir respons:
+Jika user meminta update/ubah/edit data (seperti harga, deskripsi, title, periode promo, atau kategori), jelaskan perubahannya dan sertakan blok JSON di akhir respons:
 ```json
-{"action": "edit", "knowledge_id": "<ID_DARI_CONTEXT>", "field": "<summary|categories|title|valid_until|valid_from>", "new_value": "<NILAI_BARU>"}
+{"action": "edit", "knowledge_id": "<ID_DARI_CONTEXT>", "field": "<price|summary|categories|title|valid_until|valid_from>", "new_value": "<NILAI_BARU>"}
 ```
 - knowledge_id HARUS dari context yang ditemukan.
-- field: "summary", "categories", "title", "valid_until" (YYYY-MM-DD), atau "valid_from" (YYYY-MM-DD).
+- field:
+  * "price": jika user meminta ubah harga/biaya (contoh new_value: "6000" atau "Rp 6.000").
+  * "summary": jika user meminta ubah ringkasan/deskripsi dokumen. PERINGATAN: new_value HARUS berisi teks ringkasan dokumen yang baru, BUKAN kalimat percakapan AI!
+  * "title": jika user meminta ubah judul/nama dokumen.
+  * "valid_until" / "valid_from": jika user meminta ubah periode promo (format YYYY-MM-DD).
+  * "categories": jika user meminta ubah kategori.
 
 2. DELETE / HAPUS DATA:
 Jika user meminta hapus/delete data dari database, jelaskan konfirmasinya dan sertakan blok JSON di akhir respons:
