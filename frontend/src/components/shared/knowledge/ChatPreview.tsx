@@ -510,9 +510,7 @@ export function ChatPreview({
 					formData.append("history", JSON.stringify([...messages, userMsg]));
 					formData.append("file", filesToSend[0]);
 
-					response = await api.post(endpoint, formData, {
-						headers: { "Content-Type": "multipart/form-data" },
-					});
+					response = await api.post(endpoint, formData);
 				} else {
 					response = await api.post(endpoint, {
 						prompt: userMsg.content,
@@ -521,7 +519,9 @@ export function ChatPreview({
 				}
 				const chatResponse = response.data.summary
 					? `Here is the updated summary:\n\n${response.data.summary}`
-					: "I've updated the document summary based on your instructions.";
+					: response.data.feedback
+						? response.data.feedback
+						: "I've updated the document summary based on your instructions.";
 				setUserChatMessages((prev) => [...prev, { role: "assistant", content: chatResponse }]);
 
 				if (knowledgeId) {
@@ -541,8 +541,9 @@ export function ChatPreview({
 					{ role: "assistant", content: response.data.answer },
 				]);
 			}
-		} catch {
-			toast.error("Failed to send message to AI.");
+		} catch (err: unknown) {
+			const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+			toast.error(detail || "Failed to send message to AI.");
 		} finally {
 			sendGeneralMsg.reset();
 			setIsLoading(false);

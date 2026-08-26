@@ -965,11 +965,19 @@ async def refine_knowledge(
         if isinstance(history_raw, str):
             try:
                 history_json = json.loads(history_raw)
-                history = [ChatMessage(**m) if isinstance(m, dict) else m for m in history_json]
+                history = [
+                    ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
+                    if isinstance(m, dict) else m
+                    for m in history_json
+                ]
             except Exception:
                 history = []
         elif isinstance(history_raw, list):
-            history = [ChatMessage(**m) if isinstance(m, dict) else m for m in history_raw]
+            history = [
+                ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
+                if isinstance(m, dict) else m
+                for m in history_raw
+            ]
             
         file_obj = form.get("file")
         if isinstance(file_obj, UploadFile):
@@ -979,16 +987,96 @@ async def refine_knowledge(
             body = await request.json()
             prompt = str(body.get("prompt", "") or "")
             history_raw = body.get("history", [])
-            history = [ChatMessage(**m) if isinstance(m, dict) else m for m in history_raw]
+            history = [
+                ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
+                if isinstance(m, dict) else m
+                for m in history_raw
+            ]
         except Exception:
             prompt = ""
             history = []
 
     payload = RefineRequest(prompt=prompt, history=history)
 
+    # Process attached file if provided
+    if file_attachment:
+        try:
+            temp_dir = "data/temp"
+            os.makedirs(temp_dir, exist_ok=True)
+            attached_file_name = getattr(file_attachment, "filename", "attached_doc")
+            temp_file_path = os.path.join(temp_dir, f"refine_supp_{knowledge_id}_{attached_file_name}")
+            content_bytes = await file_attachment.read()
+            with open(temp_file_path, "wb") as f:
+                f.write(content_bytes)
+
+            from app.rag.utils.parser import DocumentParser
+            parser = DocumentParser()
+            parse_res = parser.parse_file(temp_file_path)
+            extracted_text = ""
+            if parse_res:
+                if parse_res.pages:
+                    extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
+                    extracted_text = "\n\n".join(extracted_pages)
+                elif parse_res.docling_doc:
+                    try:
+                        extracted_text = parse_res.docling_doc.export_to_markdown()
+                    except Exception:
+                        extracted_text = ""
+
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+
+            if extracted_text:
+                file_note = (
+                    f"\n\n[SUPPLEMENTARY ATTACHED FILE CONTENT: '{attached_file_name}']\n"
+                    f"{extracted_text}\n"
+                    f"[END OF ATTACHED FILE CONTENT]"
+                )
+                payload.prompt = f"{payload.prompt}\n{file_note}" if payload.prompt else file_note
+                logger.info(f"📄 Successfully attached file '{attached_file_name}' ({len(extracted_text)} chars) to refine request for knowledge_id='{knowledge_id}'")
+
+            await file_attachment.seek(0)
+        except Exception as file_err:
+            logger.warning(f"Failed to process attached file in refine_knowledge: {file_err}")
+
     p_file = resolve_pending_file(str(knowledge_id))
     a_file = resolve_approved_file(str(knowledge_id))
     
+    # DB fallback if JSON file is missing from disk
+    if not p_file and not a_file:
+        stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
+        db_res = await db.execute(stmt)
+        k_entry = db_res.scalar_one_or_none()
+        if k_entry:
+            if k_entry.status == KnowledgeStatus.APPROVED:
+                a_file = os.path.join("data/output", f"{knowledge_id}.json")
+                os.makedirs("data/output", exist_ok=True)
+                doc_data = {
+                    "knowledge_id": str(knowledge_id),
+                    "file_name": k_entry.file_name or str(knowledge_id),
+                    "title": k_entry.title or k_entry.file_name or "Knowledge Document",
+                    "status": "Approved",
+                    "summary": k_entry.ai_summary or "",
+                    "categories": k_entry.metadata_.get("categories", []) if k_entry.metadata_ else [],
+                    "visibility_settings": k_entry.metadata_.get("visibility_settings", {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}) if k_entry.metadata_ else {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]},
+                    "chunks": k_entry.metadata_.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]) if k_entry.metadata_ else [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]
+                }
+                with open(a_file, "w", encoding="utf-8") as f:
+                    json.dump(doc_data, f, indent=4, ensure_ascii=False)
+            else:
+                p_file = os.path.join("data/pending", f"{knowledge_id}.json")
+                os.makedirs("data/pending", exist_ok=True)
+                doc_data = {
+                    "knowledge_id": str(knowledge_id),
+                    "file_name": k_entry.file_name or str(knowledge_id),
+                    "title": k_entry.title or k_entry.file_name or "Knowledge Document",
+                    "status": "On review",
+                    "summary": k_entry.ai_summary or "",
+                    "chunks": k_entry.metadata_.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]) if k_entry.metadata_ else [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]
+                }
+                with open(p_file, "w", encoding="utf-8") as f:
+                    json.dump(doc_data, f, indent=4, ensure_ascii=False)
+
     if p_file:
         res = await refine_pending_document(str(knowledge_id), payload, llm, file_attachment=file_attachment)
     elif a_file:
@@ -1017,6 +1105,8 @@ async def refine_knowledge(
                 k_entry.metadata_["categories"] = [c.get("name") if isinstance(c, dict) else str(c) for c in res.get("suggested_categories", [])]
             if res.get("visibility_settings") is not None:
                 k_entry.metadata_["visibility_settings"] = res.get("visibility_settings")
+            if res.get("chunks") is not None:
+                k_entry.metadata_["chunks"] = res.get("chunks")
 
             # Persist chat turns in metadata
             existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
