@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./FloatingChatbot.css";
 
 /**
@@ -13,6 +15,55 @@ import "./FloatingChatbot.css";
  * @param {string} [props.branchId] - The CIS external ID of the branch (e.g. "838").
  * @param {string} [props.apiBaseUrl] - The base URL of the Chatbot API (e.g., https://api.arya-noble.com).
  */
+function getFileIcon(filename) {
+	const ext = filename?.split(".").pop()?.toLowerCase();
+	if (ext === "pdf") {
+		return (
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="fc-icon-pdf">
+				<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+				<polyline points="14 2 14 8 20 8" />
+				<line x1="16" y1="13" x2="8" y2="13" />
+				<line x1="16" y1="17" x2="8" y2="17" />
+				<polyline points="10 9 9 9 8 9" />
+			</svg>
+		);
+	}
+	if (["doc", "docx"].includes(ext)) {
+		return (
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="fc-icon-doc">
+				<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+				<polyline points="14 2 14 8 20 8" />
+				<line x1="16" y1="13" x2="8" y2="13" />
+				<line x1="16" y1="17" x2="8" y2="17" />
+			</svg>
+		);
+	}
+	if (["xls", "xlsx", "csv"].includes(ext)) {
+		return (
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="fc-icon-xls">
+				<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+				<polyline points="14 2 14 8 20 8" />
+				<path d="M8 13h8M8 17h8M12 9v12" />
+			</svg>
+		);
+	}
+	if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
+		return (
+			<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="fc-icon-img">
+				<rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+				<circle cx="8.5" cy="8.5" r="1.5" />
+				<polyline points="21 15 16 10 5 21" />
+			</svg>
+		);
+	}
+	return (
+		<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="fc-icon-file">
+			<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+			<polyline points="14 2 14 8 20 8" />
+		</svg>
+	);
+}
+
 export default function FloatingChatbot({
 	token,
 	doctorName = "Doctor",
@@ -494,38 +545,67 @@ export default function FloatingChatbot({
 									key={msg.id || index}
 									className={`fc-message-row ${msg.role === "user" ? "fc-row-user" : "fc-row-assistant"}`}
 								>
-									<div className={`fc-bubble ${msg.role === "user" ? "fc-user" : "fc-assistant"}`}>
-										{msg.attachments && Object.keys(msg.attachments).length > 0 && (
-											<div className="fc-message-attachments">
-												{Object.keys(msg.attachments).map((filename, i) => (
-													<div key={i} className="fc-attachment-badge" title={filename}>
-														<svg
-															xmlns="http://www.w3.org/2000/svg"
-															viewBox="0 0 24 24"
-															fill="none"
-															stroke="currentColor"
-															strokeWidth="2"
-															strokeLinecap="round"
-															strokeLinejoin="round"
-															className="fc-attachment-icon"
-														>
-															<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-														</svg>
-														<span className="fc-attachment-name">{filename}</span>
+									<div className={`fc-message-container ${msg.role === "user" ? "fc-container-user" : "fc-container-assistant"}`}>
+										{/* Avatar */}
+										<div className={`fc-avatar ${msg.role === "user" ? "fc-avatar-user" : "fc-avatar-assistant"}`}>
+											{msg.role === "user" ? (
+												<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+													<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+													<circle cx="12" cy="7" r="4" />
+												</svg>
+											) : (
+												<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+													<path d="M13.5 2C13.5 2.44425 13.3069 2.84339 13 3.11805V5H18C19.6569 5 21 6.34315 21 8V18C21 19.6569 19.6569 21 18 21H6C4.34315 21 3 19.6569 3 18V8C3 6.34315 4.34315 5 6 5H11V3.11805C10.6931 2.84339 10.5 2.44425 10.5 2C10.5 1.17157 11.1716 0.5 12 0.5C12.8284 0.5 13.5 1.17157 13.5 2ZM6 7C5.44772 7 5 7.44772 5 8V18C5 18.5523 5.44772 19 6 19H18C18.5523 19 19 18.5523 19 18V8C19 7.44772 18.5523 7 18 7H13H11H6ZM2 10H0V16H2V10ZM22 10H24V16H22V10ZM9 14.5C9.82843 14.5 10.5 13.8284 10.5 13C10.5 12.1716 9.82843 11.5 9 11.5C8.17157 11.5 7.5 12.1716 7.5 13C7.5 13.8284 8.17157 14.5 9 14.5ZM15 14.5C15.8284 14.5 16.5 13.8284 16.5 13C16.5 12.1716 15.8284 11.5 15 11.5C14.1716 11.5 13.5 12.1716 13.5 13C13.5 13.8284 14.1716 14.5 15 14.5Z" />
+												</svg>
+											)}
+										</div>
+
+										<div className="fc-bubble-wrapper">
+											{/* Attachments pills if present */}
+											{msg.attachments && Object.keys(msg.attachments).length > 0 && (
+												<div className="fc-message-attachments">
+													{Object.keys(msg.attachments).map((filename, i) => (
+														<div key={i} className="fc-attachment-badge" title={filename}>
+															<div className="fc-attachment-icon-box">
+																{getFileIcon(filename)}
+															</div>
+															<div className="fc-attachment-meta">
+																<span className="fc-attachment-name">{filename}</span>
+																<span className="fc-attachment-tag">DOCUMENT</span>
+															</div>
+														</div>
+													))}
+												</div>
+											)}
+
+											<div className={`fc-bubble ${msg.role === "user" ? "fc-user" : "fc-assistant"}`}>
+												{msg.role === "assistant" ? (
+													<div className="fc-markdown-content">
+														<ReactMarkdown remarkPlugins={[remarkGfm]}>
+															{msg.content}
+														</ReactMarkdown>
 													</div>
-												))}
+												) : (
+													<div className="fc-user-text">{msg.content}</div>
+												)}
 											</div>
-										)}
-										{msg.content}
+										</div>
 									</div>
 								</div>
 							))}
 							{isLoading && (
 								<div className="fc-message-row fc-row-assistant">
-									<div className="fc-bubble fc-assistant fc-loading">
-										<div className="fc-dot"></div>
-										<div className="fc-dot"></div>
-										<div className="fc-dot"></div>
+									<div className="fc-message-container fc-container-assistant">
+										<div className="fc-avatar fc-avatar-assistant">
+											<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+												<path d="M13.5 2C13.5 2.44425 13.3069 2.84339 13 3.11805V5H18C19.6569 5 21 6.34315 21 8V18C21 19.6569 19.6569 21 18 21H6C4.34315 21 3 19.6569 3 18V8C3 6.34315 4.34315 5 6 5H11V3.11805C10.6931 2.84339 10.5 2.44425 10.5 2C10.5 1.17157 11.1716 0.5 12 0.5C12.8284 0.5 13.5 1.17157 13.5 2ZM6 7C5.44772 7 5 7.44772 5 8V18C5 18.5523 5.44772 19 6 19H18C18.5523 19 19 18.5523 19 18V8C19 7.44772 18.5523 7 18 7H13H11H6ZM2 10H0V16H2V10ZM22 10H24V16H22V10ZM9 14.5C9.82843 14.5 10.5 13.8284 10.5 13C10.5 12.1716 9.82843 11.5 9 11.5C8.17157 11.5 7.5 12.1716 7.5 13C7.5 13.8284 8.17157 14.5 9 14.5ZM15 14.5C15.8284 14.5 16.5 13.8284 16.5 13C16.5 12.1716 15.8284 11.5 15 11.5C14.1716 11.5 13.5 12.1716 13.5 13C13.5 13.8284 14.1716 14.5 15 14.5Z" />
+											</svg>
+										</div>
+										<div className="fc-bubble fc-assistant fc-loading">
+											<div className="fc-dot"></div>
+											<div className="fc-dot"></div>
+											<div className="fc-dot"></div>
+										</div>
 									</div>
 								</div>
 							)}

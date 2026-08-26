@@ -63,7 +63,7 @@ export default function Dashboard() {
         doctorName={doctor ? doctor.name : 'Unknown'}
         branchCode={branchCode}
         branchId={branchId}
-        apiBaseUrl="http://localhost:8001"
+        apiBaseUrl={typeof window !== 'undefined' ? window.location.origin : ''}
       />
     </div>
   )
