@@ -214,3 +214,104 @@ export const useUpdateKnowledgeProject = () => {
 		},
 	});
 };
+
+export interface QueryGeneralPayload {
+	prompt: string;
+	history?: Array<{ role: string; content: string }>;
+}
+
+export interface QueryGeneralResult {
+	prompt: string;
+	answer: string;
+	action: "read" | "edit_applied" | "delete_applied" | string;
+	target_knowledge_id?: string | null;
+	total_found: number;
+	results: Array<Record<string, unknown>>;
+}
+
+export const useQueryGeneral = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (payload: QueryGeneralPayload): Promise<QueryGeneralResult> => {
+			const response = await api.post("/knowledge/query-general", payload);
+			return response.data;
+		},
+		onSuccess: (data) => {
+			if (data.action === "edit_applied" || data.action === "delete_applied") {
+				queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+				if (data.target_knowledge_id) {
+					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(data.target_knowledge_id) });
+				}
+			}
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to execute knowledge query."));
+		},
+	});
+};
+
+export interface GeneralChatMessageItem {
+	id: string;
+	role: string;
+	content: string;
+	action?: string | null;
+	target_knowledge_id?: string | null;
+	total_found?: number | null;
+	attachments?: Record<string, unknown> | null;
+	created_at: string;
+}
+
+export interface GeneralChatSessionResponse {
+	id: string;
+	user_id: string;
+	session_type: string;
+	status: string;
+	messages: GeneralChatMessageItem[];
+	created_at: string;
+	updated_at: string;
+}
+
+export const useGeneralChatSession = (sessionId?: string | null) => {
+	return useQuery({
+		queryKey: ["general-session", sessionId],
+		queryFn: async (): Promise<GeneralChatSessionResponse> => {
+			const response = await api.get(`/knowledge/general-session/${sessionId}`);
+			return response.data;
+		},
+		enabled: !!sessionId,
+	});
+};
+
+export const useCreateGeneralChatSession = () => {
+	return useMutation({
+		mutationFn: async (): Promise<GeneralChatSessionResponse> => {
+			const response = await api.post("/knowledge/general-session");
+			return response.data;
+		},
+	});
+};
+
+export const useSendGeneralChatMessage = (sessionId?: string | null) => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (payload: { prompt: string; attachments?: Record<string, unknown> }): Promise<GeneralChatSessionResponse> => {
+			const response = await api.post(`/knowledge/general-session/${sessionId}/messages`, payload);
+			return response.data;
+		},
+		onSuccess: (data) => {
+			queryClient.setQueryData(["general-session", sessionId], data);
+			const latestMsg = data.messages[data.messages.length - 1];
+			if (latestMsg?.action === "edit_applied" || latestMsg?.action === "delete_applied") {
+				queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+				if (latestMsg.target_knowledge_id) {
+					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(latestMsg.target_knowledge_id) });
+				}
+			}
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to send message."));
+		},
+	});
+};

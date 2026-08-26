@@ -26,6 +26,9 @@ import {
 
 export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
 	onSend?: (value: string, category: string | undefined, files: File[]) => boolean | void;
+	value?: string;
+	onValueChange?: (val: string) => void;
+	showAttachButton?: boolean;
 	showAttachText?: boolean;
 	attachText?: string;
 	defaultValue?: string;
@@ -37,6 +40,9 @@ export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
 export function PromptInput({
 	className,
 	onSend,
+	value,
+	onValueChange,
+	showAttachButton = true,
 	showAttachText,
 	attachText = "Add files",
 	defaultValue = "",
@@ -45,7 +51,9 @@ export function PromptInput({
 	disabled,
 	...props
 }: PromptInputProps) {
-	const [inputValue, setInputValue] = React.useState(defaultValue);
+	const isControlled = value !== undefined;
+	const [uncontrolledValue, setUncontrolledValue] = React.useState(defaultValue);
+	const inputValue = isControlled ? value : uncontrolledValue;
 	const [attachedFiles, setAttachedFiles] = React.useState<File[]>([]);
 	const [isDragging, setIsDragging] = React.useState(false);
 	const dragCounter = React.useRef(0);
@@ -143,7 +151,10 @@ export function PromptInput({
 	const handleSend = () => {
 		const success = onSend?.(inputValue, undefined, attachedFiles);
 		if (success !== false) {
-			setInputValue("");
+			if (!isControlled) {
+				setUncontrolledValue("");
+			}
+			onValueChange?.("");
 			setAttachedFiles([]);
 		}
 	};
@@ -230,7 +241,10 @@ export function PromptInput({
 					}
 					value={inputValue}
 					onChange={(e) => {
-						setInputValue(e.target.value);
+						if (!isControlled) {
+							setUncontrolledValue(e.target.value);
+						}
+						onValueChange?.(e.target.value);
 						e.target.style.height = "auto";
 						e.target.style.height = e.target.scrollHeight + "px";
 					}}
@@ -241,33 +255,35 @@ export function PromptInput({
 			<div className="flex items-center justify-between">
 				<div className="flex items-center gap-1.5">
 					{/* Attach Button */}
-					<label
-						htmlFor={disabled ? undefined : "file-upload"}
-						className={cn(
-							"flex items-center justify-center rounded-md border border-border bg-white text-zinc-700 transition-colors",
-							disabled
-								? "opacity-50 cursor-not-allowed"
-								: "cursor-pointer hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700",
-							showAttachText ? "py-1.5 px-2.5 gap-1.5" : "aspect-square p-1.5",
-						)}
-						title={disabled ? "Access disabled" : "Upload file"}
-					>
-						<input
-							id="file-upload"
-							type="file"
-							disabled={disabled}
-							className="sr-only"
-							onChange={handleFileChange}
-							onClick={(e) => {
-								(e.target as HTMLInputElement).value = "";
-							}}
-							multiple
-						/>
-						<RiAttachmentLine className="size-4 pointer-events-none shrink-0" />
-						{showAttachText && (
-							<span className="text-xs font-medium pointer-events-none">{attachText}</span>
-						)}
-					</label>
+					{showAttachButton && (
+						<label
+							htmlFor={disabled ? undefined : "file-upload"}
+							className={cn(
+								"flex items-center justify-center rounded-md border border-border bg-white text-zinc-700 transition-colors",
+								disabled
+									? "opacity-50 cursor-not-allowed"
+									: "cursor-pointer hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700",
+								showAttachText ? "py-1.5 px-2.5 gap-1.5" : "aspect-square p-1.5",
+							)}
+							title={disabled ? "Access disabled" : "Upload file"}
+						>
+							<input
+								id="file-upload"
+								type="file"
+								disabled={disabled}
+								className="sr-only"
+								onChange={handleFileChange}
+								onClick={(e) => {
+									(e.target as HTMLInputElement).value = "";
+								}}
+								multiple
+							/>
+							<RiAttachmentLine className="size-4 pointer-events-none shrink-0" />
+							{showAttachText && (
+								<span className="text-xs font-medium pointer-events-none">{attachText}</span>
+							)}
+						</label>
+					)}
 				</div>
 
 				{/* Send Button */}

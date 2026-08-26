@@ -3,10 +3,12 @@
 import { PromptInput } from "@/components/shared/prompt-input";
 import {
 	RiFileTextLine,
-	RiMedicineBottleLine,
 	RiRobot2Line,
-	RiSyringeLine,
 	RiAlertLine,
+	RiSearchLine,
+	RiDeleteBinLine,
+	RiGitRepositoryLine,
+	RiGitMergeLine,
 } from "@remixicon/react";
 import {
 	Select,
@@ -15,9 +17,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useMemo, Suspense } from "react";
-import { useUploadKnowledge, useIngestionQuota } from "../knowledge/hooks/use-knowledge";
+import { useUploadKnowledge, useIngestionQuota, useCreateGeneralChatSession } from "../knowledge/hooks/use-knowledge";
 import { useProjects } from "../knowledge/hooks/use-projects";
 
 function IngestContent() {
@@ -29,9 +32,12 @@ function IngestContent() {
 	const uploadMutation = useUploadKnowledge();
 	const { data: quota } = useIngestionQuota();
 
+	const [mode, setMode] = useState<"ingest" | "general">("ingest");
 	const [selectedProjectId, setSelectedProjectId] = useState<string>(projectId || "none");
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 	const [promptValue, setPromptValue] = useState("");
+
+	const isGeneralMode = mode === "general";
 
 	const selectedProjectName = useMemo(() => {
 		if (!selectedProjectId || selectedProjectId === "none") {
@@ -41,13 +47,33 @@ function IngestContent() {
 		return found ? found.name : "Select Project";
 	}, [selectedProjectId, projects]);
 
+	const createGeneralSession = useCreateGeneralChatSession();
+
 	const handleSend = (value: string, _category: string | undefined, files: File[]) => {
+		setErrorMsg(null);
+
+		if (isGeneralMode) {
+			if (!value || !value.trim()) {
+				setErrorMsg("Please enter a question or instruction for the Knowledge Base Assistant.");
+				return false;
+			}
+
+			void (async () => {
+				try {
+					const session = await createGeneralSession.mutateAsync();
+					router.push(`/dashboard/ingest/chat?session_id=${session.id}&q=${encodeURIComponent(value.trim())}`);
+				} catch {
+					router.push(`/dashboard/ingest/chat?q=${encodeURIComponent(value.trim())}`);
+				}
+			})();
+			return;
+		}
+
+		// Normal Ingestion Flow
 		if (files.length === 0) {
 			setErrorMsg("Please attach at least one file to ingest.");
 			return false;
 		}
-
-		setErrorMsg(null);
 
 		const formData = new FormData();
 		if (value) {
@@ -88,25 +114,26 @@ function IngestContent() {
 				</div>
 				<div className="space-y-1">
 					<h1 className="text-lg font-semibold tracking-tight text-zinc-950">
-						Expand our clinical knowledge today
+						{isGeneralMode ? "Knowledge Base Assistant" : "Expand Knowledge Base"}
 					</h1>
 					<p className="text-[13px] text-zinc-500 max-w-95 leading-relaxed">
-						Ingesting documents to train the ai erha knowledge with product, treatment, and
-						promotional brochure
+						{isGeneralMode
+							? "Search, edit, or clean up existing knowledge entries via prompt instructions."
+							: "Upload product, treatment, or brochure documents to train the AI assistant."}
 					</p>
 				</div>
 			</div>
 
-			{/* Ingestion Quota Warning Banner (Only displayed when approaching or reaching threshold) */}
-			{quota && (quota.exceeded || quota.warning) && (
+			{/* Ingestion Quota Warning Banner (Only displayed in Ingest mode when approaching limit) */}
+			{!isGeneralMode && quota && (quota.exceeded || quota.warning) && (
 				<div className="mb-5 w-full">
 					{quota.exceeded ? (
 						<div className="flex items-start gap-3 p-3.5 rounded-lg border border-amber-300 bg-white text-xs">
 							<RiAlertLine className="size-4 text-amber-600 shrink-0 mt-0.5" />
 							<div className="flex flex-col gap-0.5">
-								<span className="font-semibold text-zinc-900">Monthly Ingestion Threshold Reached ({quota.percentage}%)</span>
+								<span className="font-semibold text-zinc-900">Monthly Ingestion Limit Reached ({quota.percentage}%)</span>
 								<span className="text-zinc-500">
-									You have used {quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens this month. Ingestion will proceed normally, but you can adjust the threshold anytime in Configuration.
+									Used {quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens. Ingestion will proceed, but threshold can be adjusted in Configuration.
 								</span>
 							</div>
 						</div>
@@ -114,9 +141,9 @@ function IngestContent() {
 						<div className="flex items-start gap-3 p-3.5 rounded-lg border border-amber-300 bg-white text-xs">
 							<RiAlertLine className="size-4 text-amber-600 shrink-0 mt-0.5" />
 							<div className="flex flex-col gap-0.5">
-								<span className="font-semibold text-zinc-900">Monthly Ingestion Quota Near Limit</span>
+								<span className="font-semibold text-zinc-900">Monthly Ingestion Near Limit</span>
 								<span className="text-zinc-500">
-									{quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens used ({quota.percentage}%). Approaching monthly capacity.
+									{quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens used ({quota.percentage}%).
 								</span>
 							</div>
 						</div>
@@ -126,40 +153,92 @@ function IngestContent() {
 
 			{/* Shortcuts */}
 			<div className="grid grid-cols-2 gap-3 w-full mb-4 shrink-0">
-				<button
-					type="button"
-					onClick={() => setPromptValue("Can you suggest a product for this condition...")}
-					className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
-				>
-					<RiMedicineBottleLine className="size-4 text-zinc-950 mb-1.5" />
-					<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Product Knowledge</h3>
-					<p className="text-[11px] leading-tight text-zinc-500">
-						Can you suggest a product for this condition...
-					</p>
-				</button>
-				<button
-					type="button"
-					onClick={() => setPromptValue("Could you recommend a treatment for this condition...")}
-					className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
-				>
-					<RiSyringeLine className="size-4 text-zinc-950 mb-1.5" />
-					<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Treatment Recomendation</h3>
-					<p className="text-[11px] leading-tight text-zinc-500">
-						Could you recommend a treatment for this condition...
-					</p>
-				</button>
+				{isGeneralMode ? (
+					<>
+						<button
+							type="button"
+							onClick={() =>
+								setPromptValue(
+									"Search and analyze the entire ERHA knowledge base to identify relevant products, clinical protocols, or treatments matching the query. Provide a comprehensive summary grounded strictly in existing database entries, citing specific source documents and attributes. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
+								)
+							}
+							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+						>
+							<RiSearchLine className="size-4 text-zinc-950 mb-1.5" />
+							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Retrieval</h3>
+							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+								Search and analyze the entire ERHA knowledge base to identify relevant products, clinical protocols, or treatments...
+							</p>
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								setPromptValue(
+									"Audit all existing knowledge base entries, identify expired promotional campaigns or outdated clinical records, and perform necessary cleanup or validation. Ensure that active offerings remain accurate and distinct from deprecated entries. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
+								)
+							}
+							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+						>
+							<RiDeleteBinLine className="size-4 text-zinc-950 mb-1.5" />
+							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Knowledge Audit & Maintenance</h3>
+							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+								Audit all existing knowledge base entries, identify expired promotional campaigns, and perform cleanup or validation...
+							</p>
+						</button>
+					</>
+				) : (
+					<>
+						<button
+							type="button"
+							onClick={() =>
+								setPromptValue(
+									"Analyze all uploaded documents and treat them as a unified knowledge base. Identify key information and cross-document relationships while ensuring that all findings remain strictly grounded in the provided sources. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
+								)
+							}
+							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+						>
+							<RiGitRepositoryLine className="size-4 text-zinc-950 mb-1.5" />
+							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Analysis</h3>
+							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+								Analyze all uploaded documents and treat them as a unified knowledge base...
+							</p>
+						</button>
+						<button
+							type="button"
+							onClick={() =>
+								setPromptValue(
+									"Review all uploaded files and map key entities, topics, and relationships across documents. Clearly distinguish between available information and information that is not provided in the knowledge base. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
+								)
+							}
+							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+						>
+							<RiGitMergeLine className="size-4 text-zinc-950 mb-1.5" />
+							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Entity & Topic Mapping</h3>
+							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+								Review all uploaded files and map key entities, topics, and relationships across documents...
+							</p>
+						</button>
+					</>
+				)}
 			</div>
 
 			{/* Prompt Input */}
 			<div className="shrink-0 mt-4 flex flex-col items-center relative">
 				<div className="w-full">
 					<PromptInput
-						key={promptValue}
-						defaultValue={promptValue}
-						minRows={3}
+						key={mode}
+						value={promptValue}
+						onValueChange={setPromptValue}
+						minRows={5}
 						onSend={handleSend}
-						showAttachText={true}
+						showAttachButton={!isGeneralMode}
+						showAttachText={!isGeneralMode}
 						attachText="Add files"
+						placeholder={
+							isGeneralMode
+								? "Ask or instruct (e.g. search product, update description, clean expired promos)..."
+								: undefined
+						}
 						disabled={uploadMutation.isPending}
 					/>
 				</div>
@@ -171,44 +250,73 @@ function IngestContent() {
 					</div>
 				)}
 
-				{/* Project Attachment Selector below chat prompt on right */}
-				<div className="w-full flex items-center justify-end mt-3 px-0.5">
-					<div className="flex items-center gap-2 max-w-full">
-						<span className="text-xs text-zinc-500 font-medium shrink-0">Attach to Project:</span>
-						<Select
-							value={selectedProjectId}
-							onValueChange={(val) => setSelectedProjectId(val ?? "none")}
+				{/* Mode Switch & Controls below prompt input */}
+				<div className="w-full flex flex-wrap items-center justify-between gap-3 mt-3 px-0.5">
+					{/* Toggle Switch */}
+					<div className="flex items-center gap-2">
+						<Switch
+							id="general-mode-toggle"
+							checked={isGeneralMode}
+							onCheckedChange={(checked) => {
+								setMode(checked ? "general" : "ingest");
+								setErrorMsg(null);
+							}}
 							disabled={uploadMutation.isPending}
+						/>
+						<label
+							htmlFor="general-mode-toggle"
+							className="text-xs font-medium text-zinc-700 cursor-pointer select-none"
 						>
-							<SelectTrigger className="h-8 text-xs border-zinc-200/80 bg-white text-zinc-700 rounded-lg px-2.5 min-w-36 max-w-56 sm:max-w-72 shadow-none hover:border-zinc-300 transition-colors">
-								<SelectValue placeholder="Select Project" className="truncate">
-									{selectedProjectName}
-								</SelectValue>
-							</SelectTrigger>
-							<SelectContent align="end" alignItemWithTrigger={false} sideOffset={4} className="bg-white max-w-xs">
-								<SelectItem value="none">
-									<span className="truncate">No Project</span>
-								</SelectItem>
-								{projects.map((p) => (
-									<SelectItem key={p.id} value={p.id}>
-										<span className="truncate" title={p.name}>{p.name}</span>
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+							{isGeneralMode ? "General Assistant Mode" : "File Ingestion Mode"}
+						</label>
 					</div>
+
+					{/* Right Side: Project selector only when navigated from Project detail page, or helper for General */}
+					{!isGeneralMode && Boolean(projectId && projectId !== "none") ? (
+						<div className="flex items-center gap-2 max-w-full">
+							<span className="text-xs text-zinc-500 font-medium shrink-0">Project:</span>
+							<Select
+								value={selectedProjectId}
+								onValueChange={(val) => setSelectedProjectId(val ?? "none")}
+								disabled={uploadMutation.isPending}
+							>
+								<SelectTrigger className="h-7.5 text-xs border border-zinc-200 bg-white text-zinc-700 rounded-md px-2.5 min-w-36 max-w-56 sm:max-w-72 shadow-none hover:border-zinc-300 transition-colors">
+									<SelectValue placeholder="Select Project" className="truncate">
+										{selectedProjectName}
+									</SelectValue>
+								</SelectTrigger>
+								<SelectContent align="end" alignItemWithTrigger={false} sideOffset={4} className="bg-white max-w-xs">
+									<SelectItem value="none">
+										<span className="truncate">No Project</span>
+									</SelectItem>
+									{projects.map((p) => (
+										<SelectItem key={p.id} value={p.id}>
+											<span className="truncate" title={p.name}>{p.name}</span>
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					) : isGeneralMode ? (
+						<div className="flex items-center gap-1.5 text-xs text-zinc-400">
+							<span>No files needed</span>
+						</div>
+					) : null}
 				</div>
 
+				{/* Loading Overlays */}
 				{uploadMutation.isPending && (
 					<div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-xl z-10 backdrop-blur-sm">
 						<span className="text-sm font-medium text-blue-600">Uploading documents...</span>
 					</div>
 				)}
 
-				<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-400 bg-zinc-50/50">
-					<RiFileTextLine className="size-3 mr-1.5 text-zinc-400" />
-					File format including PDF, docx, excel, image
-				</div>
+				{!isGeneralMode && (
+					<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-400 bg-zinc-50/50">
+						<RiFileTextLine className="size-3 mr-1.5 text-zinc-400" />
+						Supports PDF, DOCX, XLSX, TXT, JPG, and PNG
+					</div>
+				)}
 			</div>
 		</div>
 	);
