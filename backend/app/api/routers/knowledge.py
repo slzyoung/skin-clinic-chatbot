@@ -14,7 +14,11 @@ from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType
 from app.models.knowledge import Knowledge, KnowledgeStatus, KnowledgeType
 from app.models.project import Project
-from app.schemas.knowledge import KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse, KnowledgeProjectUpdate
+from app.models.chat import ChatSession, ChatMessage as DBChatMessage, ChatRole, ChatStatus
+from app.schemas.knowledge import (
+    KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse, KnowledgeProjectUpdate,
+    GeneralChatSessionResponse, GeneralChatMessageItem, GeneralChatMessageSendRequest
+)
 from app.services.token_service import check_ingestion_quota, record_ingestion_token_usage
 from datetime import datetime, timezone
 
@@ -31,7 +35,10 @@ from app.rag.router import (
     resolve_pending_file,
     resolve_approved_file,
     synthesize_batch_executive_summary,
-    chat_endpoint
+    chat_endpoint,
+    query_general_endpoint,
+    QueryGeneralRequest,
+    QueryGeneralResponse
 )
 from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatMessage, ChatRequest, ChatResponse, UserContext
 
@@ -45,6 +52,169 @@ async def get_ingestion_quota_endpoint(
     """Fetch monthly knowledge ingestion token quota and warning status."""
     _, quota_info = await check_ingestion_quota(db)
     return quota_info
+
+@router.post("/general-session", response_model=GeneralChatSessionResponse)
+@router.post("/general-session/", response_model=GeneralChatSessionResponse)
+async def create_general_chat_session(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:read"))
+):
+    """Create a new persistent General Knowledge Assistant chat session."""
+    session = ChatSession(
+        user_id=current_user.id,
+        session_type="GENERAL_ASSISTANT",
+        status=ChatStatus.ACTIVE
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return GeneralChatSessionResponse(
+        id=session.id,
+        user_id=session.user_id,
+        session_type=session.session_type,
+        status=session.status.value,
+        messages=[],
+        created_at=session.created_at,
+        updated_at=session.updated_at
+    )
+
+@router.get("/general-session/{session_id}", response_model=GeneralChatSessionResponse)
+@router.get("/general-session/{session_id}/", response_model=GeneralChatSessionResponse)
+async def get_general_chat_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:read"))
+):
+    """Retrieve saved messages for a persistent General Knowledge Assistant session."""
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id,
+        ChatSession.session_type == "GENERAL_ASSISTANT"
+    )
+    res = await db.execute(stmt)
+    session = res.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="General chat session not found")
+
+    msg_stmt = select(DBChatMessage).where(
+        DBChatMessage.session_id == session_id
+    ).order_by(DBChatMessage.created_at.asc())
+    msg_res = await db.execute(msg_stmt)
+    db_msgs = msg_res.scalars().all()
+
+    formatted_msgs = []
+    for m in db_msgs:
+        att = m.attachments or {}
+        formatted_msgs.append(GeneralChatMessageItem(
+            id=m.id,
+            role=m.role.value.lower(),
+            content=m.content,
+            action=att.get("action"),
+            target_knowledge_id=att.get("target_knowledge_id"),
+            total_found=att.get("total_found"),
+            attachments=att,
+            created_at=m.created_at
+        ))
+
+    return GeneralChatSessionResponse(
+        id=session.id,
+        user_id=session.user_id,
+        session_type=session.session_type,
+        status=session.status.value,
+        messages=formatted_msgs,
+        created_at=session.created_at,
+        updated_at=session.updated_at
+    )
+
+@router.post("/general-session/{session_id}/messages", response_model=GeneralChatSessionResponse)
+@router.post("/general-session/{session_id}/messages/", response_model=GeneralChatSessionResponse)
+async def send_general_chat_message(
+    session_id: uuid.UUID,
+    payload: GeneralChatMessageSendRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:read")),
+    pipeline = Depends(get_generation_pipeline),
+    vector_store = Depends(get_vector_store),
+    bm25 = Depends(get_bm25_index)
+):
+    """Append message to persistent session, execute RAG search/management, and persist response in DB."""
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id,
+        ChatSession.session_type == "GENERAL_ASSISTANT"
+    )
+    res = await db.execute(stmt)
+    session = res.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="General chat session not found")
+
+    # Fetch existing conversation history
+    msg_stmt = select(DBChatMessage).where(
+        DBChatMessage.session_id == session_id
+    ).order_by(DBChatMessage.created_at.asc())
+    msg_res = await db.execute(msg_stmt)
+    db_msgs = msg_res.scalars().all()
+
+    history_payload = [
+        {"role": m.role.value.lower(), "content": m.content}
+        for m in db_msgs
+    ]
+
+    # 1. Save User Message in PostgreSQL
+    user_db_msg = DBChatMessage(
+        session_id=session_id,
+        role=ChatRole.USER,
+        content=payload.prompt,
+        attachments=payload.attachments
+    )
+    db.add(user_db_msg)
+    await db.flush()
+
+    # 2. Run Query General RAG endpoint
+    rag_request = QueryGeneralRequest(
+        prompt=payload.prompt,
+        history=history_payload
+    )
+    ai_res = await query_general_endpoint(
+        request=rag_request,
+        pipeline=pipeline,
+        vector_store=vector_store,
+        bm25=bm25
+    )
+
+    # 3. Save Assistant Message in PostgreSQL
+    assistant_att = {
+        "action": ai_res.action,
+        "target_knowledge_id": ai_res.target_knowledge_id,
+        "total_found": ai_res.total_found
+    }
+    assistant_db_msg = DBChatMessage(
+        session_id=session_id,
+        role=ChatRole.ASSISTANT,
+        content=ai_res.answer,
+        attachments=assistant_att
+    )
+    db.add(assistant_db_msg)
+    await db.commit()
+
+    return await get_general_chat_session(session_id, db, current_user)
+
+@router.post("/query-general", response_model=QueryGeneralResponse)
+@router.post("/query-general/", response_model=QueryGeneralResponse)
+async def knowledge_query_general(
+    request: QueryGeneralRequest,
+    current_user: User = Depends(RequireAccess("knowledge:read")),
+    pipeline = Depends(get_generation_pipeline),
+    vector_store = Depends(get_vector_store),
+    bm25 = Depends(get_bm25_index)
+):
+    """
+    Main Backend wrapper for Query General Endpoint — Knowledge Base Explorer, Editor & Deletion via Natural Language Prompt.
+    """
+    return await query_general_endpoint(
+        request=request,
+        pipeline=pipeline,
+        vector_store=vector_store,
+        bm25=bm25
+    )
 
 @router.get("/", response_model=List[KnowledgeResponse])
 async def list_knowledge(
@@ -209,7 +379,15 @@ async def get_knowledge(
                     await db.commit()
                     await db.refresh(knowledge)
                 
-                knowledge.metadata_ = data
+                if isinstance(data, dict):
+                    merged_meta = dict(knowledge.metadata_) if isinstance(knowledge.metadata_, dict) else {}
+                    merged_meta.update(data)
+                    # Ensure history is preserved
+                    if "history" not in data and "history" in merged_meta:
+                        data["history"] = merged_meta["history"]
+                    if "chat_history" in merged_meta and "chat_history" not in data:
+                        data["chat_history"] = merged_meta["chat_history"]
+                    knowledge.metadata_ = data
         except Exception as e:
             logger.warning(f"Error loading RAG JSON: {e}")
             
@@ -596,17 +774,34 @@ async def approve_knowledge(
     pipeline = get_ingestion_pipeline(request)
     bm25 = get_bm25_index(request)
     
+    # Read pending file history before it gets moved/deleted by approve_document
+    pending_file = resolve_pending_file(str(knowledge_id))
+    staged_history = []
+    if pending_file and os.path.exists(pending_file):
+        try:
+            with open(pending_file, "r", encoding="utf-8") as f:
+                staged_data = json.load(f)
+                staged_history = staged_data.get("history", [])
+        except Exception:
+            pass
+
     res = await approve_document(str(knowledge_id), pipeline=pipeline, bm25=bm25)
     
-    # Ensure DB status is updated
+    # Ensure DB status is updated and conversation history is retained in metadata_
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
     result = await db.execute(stmt)
     k_entry = result.scalar_one_or_none()
     if k_entry:
         k_entry.status = KnowledgeStatus.APPROVED
         k_entry.approved_by = current_user.id
+        if k_entry.metadata_ is None:
+            k_entry.metadata_ = {}
+        if staged_history:
+            k_entry.metadata_["history"] = staged_history
+            k_entry.metadata_["chat_history"] = staged_history
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(k_entry, "metadata_")
         await db.commit()
-
 
     return res
 
@@ -741,6 +936,29 @@ async def refine_knowledge(
                 k_entry.metadata_["categories"] = [c.get("name") if isinstance(c, dict) else str(c) for c in res.get("suggested_categories", [])]
             if res.get("visibility_settings") is not None:
                 k_entry.metadata_["visibility_settings"] = res.get("visibility_settings")
+
+            # Persist chat turns in metadata
+            existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
+            if not isinstance(existing_history, list):
+                existing_history = []
+            
+            new_history = list(existing_history)
+            if payload.prompt:
+                new_history.append({
+                    "role": "user",
+                    "content": payload.prompt,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
+            if res.get("summary"):
+                new_history.append({
+                    "role": "assistant",
+                    "content": res.get("summary"),
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                })
+
+            k_entry.metadata_["history"] = new_history
+            k_entry.metadata_["chat_history"] = new_history
+
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(k_entry, "metadata_")
             await db.commit()

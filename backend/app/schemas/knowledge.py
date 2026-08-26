@@ -35,3 +35,30 @@ class KnowledgeResponse(KnowledgeBase):
     updated_at: datetime
     
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+class GeneralChatMessageItem(BaseModel):
+    id: UUID
+    role: str
+    content: str
+    action: Optional[str] = None
+    target_knowledge_id: Optional[str] = None
+    total_found: Optional[int] = None
+    attachments: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class GeneralChatSessionResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    session_type: str
+    status: str
+    messages: List[GeneralChatMessageItem] = []
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class GeneralChatMessageSendRequest(BaseModel):
+    prompt: str
+    attachments: Optional[Dict[str, Any]] = None
