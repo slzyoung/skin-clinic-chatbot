@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://localhost:8000",
+        "http://localhost:8001",
         "https://dokterpedia-dev.aryanoble.web.id",
         "https://dokterpedia-staging.aryanoble.web.id",
         "https://dokterpedia.aryanoble.co.id",

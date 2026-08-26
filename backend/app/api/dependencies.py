@@ -76,8 +76,12 @@ async def verify_cis_proxy_signature(
             detail="Missing X-Signature or X-User-Id header"
         )
         
-    body_bytes = await request.body()
-    print(f"BACKEND BODY BYTES: {body_bytes}")
+    body_bytes = request.scope.get("_raw_body")
+    if body_bytes is None:
+        try:
+            body_bytes = await request.body()
+        except RuntimeError:
+            body_bytes = getattr(request, "_body", b"")
     payload_to_verify = x_user_id.encode("utf-8") + b":" + body_bytes
     
     try:

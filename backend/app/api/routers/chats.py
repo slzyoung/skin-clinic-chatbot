@@ -522,11 +522,11 @@ async def create_chat_message(
     session_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     request: Request,
+    current_user: User = Depends(get_current_user_flexible),
+    db: AsyncSession = Depends(get_db),
     role: str = Form(...),
     content: str = Form(...),
-    files: Optional[List[UploadFile]] = File(None),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user_flexible)
+    files: Optional[List[UploadFile]] = File(None)
 ):
     # Verify access to session
     stmt_session = select(ChatSession).where(ChatSession.id == session_id)

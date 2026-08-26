@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException, status
 from contextlib import asynccontextmanager
 from loguru import logger
 from app.core.config import settings
@@ -88,6 +88,15 @@ app = FastAPI(
     lifespan=lifespan,
     swagger_ui_parameters={"persistAuthorization": True}
 )
+
+# Pure ASGI Middleware to buffer and replay raw request body when X-Signature is present.
+# This prevents Starlette's MultipartParser from starving signature verification dependencies.
+@app.middleware("http")
+async def cache_raw_body_for_signature(request: Request, call_next):
+    if request.headers.get("X-Signature") or request.headers.get("x-signature"):
+        body_bytes = await request.body()
+        request.scope["_raw_body"] = body_bytes
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
