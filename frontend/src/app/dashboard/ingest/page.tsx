@@ -5,8 +5,6 @@ import {
 	RiFileTextLine,
 	RiRobot2Line,
 	RiAlertLine,
-	RiSearchLine,
-	RiDeleteBinLine,
 	RiGitRepositoryLine,
 	RiGitMergeLine,
 } from "@remixicon/react";
@@ -118,7 +116,7 @@ function IngestContent() {
 					</h1>
 					<p className="text-[13px] text-zinc-500 max-w-95 leading-relaxed">
 						{isGeneralMode
-							? "Search, edit, or clean up existing knowledge entries via prompt instructions."
+							? "Search and explore existing knowledge entries by asking questions via prompt."
 							: "Upload product, treatment, or brochure documents to train the AI assistant."}
 					</p>
 				</div>
@@ -152,75 +150,40 @@ function IngestContent() {
 			)}
 
 			{/* Shortcuts */}
-			<div className="grid grid-cols-2 gap-3 w-full mb-4 shrink-0">
-				{isGeneralMode ? (
-					<>
-						<button
-							type="button"
-							onClick={() =>
-								setPromptValue(
-									"Search and analyze the entire ERHA knowledge base to identify relevant products, clinical protocols, or treatments matching the query. Provide a comprehensive summary grounded strictly in existing database entries, citing specific source documents and attributes. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
-								)
-							}
-							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
-						>
-							<RiSearchLine className="size-4 text-zinc-950 mb-1.5" />
-							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Retrieval</h3>
-							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
-								Search and analyze the entire ERHA knowledge base to identify relevant products, clinical protocols, or treatments...
-							</p>
-						</button>
-						<button
-							type="button"
-							onClick={() =>
-								setPromptValue(
-									"Audit all existing knowledge base entries, identify expired promotional campaigns or outdated clinical records, and perform necessary cleanup or validation. Ensure that active offerings remain accurate and distinct from deprecated entries. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
-								)
-							}
-							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
-						>
-							<RiDeleteBinLine className="size-4 text-zinc-950 mb-1.5" />
-							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Knowledge Audit & Maintenance</h3>
-							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
-								Audit all existing knowledge base entries, identify expired promotional campaigns, and perform cleanup or validation...
-							</p>
-						</button>
-					</>
-				) : (
-					<>
-						<button
-							type="button"
-							onClick={() =>
-								setPromptValue(
-									"Analyze all uploaded documents and treat them as a unified knowledge base. Identify key information and cross-document relationships while ensuring that all findings remain strictly grounded in the provided sources. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
-								)
-							}
-							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
-						>
-							<RiGitRepositoryLine className="size-4 text-zinc-950 mb-1.5" />
-							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Analysis</h3>
-							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
-								Analyze all uploaded documents and treat them as a unified knowledge base...
-							</p>
-						</button>
-						<button
-							type="button"
-							onClick={() =>
-								setPromptValue(
-									"Review all uploaded files and map key entities, topics, and relationships across documents. Clearly distinguish between available information and information that is not provided in the knowledge base. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
-								)
-							}
-							className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
-						>
-							<RiGitMergeLine className="size-4 text-zinc-950 mb-1.5" />
-							<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Entity & Topic Mapping</h3>
-							<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
-								Review all uploaded files and map key entities, topics, and relationships across documents...
-							</p>
-						</button>
-					</>
-				)}
-			</div>
+			{!isGeneralMode && (
+				<div className="grid grid-cols-2 gap-3 w-full mb-4 shrink-0">
+					<button
+						type="button"
+						onClick={() =>
+							setPromptValue(
+								"Analyze all uploaded documents and treat them as a unified knowledge base. Identify key information and cross-document relationships while ensuring that all findings remain strictly grounded in the provided sources. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
+							)
+						}
+						className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+					>
+						<RiGitRepositoryLine className="size-4 text-zinc-950 mb-1.5" />
+						<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Analysis</h3>
+						<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+							Analyze all uploaded documents and treat them as a unified knowledge base...
+						</p>
+					</button>
+					<button
+						type="button"
+						onClick={() =>
+							setPromptValue(
+								"Review all uploaded files and map key entities, topics, and relationships across documents. Clearly distinguish between available information and information that is not provided in the knowledge base. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
+							)
+						}
+						className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+					>
+						<RiGitMergeLine className="size-4 text-zinc-950 mb-1.5" />
+						<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Entity & Topic Mapping</h3>
+						<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+							Review all uploaded files and map key entities, topics, and relationships across documents...
+						</p>
+					</button>
+				</div>
+			)}
 
 			{/* Prompt Input */}
 			<div className="shrink-0 mt-4 flex flex-col items-center relative">
@@ -236,7 +199,7 @@ function IngestContent() {
 						attachText="Add files"
 						placeholder={
 							isGeneralMode
-								? "Ask or instruct (e.g. search product, update description, clean expired promos)..."
+								? "Ask about the knowledge..."
 								: undefined
 						}
 						disabled={uploadMutation.isPending}

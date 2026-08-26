@@ -66,7 +66,7 @@ function GeneralChatContent() {
 					</Button>
 					<div>
 						<h1 className="text-lg font-semibold text-gray-900">General Knowledge Assistant</h1>
-						<p className="text-sm text-gray-500">Interactive Knowledge Base query & management</p>
+						<p className="text-sm text-gray-500">Ask questions about your knowledge base</p>
 					</div>
 				</div>
 
