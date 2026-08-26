@@ -243,10 +243,7 @@ async def list_chat_feedbacks(
         raise HTTPException(status_code=403, detail="Not authorized to view feedbacks")
         
     stmt = select(ChatSession).where(
-        or_(
-            ChatSession.feedback.is_not(None),
-            ChatSession.has_data_issue == True
-        )
+        ChatSession.has_data_issue == True
     ).order_by(ChatSession.updated_at.desc())
     
     result = await db.execute(stmt)
