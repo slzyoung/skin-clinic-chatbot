@@ -242,9 +242,11 @@ async def list_chat_feedbacks(
     if not await has_chats_read_access(current_user, db):
         raise HTTPException(status_code=403, detail="Not authorized to view feedbacks")
         
-    stmt = select(ChatSession).where(
-        ChatSession.has_data_issue == True
-    ).order_by(ChatSession.updated_at.desc())
+    stmt = (
+        select(ChatSession)
+        .where(ChatSession.has_data_issue == True, ChatSession.session_type == "DOCTOR")
+        .order_by(ChatSession.updated_at.desc())
+    )
     
     result = await db.execute(stmt)
     sessions = result.scalars().all()
@@ -284,7 +286,7 @@ async def get_chat_stats(
 ):
     """Return overview counts of doctors reached, sessions, ratings, and missing knowledge."""
     has_messages = select(ChatMessage.id).where(ChatMessage.session_id == ChatSession.id).exists()
-    base_where = [has_messages]
+    base_where = [has_messages, ChatSession.session_type == "DOCTOR"]
     if not await has_chats_read_access(current_user, db):
         base_where.append(ChatSession.user_id == current_user.id)
     elif doctor_id:
@@ -318,7 +320,11 @@ async def list_chat_sessions(
     current_user: User = Depends(get_current_user_flexible)
 ):
     has_messages = select(ChatMessage.id).where(ChatMessage.session_id == ChatSession.id).exists()
-    stmt = select(ChatSession).where(has_messages).order_by(ChatSession.updated_at.desc())
+    stmt = (
+        select(ChatSession)
+        .where(has_messages, ChatSession.session_type == "DOCTOR")
+        .order_by(ChatSession.updated_at.desc())
+    )
     if not await has_chats_read_access(current_user, db):
         stmt = stmt.where(ChatSession.user_id == current_user.id)
     elif doctor_id:
