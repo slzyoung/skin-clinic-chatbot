@@ -118,6 +118,25 @@ export const useApproveKnowledge = () => {
 	});
 };
 
+export const useApproveBatchKnowledge = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (batchId: string) => {
+			const response = await api.post(`/knowledge/batch/${batchId}/approve`);
+			return response.data;
+		},
+		onSuccess: () => {
+			toast.success("All documents approved and indexed into AI Knowledge Base!");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to approve batch documents."));
+		},
+	});
+};
+
 export const useDeleteKnowledge = () => {
 	const queryClient = useQueryClient();
 

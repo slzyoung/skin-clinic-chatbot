@@ -24,7 +24,9 @@ import {
 import { useRouter } from "next/navigation";
 import { use, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useDeleteKnowledge, useKnowledgeBatch } from "../../hooks/use-knowledge";
+import { ConfirmationModal } from "@/components/shared/knowledge/ConfirmationModal";
+import { IngestSuccessModal } from "@/components/shared/knowledge/IngestSuccessModal";
+import { useApproveBatchKnowledge, useDeleteKnowledge, useKnowledgeBatch } from "../../hooks/use-knowledge";
 import { BatchKnowledgeTabContent, BatchTabHandle } from "./BatchKnowledgeTabContent";
 import { BatchDocumentTabs } from "./BatchDocumentTabs";
 
@@ -38,7 +40,10 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const hasWriteAccess = user?.accesses?.includes("knowledge:write");
 	const hasDeleteAccess = user?.accesses?.includes("knowledge:delete");
 	const deleteMutation = useDeleteKnowledge();
+	const approveBatchMutation = useApproveBatchKnowledge();
 
+	const [isApproveAllOpen, setIsApproveAllOpen] = useState(false);
+	const [isSuccessOpen, setIsSuccessOpen] = useState(false);
 	const [editModes, setEditModes] = useState<Record<string, boolean>>({});
 	const tabRefs = useRef<Record<string, BatchTabHandle | null>>({});
 
@@ -85,6 +90,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const displayedSummary = batchSummary || (fallbackFeedbacks.length > 0 ? fallbackFeedbacks.join("\n\n") : undefined);
 
 	const isEditMode = editModes[currentTab] || false;
+	const hasPendingDocs = batchDocuments.some((d) => d.status !== "APPROVED");
 
 	const handleEditToggle = async () => {
 		if (isEditMode) {
@@ -165,6 +171,17 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					<h1 className="text-base font-semibold text-zinc-900">Batch Review Session</h1>
 				</div>
 				<div className="flex items-center gap-3">
+					{hasWriteAccess && hasPendingDocs && (
+						<Button
+							variant="default"
+							className="gap-2 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
+							disabled={isLoading || approveBatchMutation.isPending}
+							onClick={() => setIsApproveAllOpen(true)}
+						>
+							<RiCheckLine className="size-4" />
+							Approve All
+						</Button>
+					)}
 					{hasDeleteAccess && activeDoc?.status === "APPROVED" && (
 						<Button
 							variant="outline"
@@ -195,7 +212,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 				<div className="flex-1 overflow-hidden relative">
 					{batchDocuments.map((doc) => {
 						const preHeaderNode = (
-							<div className="flex flex-row flex-wrap justify-end gap-2 mb-4 self-end max-h-36 overflow-y-auto w-full pr-1">
+							<div className="flex flex-row flex-wrap justify-end gap-2 mb-4 self-end max-h-36 overflow-y-auto w-full min-w-0 max-w-full pr-1">
 								{batchDocuments.map((tabDoc) => {
 									const fileName = tabDoc.file_name || tabDoc.title || "Document";
 									const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
@@ -224,15 +241,15 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						);
 
 						const headerNode = (
-							<div className="flex flex-col gap-4 mb-4">
+							<div className="flex flex-col gap-4 mb-4 w-full min-w-0 max-w-full">
 								{/* Batch Summary Box if present */}
 								{displayedSummary && (
-									<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950">
+									<div className="bg-zinc-100/50 rounded-lg p-4 w-full min-w-0 max-w-full text-zinc-950">
 										<div className="flex items-center gap-2 text-blue-600 mb-2">
-											<RiSparklingLine className="size-5" />
-											<h3 className="font-semibold text-sm">Executive Summary</h3>
+											<RiSparklingLine className="size-5 shrink-0" />
+											<h3 className="font-semibold text-sm truncate">Executive Summary</h3>
 										</div>
-										<p className="text-sm leading-relaxed whitespace-pre-wrap">{displayedSummary}</p>
+										<p className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">{displayedSummary}</p>
 									</div>
 								)}
 
@@ -266,6 +283,30 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					})}
 				</div>
 			</div>
+
+			{/* Approve All Confirmation Modal */}
+			<ConfirmationModal
+				isOpen={isApproveAllOpen}
+				onOpenChange={setIsApproveAllOpen}
+				title="Approve All Documents"
+				description={`Are you sure you want to approve and index all ${batchDocuments.length} document(s) in this batch into the AI Knowledge Base?`}
+				confirmText="Approve All"
+				isLoading={approveBatchMutation.isPending}
+				onConfirm={async () => {
+					await approveBatchMutation.mutateAsync(batchId);
+					setIsSuccessOpen(true);
+				}}
+			/>
+
+			{/* Batch Ingest Success Modal */}
+			<IngestSuccessModal
+				isOpen={isSuccessOpen}
+				onOpenChange={setIsSuccessOpen}
+				title="Batch Approved Successfully"
+				description="All documents in this batch have been approved and indexed into the system."
+				buttonText="Back to Knowledge Base"
+				onAction={() => router.push("/dashboard/knowledge")}
+			/>
 		</div>
 	);
 }

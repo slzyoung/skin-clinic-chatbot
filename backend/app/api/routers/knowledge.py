@@ -591,6 +591,87 @@ async def get_knowledge_batch(
 
     return enriched_docs
 
+@router.post("/batch/{batch_id}/approve")
+async def approve_batch_knowledge(
+    request: Request,
+    batch_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write"))
+):
+    """Approve all pending staged documents in a batch ingestion session and index them into vector & BM25 search databases."""
+    pipeline = get_ingestion_pipeline(request)
+    bm25 = get_bm25_index(request)
+
+    from sqlalchemy import or_
+    stmt = select(Knowledge).where(
+        Knowledge.deleted_at.is_(None),
+        or_(
+            Knowledge.metadata_.op("->>")("batch_id") == batch_id,
+            Knowledge.metadata_.op("->>")("upload_batch_id") == batch_id
+        )
+    )
+    result = await db.execute(stmt)
+    db_docs = list(result.scalars().all())
+
+    # Scan pending directory for any files matching batch_id
+    pending_dir = "data/pending"
+    target_ids = set()
+    for d in db_docs:
+        target_ids.add(str(d.id))
+
+    if os.path.exists(pending_dir):
+        for f in os.listdir(pending_dir):
+            if f.endswith(".json") and f != "bm25_index.pkl":
+                fp = os.path.join(pending_dir, f)
+                try:
+                    with open(fp, "r", encoding="utf-8") as jf:
+                        data = json.load(jf)
+                    if isinstance(data, dict):
+                        b_id = data.get("batch_id") or data.get("upload_batch_id")
+                        if not b_id and data.get("chunks"):
+                            b_id = data["chunks"][0].get("metadata", {}).get("batch_id") or data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                        if b_id == batch_id:
+                            k_id = data.get("knowledge_id") or f.replace("_parsed.json", "").replace(".json", "")
+                            if k_id:
+                                target_ids.add(str(k_id))
+                except Exception:
+                    pass
+
+    if not target_ids:
+        raise HTTPException(status_code=404, detail=f"No documents found for batch '{batch_id}'.")
+
+    # Read pending histories before approval moves/deletes files
+    doc_histories = {}
+    for tid in target_ids:
+        p_file = resolve_pending_file(tid)
+        if p_file and os.path.exists(p_file):
+            try:
+                with open(p_file, "r", encoding="utf-8") as f:
+                    s_data = json.load(f)
+                    if s_data.get("history"):
+                        doc_histories[tid] = s_data.get("history")
+            except Exception:
+                pass
+
+    ids_param = ",".join(target_ids)
+    res = await approve_document(ids_param, pipeline=pipeline, bm25=bm25)
+
+    # Sync DB statuses
+    from sqlalchemy.orm.attributes import flag_modified
+    for doc in db_docs:
+        doc.status = KnowledgeStatus.APPROVED
+        doc.approved_by = current_user.id
+        doc_str_id = str(doc.id)
+        if doc_str_id in doc_histories:
+            if doc.metadata_ is None:
+                doc.metadata_ = {}
+            doc.metadata_["history"] = doc_histories[doc_str_id]
+            doc.metadata_["chat_history"] = doc_histories[doc_str_id]
+            flag_modified(doc, "metadata_")
+
+    await db.commit()
+    return res
+
 @router.post("/chat", response_model=ChatResponse)
 async def knowledge_chat(
     request: ChatRequest,
