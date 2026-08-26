@@ -11,10 +11,7 @@ import {
 	RiCheckLine,
 	RiFilterOffLine,
 	RiMedicineBottleLine,
-	RiMessage3Line,
 	RiNotification3Line,
-	RiThumbDownLine,
-	RiThumbUpLine,
 	RiUserLine,
 } from "@remixicon/react";
 import Link from "next/link";
@@ -36,7 +33,7 @@ import { cn } from "@/lib/utils";
 import { NOTIFICATION_KEYS } from "./api/keys";
 import { FeedbackNotification } from "./api/types";
 
-type FilterTab = "all" | "unread" | "issues";
+type FilterTab = "all" | "unread" | "read";
 
 export default function NotificationsPage() {
 	const [activeTab, setActiveTab] = useState<FilterTab>("all");
@@ -87,8 +84,8 @@ export default function NotificationsPage() {
 		[feedbacks],
 	);
 
-	const issuesCount = useMemo(
-		() => feedbacks.filter((f) => f.has_data_issue).length,
+	const readCount = useMemo(
+		() => feedbacks.filter((f) => f.is_feedback_read).length,
 		[feedbacks],
 	);
 
@@ -96,7 +93,7 @@ export default function NotificationsPage() {
 		return feedbacks.filter((item) => {
 			// Tab filter
 			if (activeTab === "unread" && item.is_feedback_read) return false;
-			if (activeTab === "issues" && !item.has_data_issue) return false;
+			if (activeTab === "read" && !item.is_feedback_read) return false;
 
 			// Doctor filter
 			if (doctorFilter !== "ALL" && item.doctor !== doctorFilter) return false;
@@ -150,7 +147,7 @@ export default function NotificationsPage() {
 						)}
 					</div>
 					<p className="text-xs text-muted-foreground">
-						Doctor feedback, ratings, and reported data issues across chat sessions.
+						Reported missing data issues and doctor feedback across chat sessions.
 					</p>
 				</div>
 
@@ -167,7 +164,7 @@ export default function NotificationsPage() {
 			</div>
 
 			{/* Filter Toolbar */}
-			<div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-gray-100 pb-2.5">
+			<div className="flex flex-wrap items-center justify-between gap-2.5">
 				{/* Left: Category Tabs */}
 				<div className="flex items-center gap-1">
 					<button
@@ -196,15 +193,15 @@ export default function NotificationsPage() {
 					</button>
 					<button
 						type="button"
-						onClick={() => setActiveTab("issues")}
+						onClick={() => setActiveTab("read")}
 						className={cn(
 							"px-2.5 py-1 rounded text-xs font-medium transition-colors",
-							activeTab === "issues"
+							activeTab === "read"
 								? "bg-gray-100 text-gray-900 font-semibold"
 								: "text-muted-foreground hover:text-foreground hover:bg-gray-50",
 						)}
 					>
-						Data Issues ({issuesCount})
+						Read ({readCount})
 					</button>
 				</div>
 
@@ -320,18 +317,18 @@ export default function NotificationsPage() {
 								? "No matching notifications"
 								: activeTab === "unread"
 									? "No unread notifications"
-									: activeTab === "issues"
-										? "No reported data issues"
+									: activeTab === "read"
+										? "No read notifications"
 										: "No notifications"}
 						</h3>
 						<p className="text-[11px] text-muted-foreground mt-0.5 max-w-xs">
 							{hasActiveFilters
 								? "Try changing or resetting your doctor or doctor type filters."
 								: activeTab === "unread"
-									? "You are caught up with all doctor feedback."
-									: activeTab === "issues"
-										? "No data discrepancies reported."
-										: "Feedback will appear here as chat sessions finish."}
+									? "You are caught up with all reported data issues."
+									: activeTab === "read"
+										? "No read notifications found."
+										: "Reported missing data issues from doctors will appear here."}
 						</p>
 					</div>
 				) : (
@@ -352,21 +349,6 @@ export default function NotificationsPage() {
 									{/* Top Row: Doctor Info, Badges, Timestamp & Action */}
 									<div className="flex items-center justify-between gap-2">
 										<div className="flex items-center gap-2 flex-wrap">
-											{/* Status Icon */}
-											{item.rating === "GOOD" ? (
-												<span className="size-5 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-													<RiThumbUpLine className="size-3" />
-												</span>
-											) : item.rating === "BAD" ? (
-												<span className="size-5 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
-													<RiThumbDownLine className="size-3" />
-												</span>
-											) : (
-												<span className="size-5 rounded-full bg-gray-50 text-gray-500 flex items-center justify-center shrink-0">
-													<RiMessage3Line className="size-3" />
-												</span>
-											)}
-
 											<span className="font-semibold text-gray-900">
 												{item.doctor || "Unknown Doctor"}
 											</span>
@@ -409,7 +391,7 @@ export default function NotificationsPage() {
 									</div>
 
 									{/* Middle Row: Feedback Message */}
-									<div className="ml-7 text-xs leading-relaxed">
+									<div className="text-xs leading-relaxed">
 										{item.feedback ? (
 											<p className={isUnread ? "text-amber-950 font-normal" : "text-gray-700 font-normal"}>
 												{item.feedback}
@@ -422,7 +404,7 @@ export default function NotificationsPage() {
 									</div>
 
 									{/* Bottom Row: Chat Session & Branch Metadata */}
-									<div className="flex items-center gap-3 flex-wrap pl-7 pt-0.5 text-[11px] text-gray-700">
+									<div className="flex items-center gap-3 flex-wrap pt-0.5 text-[11px] text-gray-700">
 										<span className="inline-flex items-center gap-1 font-medium text-gray-600">
 											<RiBuildingLine className="size-3 text-gray-500" />
 											{item.branch || "Unknown Branch"}

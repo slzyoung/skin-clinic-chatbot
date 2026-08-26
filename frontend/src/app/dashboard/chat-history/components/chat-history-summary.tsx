@@ -1,14 +1,38 @@
-"use client";
-
+import { useMemo } from "react";
 import Image from "next/image";
 import { useChatStats } from "../hooks/use-chat-history";
+import type { ChatHistoryResponse } from "../api/types";
 
 interface ChatHistorySummaryProps {
 	doctorId?: string;
+	items?: ChatHistoryResponse[];
 }
 
-export function ChatHistorySummary({ doctorId }: ChatHistorySummaryProps) {
-	const { data: stats } = useChatStats(doctorId);
+export function ChatHistorySummary({ doctorId, items }: ChatHistorySummaryProps) {
+	const { data: serverStats } = useChatStats(doctorId);
+
+	const stats = useMemo(() => {
+		if (items !== undefined) {
+			const uniqueDoctors = new Set(
+				items
+					.map((item) => item.doctor || item.user_id)
+					.filter((doc): doc is string => Boolean(doc && doc !== "Unknown"))
+			);
+
+			return {
+				doctors_reached: uniqueDoctors.size,
+				total_sessions: items.length,
+				positive_ratings: items.filter(
+					(item) => item.rating === "GOOD" || item.rating === "4" || item.rating === "5"
+				).length,
+				negative_ratings: items.filter(
+					(item) => item.rating === "BAD" || item.rating === "1" || item.rating === "2"
+				).length,
+				missing_knowledge: items.filter((item) => Boolean(item.has_data_issue)).length,
+			};
+		}
+		return serverStats;
+	}, [items, serverStats]);
 
 	const summaries = [
 		{

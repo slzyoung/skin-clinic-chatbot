@@ -38,11 +38,9 @@ export default function ChatHistoryPage() {
 			fromDate.setHours(0, 0, 0, 0);
 			if (itemDate < fromDate) return false;
 
-			if (dateRange.to) {
-				const toDate = new Date(dateRange.to);
-				toDate.setHours(23, 59, 59, 999);
-				if (itemDate > toDate) return false;
-			}
+			const toDate = dateRange.to ? new Date(dateRange.to) : new Date(dateRange.from);
+			toDate.setHours(23, 59, 59, 999);
+			if (itemDate > toDate) return false;
 		}
 		if (searchQuery.trim()) {
 			const q = searchQuery.toLowerCase();
@@ -58,7 +56,7 @@ export default function ChatHistoryPage() {
 	return (
 		<div className="flex flex-col h-full gap-6 p-6">
 			{/* Overview Summary Cards */}
-			<ChatHistorySummary />
+			<ChatHistorySummary items={filteredData} />
 
 			<div className="flex flex-col gap-4">
 				{/* Toolbar */}
