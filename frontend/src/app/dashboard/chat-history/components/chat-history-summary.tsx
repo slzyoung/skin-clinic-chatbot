@@ -13,14 +13,14 @@ export function ChatHistorySummary({ doctorId, items }: ChatHistorySummaryProps)
 
 	const stats = useMemo(() => {
 		if (items !== undefined) {
-			const uniqueDoctors = new Set(
+			const uniqueUsers = new Set(
 				items
-					.map((item) => item.doctor || item.user_id)
+					.map((item) => item.user_name || item.doctor || item.user_id)
 					.filter((doc): doc is string => Boolean(doc && doc !== "Unknown"))
 			);
 
 			return {
-				doctors_reached: uniqueDoctors.size,
+				doctors_reached: uniqueUsers.size,
 				total_sessions: items.length,
 				positive_ratings: items.filter(
 					(item) => item.rating === "GOOD" || item.rating === "4" || item.rating === "5"
@@ -36,7 +36,7 @@ export function ChatHistorySummary({ doctorId, items }: ChatHistorySummaryProps)
 
 	const summaries = [
 		{
-			title: "Doctors Reached",
+			title: "Users Reached",
 			count: stats?.doctors_reached ?? 0,
 			iconSrc: "/icons/users.png",
 			iconBg: "bg-[#e7fcf2]",

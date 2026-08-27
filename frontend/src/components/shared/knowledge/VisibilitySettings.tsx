@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
 	Dialog,
@@ -11,10 +12,182 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldLabel, FieldContent, FieldGroup } from "@/components/ui/field";
-import { RiEyeLine, RiEdit2Line, RiArrowDownSLine, RiCheckLine } from "@remixicon/react";
+import {
+	RiEyeLine,
+	RiEdit2Line,
+	RiArrowDownSLine,
+	RiCheckLine,
+	RiSearchLine,
+	RiCloseLine,
+} from "@remixicon/react";
 import { useBranches } from "@/app/dashboard/branches/hooks/use-branches";
 import { useUsers } from "@/app/dashboard/users/hooks/use-users";
 import { VisibilitySettings as IVisibilitySettings } from "@/app/dashboard/knowledge/api/types";
+
+interface DropdownOption {
+	label: string;
+	value: string;
+	subtitle?: string;
+}
+
+interface SearchableDropdownProps {
+	title: string;
+	options: DropdownOption[];
+	selected: string[];
+	onToggle: (value: string) => void;
+	displayText: string;
+}
+
+function SearchableDropdown({
+	title,
+	options,
+	selected,
+	onToggle,
+	displayText,
+}: SearchableDropdownProps) {
+	const [searchQuery, setSearchQuery] = useState("");
+	const [isOpen, setIsOpen] = useState(false);
+
+	const isAllSelected = selected.includes("all");
+
+	const filteredOptions = useMemo(() => {
+		if (!searchQuery.trim()) return options;
+		const q = searchQuery.toLowerCase();
+		return options.filter(
+			(opt) =>
+				opt.label.toLowerCase().includes(q) ||
+				(opt.subtitle && opt.subtitle.toLowerCase().includes(q)),
+		);
+	}, [options, searchQuery]);
+
+	return (
+		<div className="flex flex-col gap-2 w-full">
+			<Popover open={isOpen} onOpenChange={setIsOpen}>
+				<PopoverTrigger
+					render={
+						<Button
+							type="button"
+							variant="outline"
+							className="w-full justify-between font-normal text-sm bg-white border-gray-200 focus-visible:ring-blue-500 shadow-none h-10"
+						>
+							<span className="truncate">{displayText}</span>
+							<RiArrowDownSLine className="size-4 text-zinc-400 shrink-0" />
+						</Button>
+					}
+				/>
+				<PopoverContent
+					align="start"
+					className="w-80 p-3 flex flex-col gap-2 z-60 bg-white border border-gray-200 shadow-xl rounded-lg"
+				>
+					{/* Search Bar */}
+					<div className="relative w-full">
+						<RiSearchLine className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-zinc-400 pointer-events-none" />
+						<Input
+							placeholder={`Search ${title.toLowerCase()}...`}
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+							className="h-8.5 pl-8 pr-8 text-xs bg-zinc-50 border-gray-200 focus-visible:ring-blue-500"
+							autoFocus
+						/>
+						{searchQuery && (
+							<button
+								type="button"
+								onClick={() => setSearchQuery("")}
+								className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+							>
+								<RiCloseLine className="size-3.5" />
+							</button>
+						)}
+					</div>
+
+					{/* Options List */}
+					<div className="flex flex-col gap-0.5 max-h-56 overflow-y-auto overscroll-contain pr-1">
+						{/* "All" Option */}
+						{!searchQuery && (
+							<>
+								<div
+									className="flex items-center gap-2.5 p-2 hover:bg-zinc-100/80 rounded-md cursor-pointer transition-colors"
+									onClick={() => onToggle("all")}
+								>
+									<Checkbox checked={isAllSelected} />
+									<div className="flex flex-col min-w-0">
+										<span className="text-xs font-semibold text-zinc-900">All {title}</span>
+										<span className="text-[11px] text-zinc-500">
+											Allow all doctors and branches
+										</span>
+									</div>
+								</div>
+								<div className="h-px bg-zinc-200 my-1" />
+							</>
+						)}
+
+						{filteredOptions.length === 0 ? (
+							<div className="py-6 text-center text-xs text-zinc-500">
+								No {title.toLowerCase()} found matching &ldquo;{searchQuery}&rdquo;
+							</div>
+						) : (
+							filteredOptions.map((opt) => {
+								const isChecked = isAllSelected || selected.includes(opt.value);
+								return (
+									<div
+										key={opt.value}
+										className="flex items-center gap-2.5 p-2 hover:bg-zinc-100/80 rounded-md cursor-pointer transition-colors"
+										onClick={() => onToggle(opt.value)}
+									>
+										<Checkbox checked={isChecked} />
+										<div className="flex flex-col min-w-0 flex-1">
+											<span className="text-xs font-medium text-zinc-900 truncate">
+												{opt.label}
+											</span>
+											{opt.subtitle && (
+												<span className="text-[11px] text-zinc-500 truncate">
+													{opt.subtitle}
+												</span>
+											)}
+										</div>
+									</div>
+								);
+							})
+						)}
+					</div>
+
+					{/* Footer showing count */}
+					<div className="pt-1.5 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">
+						<span>
+							{isAllSelected ? `All ${options.length} selected` : `${selected.length} selected`}
+						</span>
+						{searchQuery && <span>{filteredOptions.length} results</span>}
+					</div>
+				</PopoverContent>
+			</Popover>
+
+			{/* Selected Badges (when specific items are selected) */}
+			{!isAllSelected && selected.length > 0 && (
+				<div className="flex flex-wrap gap-1.5 mt-1 max-h-24 overflow-y-auto">
+					{selected.map((val) => {
+						const opt = options.find((o) => o.value === val);
+						const label = opt?.label || val;
+						return (
+							<span
+								key={val}
+								className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200"
+							>
+								<span className="truncate max-w-40">{label}</span>
+								<button
+									type="button"
+									onClick={() => onToggle(val)}
+									className="hover:bg-blue-200/60 rounded-full p-0.5 transition-colors"
+								>
+									<RiCloseLine className="size-3" />
+								</button>
+							</span>
+						);
+					})}
+				</div>
+			)}
+		</div>
+	);
+}
 
 interface VisibilitySettingsProps {
 	settings: IVisibilitySettings;
@@ -99,52 +272,34 @@ export function VisibilitySettings({
 		return `${current.length} ${typeName} Selected`;
 	};
 
-	const renderDropdown = (
-		title: string,
-		key: keyof IVisibilitySettings,
-		options: { label: string; value: string }[],
-	) => {
-		const current = tempSettings[key] || ["all"];
+	const clinicOptions = useMemo(
+		() =>
+			branches.map((b) => ({
+				label: b.name,
+				value: b.id,
+				subtitle: b.code ? `Clinic Code: ${b.code}` : undefined,
+			})),
+		[branches],
+	);
 
-		return (
-			<Popover>
-				<PopoverTrigger
-					render={
-						<Button
-							type="button"
-							variant="outline"
-							className="w-full justify-between font-normal text-sm bg-white border-gray-200 focus-visible:ring-blue-500"
-						>
-							<span className="truncate">{formatDisplay(key, title, tempSettings)}</span>
-							<RiArrowDownSLine className="size-4 text-zinc-400 shrink-0" />
-						</Button>
-					}
-				/>
-				<PopoverContent align="start" className="w-72 p-2 max-h-60 overflow-y-auto z-60 bg-white border border-gray-200 shadow-lg">
-					<div className="flex flex-col gap-1">
-						<div
-							className="flex items-center gap-2 p-1.5 hover:bg-zinc-100 rounded-sm cursor-pointer"
-							onClick={() => toggleSelection(key, "all")}
-						>
-							<Checkbox checked={current.includes("all")} />
-							<span className="text-sm font-medium">All {title}</span>
-						</div>
-						<div className="h-px bg-zinc-200 my-1" />
-						{options.map((opt) => (
-							<div
-								key={opt.value}
-								className="flex items-center gap-2 p-1.5 hover:bg-zinc-100 rounded-sm cursor-pointer"
-								onClick={() => toggleSelection(key, opt.value)}
-							>
-								<Checkbox checked={current.includes("all") || current.includes(opt.value)} />
-								<span className="text-sm truncate">{opt.label}</span>
-							</div>
-						))}
-					</div>
-				</PopoverContent>
-			</Popover>
-		);
-	};
+	const doctorTypeOptions = useMemo(
+		() =>
+			doctorTypes.map((t) => ({
+				label: t,
+				value: t,
+			})),
+		[doctorTypes],
+	);
+
+	const doctorOptions = useMemo(
+		() =>
+			doctors.map((d) => ({
+				label: d.name,
+				value: d.id,
+				subtitle: d.dr_type ? `Doctor Type: ${d.dr_type}` : undefined,
+			})),
+		[doctors],
+	);
 
 	return (
 		<>
@@ -201,33 +356,39 @@ export function VisibilitySettings({
 							<Field>
 								<FieldLabel className="text-xs font-medium text-zinc-700">Clinic</FieldLabel>
 								<FieldContent>
-									{renderDropdown(
-										"Clinic",
-										"clinics",
-										branches.map((b) => ({ label: b.name, value: b.id })),
-									)}
+									<SearchableDropdown
+										title="Clinic"
+										options={clinicOptions}
+										selected={tempSettings.clinics || ["all"]}
+										onToggle={(val) => toggleSelection("clinics", val)}
+										displayText={formatDisplay("clinics", "Clinic", tempSettings)}
+									/>
 								</FieldContent>
 							</Field>
 
 							<Field>
 								<FieldLabel className="text-xs font-medium text-zinc-700">Doctor Type</FieldLabel>
 								<FieldContent>
-									{renderDropdown(
-										"Doctor Type",
-										"doctor_types",
-										doctorTypes.map((t) => ({ label: t, value: t })),
-									)}
+									<SearchableDropdown
+										title="Doctor Type"
+										options={doctorTypeOptions}
+										selected={tempSettings.doctor_types || ["all"]}
+										onToggle={(val) => toggleSelection("doctor_types", val)}
+										displayText={formatDisplay("doctor_types", "Doctor Type", tempSettings)}
+									/>
 								</FieldContent>
 							</Field>
 
 							<Field>
 								<FieldLabel className="text-xs font-medium text-zinc-700">Doctor</FieldLabel>
 								<FieldContent>
-									{renderDropdown(
-										"Doctor",
-										"doctors",
-										doctors.map((d) => ({ label: d.name, value: d.id })),
-									)}
+									<SearchableDropdown
+										title="Doctor"
+										options={doctorOptions}
+										selected={tempSettings.doctors || ["all"]}
+										onToggle={(val) => toggleSelection("doctors", val)}
+										displayText={formatDisplay("doctors", "Doctor", tempSettings)}
+									/>
 								</FieldContent>
 							</Field>
 						</FieldGroup>
