@@ -118,6 +118,22 @@ class DocumentParser:
         if current_page_text:
             pages.append({"page": page_num, "text": "\n\n".join(current_page_text)})
 
+        # Fallback: if pages is empty, extract text directly from all XML text nodes (textboxes, shapes, tables)
+        if not pages:
+            try:
+                xml_text_parts = []
+                for t_elem in doc.element.iter():
+                    if t_elem.tag.endswith("}t") and t_elem.text:
+                        txt_val = t_elem.text.strip()
+                        if txt_val:
+                            xml_text_parts.append(txt_val)
+                if xml_text_parts:
+                    full_xml_text = "\n".join(xml_text_parts)
+                    if full_xml_text.strip():
+                        pages.append({"page": 1, "text": full_xml_text.strip()})
+            except Exception as xml_err:
+                logger.debug(f"DOCX XML text extraction fallback skipped: {xml_err}")
+
         # Extract embedded images from .docx media parts and upload to MinIO
         try:
             import zipfile
@@ -174,19 +190,16 @@ class DocumentParser:
             char_count = len(text)
             total_chars += char_count
 
-            if char_count > 30:  # Meaningful text threshold per page
+            if char_count > 20:  # Meaningful text threshold per page
                 pages_with_text += 1
 
             pages.append({"page": i + 1, "text": text})
 
-        # Heuristic: if < 30% of pages have meaningful text, assume scanned PDF
-        text_coverage = pages_with_text / max(total_pages, 1)
-        avg_chars_per_page = total_chars / max(total_pages, 1)
-
-        if text_coverage < 0.3 or avg_chars_per_page < 50:
+        # Heuristic: only trigger heavy OCR if the document genuinely has virtually no digital text
+        if total_chars < 50 and pages_with_text == 0:
             logger.warning(
-                f"PDF detected as scanned/image-based "
-                f"(text_coverage={text_coverage:.0%}, avg_chars={avg_chars_per_page:.0f}). "
+                f"PDF detected as purely scanned/image-based "
+                f"(pages={total_pages}, total_chars={total_chars}). "
                 f"Falling back to Docling OCR..."
             )
             return None  # Signal to use Docling OCR
@@ -641,20 +654,27 @@ class DocumentParser:
     def _parse_with_docling(self, file_path: str) -> Optional[ParseResult]:
         """Full Docling OCR parse for scanned/image PDFs and standalone images."""
         import io
-        from docling_core.types.io import DocumentStream
+        import gc
+        try:
+            from docling_core.types.io import DocumentStream
 
-        converter = self._get_docling_converter()
-        file_name = os.path.basename(file_path)
+            converter = self._get_docling_converter()
+            file_name = os.path.basename(file_path)
 
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
 
-        stream = io.BytesIO(file_bytes)
-        doc_stream = DocumentStream(name=file_name, stream=stream)
+            stream = io.BytesIO(file_bytes)
+            doc_stream = DocumentStream(name=file_name, stream=stream)
 
-        result = converter.convert(doc_stream)
-        doc = result.document
-        return ParseResult(docling_doc=doc, method="docling")
+            result = converter.convert(doc_stream)
+            doc = result.document
+            gc.collect()
+            return ParseResult(docling_doc=doc, method="docling")
+        except Exception as ocr_err:
+            logger.error(f"Docling OCR parsing failed for {file_path}: {ocr_err}")
+            gc.collect()
+            return None
 
     # -------------------------------------------------------------------------
     # MAIN ENTRY POINT

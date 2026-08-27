@@ -4,6 +4,30 @@ All notable changes to the Arya Noble AI Chatbot Backend are documented in this 
 
 ---
 
+## [1.2.0] - 2026-08-27
+
+### Ingestion Hardening, Startup Self-Healing & Client Server Crash Recovery
+
+#### 1. Startup Self-Healing Lifecycle (`app/main.py`)
+- Added automatic startup self-healing in FastAPI `lifespan`:
+  - Scans PostgreSQL for orphaned `Knowledge` records stuck in `KnowledgeStatus.PROCESSING` from prior container crashes/restarts.
+  - Automatically transitions them to `KnowledgeStatus.REJECTED` with clear diagnostic explanation (`"Ingestion interrupted due to server restart or processing failure. Please re-upload the document."`), immediately terminating infinite frontend polling loops.
+
+#### 2. Guaranteed Failure Synchronization (`app/rag/router.py`)
+- Updated `process_ingestion_background`:
+  - Guaranteed that zero-chunk extractions or unhandled background exceptions immediately update the PostgreSQL `Knowledge` record to `KnowledgeStatus.REJECTED`.
+  - Persists structured error metadata in `data/pending/{knowledge_id}.json` so the Admin UI immediately displays human-readable error reasons.
+
+#### 3. DOCX & PDF Parsing Resilience & Memory Protection (`app/rag/utils/parser.py`)
+- **DOCX Extraction**: Added recursive XML body element extraction fallback in `_parse_docx_fast` for documents where text resides in textboxes, shapes, or tables, preventing zero-page outputs.
+- **PDF Extraction**: Refined the scanned PDF heuristic in `_parse_pdf_fast` to prevent false-positive triggers of heavy Docling OCR on valid digital text.
+- **Docling Memory Safety**: Added explicit `gc.collect()` and isolated exception containment in `_parse_with_docling` to prevent container OOM (Out Of Memory) crashes on constrained client servers.
+
+#### 4. Chunker Safety Net (`app/rag/utils/chunker.py`)
+- Added automatic fallback single-chunk preservation in `_chunk_fast_pages` to guarantee that valid extracted document text is never dropped to 0 chunks.
+
+---
+
 ## [1.1.0] - 2026-07-22
 
 ### Major Milestone: Unification of `arya-noble-rag` into `backend/app/rag/`
