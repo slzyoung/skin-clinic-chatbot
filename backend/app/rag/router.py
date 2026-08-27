@@ -576,48 +576,7 @@ async def process_ingestion_background(
                 logger.warning(f"Could not delete temporary file {file_path}: {cleanup_err}")
                 
             if not output_file:
-                logger.error(f"Ingestion failed for {file_name}: no output file or zero chunks generated.")
-                err_feedback = f"Failed to process document '{file_name}': No extractable text or chunks produced."
-                try:
-                    from app.core.database import AsyncSessionLocal
-                    from app.models.knowledge import Knowledge, KnowledgeStatus
-                    from sqlalchemy import select
-                    import uuid as _uuid
-                    async with AsyncSessionLocal() as session:
-                        try:
-                            k_uuid = _uuid.UUID(str(knowledge_id))
-                        except ValueError:
-                            k_uuid = knowledge_id
-                        res = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
-                        k_rec = res.scalars().first()
-                        if k_rec:
-                            k_rec.status = KnowledgeStatus.REJECTED
-                            k_rec.ai_summary = err_feedback
-                            await session.commit()
-                except Exception as db_e:
-                    logger.warning(f"Could not update failed status in DB: {db_e}")
-
-                os.makedirs("data/pending", exist_ok=True)
-                pending_err_path = os.path.join("data/pending", f"{knowledge_id}.json")
-                err_doc = {
-                    "knowledge_id": knowledge_id,
-                    "batch_id": batch_id,
-                    "file_name": file_name,
-                    "file_hash": file_hash,
-                    "title": os.path.splitext(file_name)[0],
-                    "status": "FAILED",
-                    "text_accuracy": "0%",
-                    "summary": err_feedback,
-                    "feedback": err_feedback,
-                    "batch_summary": None,
-                    "suggested_categories": [],
-                    "visibility_settings": {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]},
-                    "history": [],
-                    "chunks": [],
-                    "timing_metrics": timing_metrics
-                }
-                with open(pending_err_path, 'w', encoding='utf-8') as f:
-                    json.dump(err_doc, f, indent=4, ensure_ascii=False)
+                logger.error("Ingestion failed: no output file.")
                 return
                 
             # Load the staged JSON containing raw parsed chunks
@@ -1051,51 +1010,7 @@ async def process_ingestion_background(
         )
 
     except Exception as e:
-        logger.error(f"Failed background processing for document {file_name} (ID: {knowledge_id}): {e}")
-        err_msg = f"Failed to process document '{file_name}': {str(e)}"
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.knowledge import Knowledge, KnowledgeStatus
-            from sqlalchemy import select
-            import uuid as _uuid
-            async with AsyncSessionLocal() as session:
-                try:
-                    k_uuid = _uuid.UUID(str(knowledge_id))
-                except ValueError:
-                    k_uuid = knowledge_id
-                res = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
-                k_rec = res.scalars().first()
-                if k_rec:
-                    k_rec.status = KnowledgeStatus.REJECTED
-                    k_rec.ai_summary = err_msg
-                    await session.commit()
-        except Exception as db_e:
-            logger.warning(f"Could not update exception status in DB: {db_e}")
-
-        try:
-            os.makedirs("data/pending", exist_ok=True)
-            pending_err_path = os.path.join("data/pending", f"{knowledge_id}.json")
-            err_doc = {
-                "knowledge_id": knowledge_id,
-                "batch_id": batch_id,
-                "file_name": file_name,
-                "file_hash": file_hash,
-                "title": os.path.splitext(file_name)[0] if file_name else "Document",
-                "status": "FAILED",
-                "text_accuracy": "0%",
-                "summary": err_msg,
-                "feedback": err_msg,
-                "batch_summary": None,
-                "suggested_categories": [],
-                "visibility_settings": {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]},
-                "history": [],
-                "chunks": [],
-                "timing_metrics": timing_metrics
-            }
-            with open(pending_err_path, 'w', encoding='utf-8') as f:
-                json.dump(err_doc, f, indent=4, ensure_ascii=False)
-        except Exception:
-            pass
+        logger.error(f"Failed background processing for document: {e}")
 
 async def synthesize_batch_executive_summary(batch_id: str, llm: BaseLLMAdapter) -> Optional[str]:
     """

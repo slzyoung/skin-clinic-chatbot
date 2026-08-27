@@ -314,19 +314,6 @@ class CustomChunker:
             flush_entity_block()
             flush_table_block()
 
-        # Safety Fallback: If no structured chunks were created but pages contain text, create a fallback chunk
-        if not processed_chunks:
-            all_page_text = "\n\n".join([p.get("text", "") for p in pages if p.get("text")]).strip()
-            if all_page_text:
-                first_img = next((p.get("image_url") for p in pages if p.get("image_url")), None)
-                meta = {"section": "General", "entity": "", "page": 1}
-                if first_img:
-                    meta["image_url"] = first_img
-                processed_chunks.append({
-                    "text": all_page_text,
-                    "metadata": meta
-                })
-
         logger.info(f"Hierarchical chunking complete: generated {len(processed_chunks)} granular, entity-aware chunks.")
         return processed_chunks
 

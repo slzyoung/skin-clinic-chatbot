@@ -73,28 +73,6 @@ async def lifespan(app: FastAPI):
         app.state.llm_adapter = llm_adapter
         app.state.generation_pipeline = generation_pipeline
 
-        # Startup Self-Healing: recover orphaned PROCESSING records from server restarts/crashes
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.knowledge import Knowledge, KnowledgeStatus
-            from sqlalchemy import update
-
-            async with AsyncSessionLocal() as session:
-                stmt = (
-                    update(Knowledge)
-                    .where(Knowledge.status == KnowledgeStatus.PROCESSING)
-                    .values(
-                        status=KnowledgeStatus.REJECTED,
-                        ai_summary="Ingestion interrupted due to server restart or processing failure. Please re-upload the document."
-                    )
-                )
-                res = await session.execute(stmt)
-                await session.commit()
-                if res.rowcount and res.rowcount > 0:
-                    logger.warning(f"Self-healing: recovered {res.rowcount} orphaned PROCESSING knowledge record(s) to REJECTED.")
-        except Exception as heal_err:
-            logger.warning(f"Startup knowledge self-healing check skipped: {heal_err}")
-
         logger.info("RAG components initialized successfully!")
     except Exception as e:
         logger.error(f"Failed to initialize RAG lifespan: {e}")
