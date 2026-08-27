@@ -493,6 +493,8 @@ export function ChatPreview({
 					]);
 					if (data.action === "edit_applied" || data.action === "delete_applied") {
 						queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+						queryClient.invalidateQueries({ queryKey: ["projects"] });
+						queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 						if (data.target_knowledge_id) {
 							queryClient.invalidateQueries({
 								queryKey: knowledgeKeys.detail(data.target_knowledge_id),
@@ -531,6 +533,7 @@ export function ChatPreview({
 					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(knowledgeId) });
 					queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 					queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+					queryClient.invalidateQueries({ queryKey: ["projects"] });
 				}
 			} else {
 				const response = await api.post("/knowledge/chat", {
