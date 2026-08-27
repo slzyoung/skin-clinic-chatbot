@@ -13,12 +13,13 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { RiAddLine, RiDeleteBinLine, RiEdit2Line } from "@remixicon/react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { CategoryResponse } from "./api/types";
 import { CategoryDialog } from "./components/category-dialog";
 import { useCategories, useDeleteCategory } from "./hooks/use-categories";
 
 export default function CategoriesPage() {
+	const [searchQuery, setSearchQuery] = useState("");
 	const [isDialogOpen, setIsDialogOpen] = useState(false);
 	const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
 	const [selectedCategory, setSelectedCategory] = useState<CategoryResponse | null>(null);
@@ -26,7 +27,7 @@ export default function CategoriesPage() {
 	const [categoryToDelete, setCategoryToDelete] = useState<CategoryResponse | null>(null);
 	const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
-	const { data: categories, isLoading } = useCategories();
+	const { data: categories = [], isLoading } = useCategories();
 	const { mutate: deleteCategory, isPending: isDeleting } = useDeleteCategory();
 
 	const handleAddCategory = () => {
@@ -56,6 +57,13 @@ export default function CategoriesPage() {
 		});
 	};
 
+	// Filter categories based on search query
+	const filteredCategories = useMemo(() => {
+		if (!searchQuery.trim()) return categories;
+		const q = searchQuery.toLowerCase();
+		return categories.filter((c) => c.name.toLowerCase().includes(q));
+	}, [categories, searchQuery]);
+
 	return (
 		<div className="p-6 flex flex-col gap-6 h-full">
 			{/* Header */}
@@ -70,6 +78,8 @@ export default function CategoriesPage() {
 					<SearchBar
 						containerClassName="max-w-md"
 						placeholder="Search for category..."
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
 					/>
 					<Button className="bg-blue-500 hover:bg-blue-600" onClick={handleAddCategory}>
 						<RiAddLine className="mr-2 h-4 w-4" />
@@ -93,14 +103,14 @@ export default function CategoriesPage() {
 										Loading categories...
 									</TableCell>
 								</TableRow>
-							) : categories?.length === 0 ? (
+							) : filteredCategories.length === 0 ? (
 								<TableRow>
 									<TableCell colSpan={2} className="text-center py-8 text-gray-500">
 										No categories found.
 									</TableCell>
 								</TableRow>
 							) : (
-								categories?.map((category) => (
+								filteredCategories.map((category) => (
 									<TableRow key={category.id}>
 										<TableCell>
 											<Badge
