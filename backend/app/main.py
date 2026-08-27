@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from loguru import logger
 from app.core.config import settings
 from app.core.logger import setup_logging
-from app.api.routers import auth, users, branches, categories, projects, knowledge, chats, webhooks, config, events, roles
+from app.api.routers import auth, users, branches, categories, projects, knowledge, chats, webhooks, config, events, roles, bandwidth
 
 # Initialize centralized logging and interceptors immediately
 setup_logging()
@@ -164,6 +164,7 @@ app.include_router(chats.router, prefix="/api/chats")
 app.include_router(webhooks.router, prefix="/api")
 app.include_router(config.router, prefix="/api")
 app.include_router(events.router, prefix="/api/events")
+app.include_router(bandwidth.router, prefix="/api")
 
 # --- RAG Integration Router ---
 try:
