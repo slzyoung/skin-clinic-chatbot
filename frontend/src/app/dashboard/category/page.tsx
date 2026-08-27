@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/shared/search-bar";
+import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import {
 	Table,
 	TableBody,
@@ -22,6 +23,9 @@ export default function CategoriesPage() {
 	const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
 	const [selectedCategory, setSelectedCategory] = useState<CategoryResponse | null>(null);
 
+	const [categoryToDelete, setCategoryToDelete] = useState<CategoryResponse | null>(null);
+	const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
 	const { data: categories, isLoading } = useCategories();
 	const { mutate: deleteCategory, isPending: isDeleting } = useDeleteCategory();
 
@@ -37,10 +41,19 @@ export default function CategoriesPage() {
 		setIsDialogOpen(true);
 	};
 
-	const handleDelete = (id: string) => {
-		if (confirm("Are you sure you want to delete this category?")) {
-			deleteCategory(id);
-		}
+	const handleDeleteClick = (category: CategoryResponse) => {
+		setCategoryToDelete(category);
+		setIsDeleteModalOpen(true);
+	};
+
+	const handleConfirmDelete = () => {
+		if (!categoryToDelete) return;
+		deleteCategory(categoryToDelete.id, {
+			onSuccess: () => {
+				setIsDeleteModalOpen(false);
+				setCategoryToDelete(null);
+			},
+		});
 	};
 
 	return (
@@ -101,7 +114,6 @@ export default function CategoriesPage() {
 											<div className="flex justify-end gap-2">
 												<Button
 													variant="outline"
-													size="md"
 													className="border-gray-200 font-medium"
 													onClick={() => handleEditCategory(category)}
 												>
@@ -110,9 +122,8 @@ export default function CategoriesPage() {
 												</Button>
 												<Button
 													variant="outline"
-													size="md"
 													className="border-gray-200 font-medium disabled:opacity-50"
-													onClick={() => handleDelete(category.id)}
+													onClick={() => handleDeleteClick(category)}
 													disabled={isDeleting}
 												>
 													<RiDeleteBinLine className="size-4 mr-1.5" />
@@ -134,6 +145,18 @@ export default function CategoriesPage() {
 				onOpenChange={setIsDialogOpen}
 				mode={dialogMode}
 				category={selectedCategory}
+			/>
+
+			{/* Delete Confirmation Modal */}
+			<ConfirmationModal
+				isOpen={isDeleteModalOpen}
+				onOpenChange={setIsDeleteModalOpen}
+				title="Delete Category"
+				description={`Are you sure you want to delete the category "${categoryToDelete?.name || ""}"? This action cannot be undone.`}
+				confirmText="Delete Category"
+				variant="destructive"
+				isLoading={isDeleting}
+				onConfirm={handleConfirmDelete}
 			/>
 		</div>
 	);
