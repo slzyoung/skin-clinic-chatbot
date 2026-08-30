@@ -104,14 +104,18 @@ export function GlobalTokenConfig() {
 					</div>
 					<div className="flex items-center gap-2">
 						<Switch
+							id="global-token-config-switch"
 							checked={isActive}
 							onCheckedChange={handleToggle}
 							disabled={updateConfig.isPending}
 							className="data-[state=checked]:bg-blue-500"
 						/>
-						<span className="text-sm text-black-300">
+						<label
+							htmlFor="global-token-config-switch"
+							className="text-sm text-black-300 cursor-pointer select-none"
+						>
 							{isActive ? "Deactivate the configuration" : "Activate the configuration"}
-						</span>
+						</label>
 					</div>
 				</div>
 

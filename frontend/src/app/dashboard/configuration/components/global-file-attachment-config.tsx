@@ -65,13 +65,17 @@ export function GlobalFileAttachmentConfig() {
 
 					<div className="flex items-center gap-3">
 						<Switch
+							id="global-file-attachment-switch"
 							checked={localChecked}
 							onCheckedChange={handleToggle}
 							disabled={updateConfig.isPending || isUpdating}
 						/>
-						<span className="text-sm text-black-400">
+						<label
+							htmlFor="global-file-attachment-switch"
+							className="text-sm text-black-400 cursor-pointer select-none"
+						>
 							{localChecked ? "Allow file attachment" : "Don't allow file attachment"}
-						</span>
+						</label>
 					</div>
 				</div>
 			</div>
