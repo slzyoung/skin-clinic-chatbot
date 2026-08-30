@@ -1,6 +1,5 @@
 import { knowledgeKeys } from "@/app/dashboard/knowledge/api/keys";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
 	MessageScroller,
 	MessageScrollerSmartButton,
@@ -176,6 +175,7 @@ export function ChatPreview({
 		activeTab || (files && files.length > 0 ? (files[0].file_name as string) : null);
 
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const queryClient = useQueryClient();
 	const [isDragging, setIsDragging] = useState(false);
 	const dragCounter = useRef(0);
@@ -467,6 +467,9 @@ export function ChatPreview({
 		setInput("");
 		setAttachedFiles([]);
 		setIsLoading(true);
+		if (textareaRef.current) {
+			textareaRef.current.style.height = "auto";
+		}
 
 		try {
 			if (mode === "general") {
@@ -969,10 +972,24 @@ export function ChatPreview({
 						</div>
 					)}
 
-					<Input
+					<textarea
+						ref={textareaRef}
+						rows={1}
+						autoFocus
 						value={input}
-						onChange={(e) => setInput(e.target.value)}
-						onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+						onChange={(e) => {
+							setInput(e.target.value);
+							e.target.style.height = "auto";
+							e.target.style.height = `${e.target.scrollHeight}px`;
+						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+								e.preventDefault();
+								handleSend();
+							} else if (e.key === "Escape") {
+								e.currentTarget.blur();
+							}
+						}}
 						placeholder={
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
@@ -983,7 +1000,7 @@ export function ChatPreview({
 										: "Ask questions or request adjustments..."
 						}
 						disabled={mode === "general" ? false : isInputDisabled}
-						className="w-full bg-transparent border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-zinc-900 placeholder:text-zinc-500"
+						className="w-full bg-transparent resize-none border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-zinc-900 placeholder:text-zinc-500 max-h-32 overflow-y-auto custom-scrollbar disabled:opacity-50 disabled:cursor-not-allowed"
 					/>
 
 					<input
@@ -1014,9 +1031,14 @@ export function ChatPreview({
 							onClick={handleSend}
 							disabled={isProcessing || (!input.trim() && attachedFiles.length === 0)}
 							size="icon"
+							title="Send (Enter) • New line (Shift+Enter)"
 							className="bg-blue-600 text-white hover:bg-blue-700 shrink-0 rounded-lg shadow-none cursor-pointer"
 						>
-							<RiCornerDownLeftLine className="w-4 h-4" />
+							{isProcessing ? (
+								<RiLoader4Line className="w-4 h-4 animate-spin" />
+							) : (
+								<RiCornerDownLeftLine className="w-4 h-4" />
+							)}
 						</Button>
 					</div>
 				</div>

@@ -201,6 +201,7 @@ function IngestContent() {
 				<div className="w-full">
 					<PromptInput
 						key={mode}
+						autoFocus
 						value={promptValue}
 						onValueChange={setPromptValue}
 						minRows={5}
@@ -214,6 +215,7 @@ function IngestContent() {
 								: undefined
 						}
 						disabled={uploadMutation.isPending}
+						isLoading={uploadMutation.isPending}
 					/>
 				</div>
 
