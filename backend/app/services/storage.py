@@ -166,6 +166,94 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
         }
 
 
+def upload_images_parallel(images: list) -> list:
+    """
+    Upload multiple images to MinIO concurrently using ThreadPoolExecutor.
+    Initializes S3 client ONCE, then uploads all images in parallel.
+
+    Args:
+        images: List of dicts with keys: 'content' (bytes), 'filename' (str), 'content_type' (str)
+
+    Returns:
+        List of dicts with keys: 's3_key', 'image_url', 'size', 'status' (in same order as input)
+    """
+    if not images:
+        return []
+
+    if not HAS_BOTO3:
+        logger.warning("boto3 not installed. Returning fallback URLs for all images.")
+        results = []
+        bucket_name = _bucket()
+        for img in images:
+            s3_key = f"images/{uuid.uuid4().hex}_{img['filename']}"
+            results.append({
+                "s3_key": s3_key,
+                "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+                "size": len(img.get("content", b"")),
+                "status": "fallback"
+            })
+        return results
+
+    # Initialize client and ensure bucket ONCE (not per-image)
+    try:
+        _ensure_bucket()
+        client = _get_client()
+        bucket_name = _bucket()
+    except Exception as e:
+        logger.warning(f"MinIO init failed: {e}. Returning fallback URLs.")
+        results = []
+        bucket_name = _bucket()
+        for img in images:
+            s3_key = f"images/{uuid.uuid4().hex}_{img['filename']}"
+            results.append({
+                "s3_key": s3_key,
+                "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+                "size": len(img.get("content", b"")),
+                "status": "fallback"
+            })
+        return results
+
+    def _upload_single(img_data: dict) -> dict:
+        fname = img_data["filename"]
+        content = img_data["content"]
+        ctype = img_data.get("content_type", "image/png")
+        s3_key = f"images/{uuid.uuid4().hex}_{fname}"
+        try:
+            extra_args = {}
+            if ctype:
+                extra_args["ContentType"] = ctype
+            client.put_object(
+                Bucket=bucket_name,
+                Key=s3_key,
+                Body=content,
+                **extra_args
+            )
+            browser_url = f"http://localhost:9000/{bucket_name}/{s3_key}"
+            logger.info(f"Uploaded '{fname}' to MinIO -> {browser_url}")
+            return {
+                "s3_key": s3_key,
+                "image_url": browser_url,
+                "size": len(content),
+                "status": "success"
+            }
+        except Exception as e:
+            logger.warning(f"MinIO upload failed for '{fname}': {e}")
+            return {
+                "s3_key": s3_key,
+                "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+                "size": len(content),
+                "status": "fallback"
+            }
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(images), 8)) as executor:
+        results = list(executor.map(_upload_single, images))
+
+    success_count = sum(1 for r in results if r["status"] == "success")
+    logger.info(f"Parallel upload complete: {success_count}/{len(images)} images uploaded successfully.")
+    return results
+
+
 def get_presigned_url(s3_key: str, expires: int = 604800) -> str:
     """Generates presigned GET URL for an existing S3 object key."""
     try:

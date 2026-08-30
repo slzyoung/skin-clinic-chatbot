@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development" # "development" | "staging" | "production"
 
     # RAG & LLM Settings
-    EMBEDDING_PROVIDER: str = "huggingface"
-    EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
+    EMBEDDING_PROVIDER: str = "openai"
+    EMBEDDING_MODEL_NAME: str = "text-embedding-3-small"
     LLM_MODEL_NAME: str = "gpt-5.4-mini"
     OPENAI_API_KEY: Optional[str] = None
 
