@@ -56,13 +56,13 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 								>
 									<TabsTrigger
 										value="information"
-										className="font-medium text-sm text-gray-500 hover:text-blue-500 data-active:text-blue-500 data-active:after:bg-blue-500 px-0 pb-2"
+										className="font-medium text-sm text-zinc-600 hover:text-blue-700 data-active:text-blue-700 data-active:after:bg-blue-700 px-0 pb-2"
 									>
 										Branch Information
 									</TabsTrigger>
 									<TabsTrigger
 										value="doctors"
-										className="font-medium text-sm text-gray-500 hover:text-blue-500 data-active:text-blue-500 data-active:after:bg-blue-500 px-0 pb-2"
+										className="font-medium text-sm text-zinc-600 hover:text-blue-700 data-active:text-blue-700 data-active:after:bg-blue-700 px-0 pb-2"
 									>
 										Doctor List
 									</TabsTrigger>
@@ -168,7 +168,7 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 												<div className="flex flex-col gap-1 flex-1">
 													<div className="flex items-center justify-between">
 														<span className="text-sm font-medium text-black-500">{doc.name}</span>
-														<span className="text-xs text-zinc-400">{doc.dr_type || doc.speciality}</span>
+														<span className="text-xs text-zinc-600">{doc.dr_type || doc.speciality}</span>
 													</div>
 													<span className="text-xs text-black-300">
 														<span className="text-blue-600 font-medium">

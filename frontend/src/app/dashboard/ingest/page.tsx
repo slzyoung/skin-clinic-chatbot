@@ -141,7 +141,7 @@ function IngestContent() {
 							<RiAlertLine className="size-4 text-amber-600 shrink-0 mt-0.5" />
 							<div className="flex flex-col gap-0.5">
 								<span className="font-semibold text-zinc-900">Monthly Ingestion Limit Reached ({quota.percentage}%)</span>
-								<span className="text-zinc-500">
+								<span className="text-zinc-600">
 									Used {quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens. Ingestion will proceed, but threshold can be adjusted in Configuration.
 								</span>
 							</div>
@@ -151,7 +151,7 @@ function IngestContent() {
 							<RiAlertLine className="size-4 text-amber-600 shrink-0 mt-0.5" />
 							<div className="flex flex-col gap-0.5">
 								<span className="font-semibold text-zinc-900">Monthly Ingestion Near Limit</span>
-								<span className="text-zinc-500">
+								<span className="text-zinc-600">
 									{quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens used ({quota.percentage}%).
 								</span>
 							</div>
@@ -174,7 +174,7 @@ function IngestContent() {
 					>
 						<RiGitRepositoryLine className="size-4 text-zinc-950 mb-1.5" />
 						<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Analysis</h3>
-						<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+						<p className="text-[11px] leading-tight text-zinc-600 line-clamp-2">
 							Analyze all uploaded documents and treat them as a unified knowledge base...
 						</p>
 					</button>
@@ -189,7 +189,7 @@ function IngestContent() {
 					>
 						<RiGitMergeLine className="size-4 text-zinc-950 mb-1.5" />
 						<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Entity & Topic Mapping</h3>
-						<p className="text-[11px] leading-tight text-zinc-500 line-clamp-2">
+						<p className="text-[11px] leading-tight text-zinc-600 line-clamp-2">
 							Review all uploaded files and map key entities, topics, and relationships across documents...
 						</p>
 					</button>
@@ -272,7 +272,7 @@ function IngestContent() {
 							</Select>
 						</div>
 					) : isGeneralMode ? (
-						<div className="flex items-center gap-1.5 text-xs text-zinc-400">
+						<div className="flex items-center gap-1.5 text-xs text-zinc-600">
 							<span>No files needed</span>
 						</div>
 					) : null}
@@ -286,8 +286,8 @@ function IngestContent() {
 				)}
 
 				{!isGeneralMode && (
-					<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-400 bg-zinc-50/50">
-						<RiFileTextLine className="size-3 mr-1.5 text-zinc-400" />
+					<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-600 bg-zinc-50/50">
+						<RiFileTextLine className="size-3 mr-1.5 text-zinc-600" />
 						Supports PDF, DOCX, XLSX, TXT, JPG, and PNG
 					</div>
 				)}

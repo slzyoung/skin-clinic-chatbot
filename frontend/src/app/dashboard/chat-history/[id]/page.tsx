@@ -37,7 +37,7 @@ export default function ChatHistoryDetailPage() {
         </Button>
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Chat Session Details</h1>
-          <p className="text-sm text-gray-500">Read-only view of the conversation history</p>
+          <p className="text-sm text-zinc-600">Read-only view of the conversation history</p>
         </div>
       </div>
 

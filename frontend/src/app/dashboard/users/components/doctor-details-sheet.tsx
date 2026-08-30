@@ -55,27 +55,27 @@ export function DoctorDetailsSheet({
 								{/* Details Section */}
 								<div className="flex flex-col gap-4 px-6 py-4">
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-gray-500">Name</span>
+										<span className="text-sm font-medium text-zinc-600">Name</span>
 										<span className="text-sm text-gray-900">{doctor.name}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-gray-500">Role</span>
+										<span className="text-sm font-medium text-zinc-600">Role</span>
 										<span className="text-sm text-gray-900">Doctor</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-gray-500">Email</span>
+										<span className="text-sm font-medium text-zinc-600">Email</span>
 										<span className="text-sm text-gray-900">{doctor.email || "-"}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-gray-500">Employee ID</span>
+										<span className="text-sm font-medium text-zinc-600">Employee ID</span>
 										<span className="text-sm text-gray-900">{doctor.employee_id || "-"}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-gray-500">Dr Type</span>
+										<span className="text-sm font-medium text-zinc-600">Dr Type</span>
 										<div className="flex items-center gap-2">
 											<span className="text-sm text-gray-900">{doctor.dr_type || "-"}</span>
 											{isGlobalLimitActive && !hasCustomLimit && (
@@ -92,14 +92,14 @@ export function DoctorDetailsSheet({
 									</div>
 
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-gray-500">Ecosystem</span>
+										<span className="text-sm font-medium text-zinc-600">Ecosystem</span>
 										<span className="text-sm text-gray-900">{doctor.ecosystem || "ERHA"}</span>
 									</div>
 
 									<div className="flex flex-col gap-2">
 										<div className="flex justify-between items-center">
 											<div className="flex flex-col gap-1">
-												<span className="text-sm text-gray-500">Tokens Remaining</span>
+												<span className="text-sm font-medium text-zinc-600">Tokens Remaining</span>
 												<span className="text-sm font-medium text-gray-900">
 													{tokensRemaining.toLocaleString()} / {effectiveLimit.toLocaleString()} tokens
 												</span>
@@ -124,7 +124,7 @@ export function DoctorDetailsSheet({
 									</div>
 
 									<div className="flex flex-col gap-2 pt-2">
-										<span className="text-sm text-gray-500">Branches</span>
+										<span className="text-sm font-medium text-zinc-600">Branches</span>
 										{doctor.branches && doctor.branches.length > 0 ? (
 											<div className="flex flex-col gap-3">
 												{doctor.branches.map((branch) => (
@@ -135,7 +135,7 @@ export function DoctorDetailsSheet({
 														<span className="text-sm font-medium text-gray-900">
 															{branch.name}
 														</span>
-														<span className="text-xs text-gray-500">
+														<span className="text-xs text-zinc-600">
 															Branch Token Pool: {branch.token_limit ? `${branch.token_limit.toLocaleString()} tokens/mo` : "Default"}
 														</span>
 													</div>
@@ -143,13 +143,13 @@ export function DoctorDetailsSheet({
 											</div>
 										) : (
 											<div className="border border-gray-200 rounded-md p-3">
-												<span className="text-sm text-gray-500">No Branch</span>
+												<span className="text-sm text-zinc-600">No Branch</span>
 											</div>
 										)}
 									</div>
 
 									<div className="flex flex-col gap-2 pt-2">
-										<span className="text-sm text-gray-500">Knowledge Base</span>
+										<span className="text-sm font-medium text-zinc-600">Knowledge Base</span>
 										<div className="flex flex-wrap gap-2">
 											{doctor.categories && doctor.categories.length > 0 ? (
 												doctor.categories.map((cat) => (
@@ -162,7 +162,7 @@ export function DoctorDetailsSheet({
 													</Badge>
 												))
 											) : (
-												<span className="text-sm text-gray-400">No categories assigned</span>
+												<span className="text-sm text-muted-foreground">No categories assigned</span>
 											)}
 										</div>
 										<Button

@@ -70,13 +70,13 @@ export function BranchTokenTable() {
 					<TableBody>
 						{isLoading ? (
 							<TableRow>
-								<TableCell colSpan={7} className="text-center py-8 text-gray-500">
+								<TableCell colSpan={7} className="text-center py-8 text-zinc-600">
 									Loading branches...
 								</TableCell>
 							</TableRow>
 						) : filteredBranches.length === 0 ? (
 							<TableRow>
-								<TableCell colSpan={7} className="text-center py-8 text-gray-500">
+								<TableCell colSpan={7} className="text-center py-8 text-zinc-600">
 									No branches found.
 								</TableCell>
 							</TableRow>

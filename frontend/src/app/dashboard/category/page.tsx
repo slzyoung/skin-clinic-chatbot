@@ -102,13 +102,13 @@ export default function CategoriesPage() {
 						<TableBody>
 							{isLoading ? (
 								<TableRow>
-									<TableCell colSpan={2} className="text-center py-8 text-gray-500">
+									<TableCell colSpan={2} className="text-center py-8 text-zinc-600">
 										Loading categories...
 									</TableCell>
 								</TableRow>
 							) : filteredCategories.length === 0 ? (
 								<TableRow>
-									<TableCell colSpan={2} className="text-center py-8 text-gray-500">
+									<TableCell colSpan={2} className="text-center py-8 text-zinc-600">
 										No categories found.
 									</TableCell>
 								</TableRow>

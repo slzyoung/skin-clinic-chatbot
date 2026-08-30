@@ -86,7 +86,7 @@ export function GlobalModelConfig() {
 	};
 
 	if (isLoading) {
-		return <div className="p-4 text-center text-sm text-gray-500">Loading AI configuration...</div>;
+		return <div className="p-4 text-center text-sm text-zinc-600">Loading AI configuration...</div>;
 	}
 
 

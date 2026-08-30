@@ -148,7 +148,7 @@ export function ProjectsTable({ searchQuery = "" }: ProjectsTableProps) {
 					<TableBody>
 						{isLoading && (
 							<TableRow>
-								<TableCell colSpan={3} className="text-center py-8 text-gray-500">
+								<TableCell colSpan={3} className="text-center py-8 text-zinc-600">
 									<div className="flex items-center justify-center">
 										<RiLoader4Line className="w-5 h-5 animate-spin mr-2" />
 										Loading projects...
@@ -159,7 +159,7 @@ export function ProjectsTable({ searchQuery = "" }: ProjectsTableProps) {
 
 						{isError && (
 							<TableRow>
-								<TableCell colSpan={3} className="text-center py-8 text-red-500">
+								<TableCell colSpan={3} className="text-center py-8 text-red-600">
 									Failed to load projects.
 								</TableCell>
 							</TableRow>
@@ -167,7 +167,7 @@ export function ProjectsTable({ searchQuery = "" }: ProjectsTableProps) {
 
 						{!isLoading && !isError && projects.length === 0 && (
 							<TableRow>
-								<TableCell colSpan={3} className="text-center py-12 text-gray-500">
+								<TableCell colSpan={3} className="text-center py-12 text-zinc-600">
 									<p className="text-sm">
 										{searchQuery
 											? "No projects matching your search."
@@ -241,7 +241,7 @@ export function ProjectsTable({ searchQuery = "" }: ProjectsTableProps) {
 											</div>
 										</TableCell>
 
-										<TableCell className="whitespace-nowrap text-sm text-gray-500">
+										<TableCell className="whitespace-nowrap text-sm text-zinc-600">
 											{formatDate(project.created_at)}
 										</TableCell>
 

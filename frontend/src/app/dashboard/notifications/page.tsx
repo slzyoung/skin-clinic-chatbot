@@ -396,7 +396,7 @@ export default function NotificationsPage() {
 												{item.feedback}
 											</p>
 										) : (
-											<p className="text-gray-400 italic text-[11px]">
+											<p className="text-muted-foreground italic text-[11px]">
 												No written comment provided.
 											</p>
 										)}

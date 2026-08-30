@@ -138,13 +138,13 @@ export default function UsersPage() {
 				<TabsList variant="line" className="mb-6">
 					<TabsTrigger
 						value="staff"
-						className="font-medium text-sm text-gray-500 hover:text-blue-500 data-active:text-blue-500 data-active:after:bg-blue-500"
+						className="font-medium text-sm text-zinc-600 hover:text-blue-700 data-active:text-blue-700 data-active:after:bg-blue-700"
 					>
-						Staff
+						Staff Management
 					</TabsTrigger>
 					<TabsTrigger
 						value="doctors"
-						className="font-medium text-sm text-gray-500 hover:text-blue-500 data-active:text-blue-500 data-active:after:bg-blue-500"
+						className="font-medium text-sm text-zinc-600 hover:text-blue-700 data-active:text-blue-700 data-active:after:bg-blue-700"
 					>
 						Doctor
 					</TabsTrigger>
@@ -222,8 +222,8 @@ export default function UsersPage() {
 							<TableBody>
 								{filteredStaff.length === 0 ? (
 									<TableRow>
-										<TableCell colSpan={4} className="text-center py-8 text-gray-500">
-											No staff users found.
+										<TableCell colSpan={4} className="text-center py-8 text-zinc-600">
+											No staff members found.
 										</TableCell>
 									</TableRow>
 								) : (
@@ -294,7 +294,7 @@ export default function UsersPage() {
 							<TableBody>
 								{filteredDoctors.length === 0 ? (
 									<TableRow>
-										<TableCell colSpan={7} className="text-center py-8 text-gray-500">
+										<TableCell colSpan={7} className="text-center py-8 text-zinc-600">
 											No doctors found.
 										</TableCell>
 									</TableRow>

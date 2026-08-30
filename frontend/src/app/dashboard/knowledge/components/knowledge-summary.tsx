@@ -46,7 +46,7 @@ export function KnowledgeSummary() {
 							<item.icon className={`w-6 h-6 ${item.iconColor}`} />
 						</div>
 						<div>
-							<p className="text-sm text-gray-500">{item.title}</p>
+							<p className="text-sm text-zinc-600">{item.title}</p>
 							<p className="text-2xl font-medium text-gray-900 mt-1">{item.count}</p>
 						</div>
 					</div>

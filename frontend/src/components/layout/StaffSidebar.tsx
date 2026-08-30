@@ -99,11 +99,11 @@ export function StaffSidebar({ ...props }: React.ComponentProps<typeof Sidebar>)
 							className="hover:bg-transparent hover:text-inherit active:bg-transparent cursor-default p-0 group-data-[collapsible=icon]:justify-center"
 							tooltip="ERHA Medical Assistant"
 						>
-							<div className="flex aspect-square size-10 group-data-[collapsible=icon]:size-8 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-500">
-								<RiRobot2Line className="size-5 group-data-[collapsible=icon]:size-4" />
+							<div className="flex aspect-square size-10 group-data-[collapsible=icon]:size-8 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
+								<RiRobot2Line className="size-6 group-data-[collapsible=icon]:size-5 text-blue-700" />
 							</div>
-							<div className="flex items-center ml-2.5 group-data-[collapsible=icon]:hidden overflow-hidden">
-								<span className="font-semibold text-blue-500 text-sm whitespace-nowrap">
+							<div className="flex flex-col gap-0.5 leading-none group-data-[collapsible=icon]:hidden overflow-hidden">
+								<span className="font-semibold text-blue-700 text-sm whitespace-nowrap">
 									ERHA Medical Assistant
 								</span>
 							</div>

@@ -71,7 +71,7 @@ export function ChatHistorySummary({ doctorId, items }: ChatHistorySummaryProps)
 		<div className="w-full">
 			<div className="mb-4">
 				<h2 className="text-xl font-semibold text-gray-900">Chat History</h2>
-				<p className="text-sm text-gray-500 mt-1">View past chats with the AI chatbot easily.</p>
+				<p className="text-sm text-zinc-600 mt-1">View past chats with the AI chatbot easily.</p>
 			</div>
 			<div className="w-full overflow-x-auto pb-1">
 				<div className="w-full min-w-190 flex items-center border border-gray-200 rounded-md bg-white overflow-hidden shadow-none">
@@ -92,7 +92,7 @@ export function ChatHistorySummary({ doctorId, items }: ChatHistorySummaryProps)
 								/>
 							</div>
 							<div className="min-w-0">
-								<p className="text-sm text-gray-500 truncate">{item.title}</p>
+								<p className="text-sm text-zinc-600 truncate">{item.title}</p>
 								<p className="text-2xl font-medium text-gray-900 mt-1">{item.count}</p>
 							</div>
 						</div>

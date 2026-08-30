@@ -37,7 +37,7 @@ export function IdleTimeoutDialog({
 						<AlertDialogTitle className="text-base font-semibold text-gray-900 leading-tight">
 							Session Inactivity Warning
 						</AlertDialogTitle>
-						<AlertDialogDescription className="text-xs sm:text-sm text-gray-500 leading-relaxed">
+						<AlertDialogDescription className="text-xs sm:text-sm text-zinc-600 leading-relaxed">
 							You have been inactive for a while. To protect clinic data, your session will
 							automatically close in{" "}
 							<span className="font-semibold text-gray-900">{remainingSeconds}s</span>.

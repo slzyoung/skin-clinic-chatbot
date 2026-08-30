@@ -78,15 +78,15 @@ export function UserAddSheet({
               </FieldLabel>
               <FieldContent>
                 <div className="border border-gray-200 rounded-md p-4 flex flex-col items-center justify-center text-center">
-                  <div className="h-8 w-8 mb-2 flex items-center justify-center text-gray-400">
+                  <div className="h-8 w-8 mb-2 flex items-center justify-center text-zinc-500">
                     <RiImageAddLine className="h-5 w-5" />
                   </div>
                   <div className="flex gap-1 text-sm">
                     <span className="font-medium text-gray-900">Drag & Drop or</span>
-                    <span className="font-medium text-blue-500 cursor-pointer">Choose File</span>
+                    <span className="font-medium text-blue-700 cursor-pointer">Choose File</span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">Maximum file size: 5 MB</p>
-                  <p className="text-xs text-gray-500">Format file: .jpg, .jpeg, .png</p>
+                  <p className="text-xs text-zinc-600 mt-1">Maximum file size: 5 MB</p>
+                  <p className="text-xs text-zinc-600">Format file: .jpg, .jpeg, .png</p>
                 </div>
               </FieldContent>
             </Field>
@@ -169,7 +169,7 @@ export function UserAddSheet({
                   <Button 
                     variant="ghost" 
                     size="icon" 
-                    className="absolute right-0 top-0 text-gray-500 hover:text-gray-700"
+                    className="absolute right-0 top-0 text-zinc-600 hover:text-zinc-900"
                     onClick={() => setShowPassword(!showPassword)}
                     type="button"
                   >

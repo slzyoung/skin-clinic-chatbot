@@ -93,13 +93,13 @@ export default function RolesPage() {
 						<TableBody>
 							{isLoading ? (
 								<TableRow>
-									<TableCell colSpan={3} className="text-center py-8 text-gray-500">
+									<TableCell colSpan={3} className="text-center py-8 text-zinc-600">
 										Loading roles...
 									</TableCell>
 								</TableRow>
 							) : filteredRoles.length === 0 ? (
 								<TableRow>
-									<TableCell colSpan={3} className="text-center py-8 text-gray-500">
+									<TableCell colSpan={3} className="text-center py-8 text-zinc-600">
 										No roles found. Click &quot;Add New Role&quot; to create one.
 									</TableCell>
 								</TableRow>
@@ -134,7 +134,7 @@ export default function RolesPage() {
 														</Badge>
 													))
 												) : (
-													<span className="text-xs text-gray-400 italic">
+													<span className="text-xs text-muted-foreground italic">
 														No permissions assigned
 													</span>
 												)}

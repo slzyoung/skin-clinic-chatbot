@@ -314,15 +314,15 @@ export function VisibilitySettings({
 
 				<div className="flex flex-col gap-3">
 					<div>
-						<label className="text-xs text-zinc-400">Clinic</label>
+						<label className="text-xs text-zinc-600 font-medium">Clinic</label>
 						<p className="text-sm font-medium">{formatDisplay("clinics", "Clinic")}</p>
 					</div>
 					<div>
-						<label className="text-xs text-zinc-400">Doctor Type</label>
+						<label className="text-xs text-zinc-600 font-medium">Doctor Type</label>
 						<p className="text-sm font-medium">{formatDisplay("doctor_types", "Doctor Type")}</p>
 					</div>
 					<div>
-						<label className="text-xs text-zinc-400">Doctor</label>
+						<label className="text-xs text-zinc-600 font-medium">Doctor</label>
 						<p className="text-sm font-medium">{formatDisplay("doctors", "Doctor")}</p>
 					</div>
 

@@ -46,7 +46,7 @@ export function GlobalFileAttachmentConfig() {
 	};
 
 	if (isLoading) {
-		return <div className="p-4 text-center text-sm text-gray-500">Loading configuration...</div>;
+		return <div className="p-4 text-center text-sm text-zinc-600">Loading configuration...</div>;
 	}
 
 	return (

@@ -674,7 +674,7 @@ export function ChatPreview({
 														<RiLoader4Line className="size-4 animate-spin shrink-0" />
 														<span>3. Building Search Index...</span>
 													</div>
-													<div className="flex items-center gap-2.5 text-zinc-400">
+													<div className="flex items-center gap-2.5 text-zinc-600">
 														<span className="size-4 flex items-center justify-center text-[10px]">
 															○
 														</span>
@@ -774,7 +774,7 @@ export function ChatPreview({
 												)}
 											</div>
 											<div
-												className={`${messages[0].role === "user" ? "bg-blue-500 text-white" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
+												className={`${messages[0].role === "user" ? "bg-primary text-primary-foreground" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
 											>
 												{messages[0].role === "assistant" ? (
 													<>
@@ -851,7 +851,7 @@ export function ChatPreview({
 													)}
 												</div>
 												<div
-													className={`${msg.role === "user" ? "bg-blue-500 text-white" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
+													className={`${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
 												>
 													{msg.role === "assistant" ? (
 														<>
@@ -983,7 +983,7 @@ export function ChatPreview({
 										: "Ask questions or request adjustments..."
 						}
 						disabled={mode === "general" ? false : isInputDisabled}
-						className="w-full bg-transparent border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-gray-700 placeholder:text-gray-500"
+						className="w-full bg-transparent border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-zinc-900 placeholder:text-zinc-500"
 					/>
 
 					<input

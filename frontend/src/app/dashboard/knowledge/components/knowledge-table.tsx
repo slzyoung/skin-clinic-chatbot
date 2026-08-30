@@ -442,7 +442,7 @@ export function KnowledgeTable({
 					<TableBody>
 						{isLoading && (
 							<TableRow>
-								<TableCell colSpan={6} className="text-center py-8 text-gray-500">
+								<TableCell colSpan={6} className="text-center py-8 text-zinc-600">
 									<div className="flex items-center justify-center">
 										<RiLoader4Line className="w-5 h-5 animate-spin mr-2" />
 										Loading knowledge base...
@@ -453,7 +453,7 @@ export function KnowledgeTable({
 
 						{isError && (
 							<TableRow>
-								<TableCell colSpan={6} className="text-center py-8 text-red-500">
+								<TableCell colSpan={6} className="text-center py-8 text-red-600">
 									Failed to load knowledge base documents.
 								</TableCell>
 							</TableRow>
@@ -461,7 +461,7 @@ export function KnowledgeTable({
 
 						{!isLoading && !isError && filteredList?.length === 0 && (
 							<TableRow>
-								<TableCell colSpan={6} className="text-center py-12 text-gray-500">
+								<TableCell colSpan={6} className="text-center py-12 text-zinc-600">
 									<div className="flex flex-col items-center justify-center gap-2">
 										<p className="text-sm">No knowledge base documents matching your filters.</p>
 										{hasActiveFilters && (
@@ -526,7 +526,7 @@ export function KnowledgeTable({
 													{row.categories.length > 2 && (
 														<Badge
 															variant="secondary"
-															className="bg-gray-100 text-gray-500 hover:bg-gray-200 text-[11px] px-1.5 py-0 rounded-lg cursor-default"
+															className="bg-gray-100 text-zinc-700 hover:bg-gray-200 text-[11px] px-1.5 py-0 rounded-lg cursor-default font-medium"
 															title={row.categories.slice(2).join(", ")}
 														>
 															+{row.categories.length - 2}
@@ -534,11 +534,11 @@ export function KnowledgeTable({
 													)}
 												</>
 											) : (
-												<span className="text-xs text-gray-400">-</span>
+												<span className="text-xs text-zinc-600">-</span>
 											)}
 										</div>
 									</TableCell>
-									<TableCell className="whitespace-nowrap text-sm text-gray-500">
+									<TableCell className="whitespace-nowrap text-sm text-zinc-600">
 										{row.created_at
 											? new Date(row.created_at).toLocaleDateString("en-GB", {
 													day: "2-digit",

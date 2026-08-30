@@ -103,7 +103,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 						) : (
 							<h1 className="text-lg font-semibold text-gray-900">{formatDisplayTitle(data?.title)}</h1>
 						)}
-						<p className="text-sm text-gray-500">Knowledge Document Details</p>
+						<p className="text-sm text-zinc-600">Knowledge Document Details</p>
 					</div>
 				</div>
 
