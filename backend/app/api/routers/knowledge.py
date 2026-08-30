@@ -1343,15 +1343,17 @@ async def delete_knowledge(
             except Exception as vs_err:
                 logger.debug(f"vector_store.delete_document({ident}) notice: {vs_err}")
 
-    # Direct SQL cleanup on document_chunks table to ensure 100% vector purge
+    # Direct SQL cleanup on vector store table to ensure 100% vector purge
     try:
-        cleanup_query = text("""
-            DELETE FROM document_chunks 
+        from app.rag.config import settings as rag_settings
+        table_name = rag_settings.pg_collection_name
+        cleanup_query = text(f"""
+            DELETE FROM {table_name} 
             WHERE source_file = :kid 
                OR source_file ILIKE :kid_pattern
                OR (:fname IS NOT NULL AND (source_file = :fname OR source_file ILIKE :fname_pattern))
-               OR metadata_ ->> 'knowledge_id' = :kid
-               OR (:fname IS NOT NULL AND metadata_ ->> 'file_name' = :fname)
+               OR metadata ->> 'knowledge_id' = :kid
+               OR (:fname IS NOT NULL AND metadata ->> 'file_name' = :fname)
         """)
         await db.execute(cleanup_query, {
             "kid": kid_str,
@@ -1361,7 +1363,7 @@ async def delete_knowledge(
         })
         await db.commit()
     except Exception as sql_err:
-        logger.warning(f"Direct document_chunks table purge warning: {sql_err}")
+        logger.warning(f"Direct vector store table purge warning: {sql_err}")
 
     # 5. Clean BM25 Index
     bm25 = get_bm25_index(request)
