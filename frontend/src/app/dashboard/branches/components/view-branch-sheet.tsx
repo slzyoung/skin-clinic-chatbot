@@ -33,10 +33,10 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 		<>
 			<Button
 				variant="outline"
-				className="border-gray-200 font-medium"
+				className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-3 h-8 font-medium text-xs transition-colors cursor-pointer shadow-none gap-1.5"
 				onClick={() => setOpen(true)}
 			>
-				<RiEyeLine className="size-4 mr-2" />
+				<RiEyeLine className="size-3.5 shrink-0" />
 				View
 			</Button>
 			<Sheet open={open} onOpenChange={setOpen}>

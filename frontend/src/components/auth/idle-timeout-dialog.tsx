@@ -51,7 +51,7 @@ export function IdleTimeoutDialog({
 						variant="outline"
 						size="sm"
 						onClick={onLogoutNow}
-						className="border-gray-200 bg-white text-gray-700 hover:bg-gray-100 hover:text-gray-900 shadow-none font-medium h-9 text-xs sm:text-sm"
+						className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg shadow-none font-medium h-9 text-xs sm:text-sm"
 					>
 						Logout Now
 					</Button>
@@ -59,7 +59,7 @@ export function IdleTimeoutDialog({
 						type="button"
 						size="sm"
 						onClick={onStayLoggedIn}
-						className="bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-none h-9 text-xs sm:text-sm px-4"
+						className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-none h-9 text-xs sm:text-sm px-4 cursor-pointer"
 					>
 						Stay Logged In
 					</AlertDialogAction>

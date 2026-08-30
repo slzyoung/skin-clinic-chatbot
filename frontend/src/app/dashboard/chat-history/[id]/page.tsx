@@ -27,7 +27,12 @@ export default function ChatHistoryDetailPage() {
     <div className="flex flex-col absolute inset-0 bg-white overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-4 p-4 border-b border-gray-200 shrink-0 bg-white z-10">
-        <Button variant="ghost" size="icon" onClick={() => router.back()} className="text-gray-500 hover:text-gray-900">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => router.back()}
+          className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+        >
           <RiArrowLeftLine className="size-5" />
         </Button>
         <div>

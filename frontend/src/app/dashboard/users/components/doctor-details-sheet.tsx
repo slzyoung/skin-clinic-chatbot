@@ -112,11 +112,12 @@ export function DoctorDetailsSheet({
 												)}
 											</div>
 											<Button
+												type="button"
 												variant="outline"
-												className=""
+												className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-3 h-9 font-medium text-xs transition-colors cursor-pointer shadow-none"
 												onClick={() => setIsAdjustLimitOpen(true)}
 											>
-												<RiEdit2Line className="mr-2 h-4 w-4" />
+												<RiEdit2Line className="mr-1.5 h-3.5 w-3.5" />
 												Adjust Limit
 											</Button>
 										</div>
@@ -165,11 +166,12 @@ export function DoctorDetailsSheet({
 											)}
 										</div>
 										<Button
+											type="button"
 											variant="outline"
-											className="w-full mt-2 rounded-md"
+											className="w-full mt-2 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 											onClick={() => setIsManageKnowledgeOpen(true)}
 										>
-											<RiSettings3Line className="mr-2 h-4 w-4" />
+											<RiSettings3Line className="mr-1.5 h-4 w-4" />
 											Manage Knowledge Base
 										</Button>
 									</div>
@@ -179,8 +181,9 @@ export function DoctorDetailsSheet({
 
 						<div className="p-4 border-t border-gray-200 bg-white flex justify-start gap-3">
 							<Button
+								type="button"
 								variant="outline"
-								className="bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:text-gray-900"
+								className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 								onClick={() => onOpenChange(false)}
 							>
 								Close

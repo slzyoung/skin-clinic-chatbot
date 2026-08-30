@@ -76,19 +76,19 @@ export function ChatFilter({
           render={
             <Button
               variant="outline"
-              className="h-10 w-56 justify-between gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 text-sm shadow-none focus-visible:ring-0 focus:ring-0 focus-visible:outline-none"
+              className="h-10 w-56 justify-between gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 text-sm rounded-lg shadow-none cursor-pointer"
             />
           }
         >
           <div className="flex items-center gap-2 truncate">
-            <RiUserLine className="w-4 h-4 shrink-0 text-gray-500" />
+            <RiUserLine className="w-4 h-4 shrink-0 text-zinc-500" />
             <span className="truncate">
               {userFilter === "ALL" ? "Filter by user" : userFilter}
             </span>
           </div>
-          <RiArrowDownSLine className="w-4 h-4 shrink-0 text-gray-400" />
+          <RiArrowDownSLine className="w-4 h-4 shrink-0 text-zinc-400" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56 max-h-64 overflow-y-auto bg-white border border-gray-200 shadow-none rounded-md ring-0 outline-none">
+        <DropdownMenuContent align="start" className="w-56 max-h-64 overflow-y-auto bg-white border border-gray-200 shadow-none rounded-lg ring-0 outline-none">
           <DropdownMenuRadioGroup value={userFilter} onValueChange={onUserChange}>
             <DropdownMenuRadioItem closeOnClick value="ALL">
               All Users
@@ -108,17 +108,17 @@ export function ChatFilter({
           render={
             <Button
               variant="outline"
-              className="h-10 w-56 justify-between gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 text-sm shadow-none focus-visible:ring-0 focus:ring-0 focus-visible:outline-none"
+              className="h-10 w-56 justify-between gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 text-sm rounded-lg shadow-none cursor-pointer"
             />
           }
         >
           <div className="flex items-center gap-2 truncate">
-            <RiMedicineBottleLine className="w-4 h-4 shrink-0 text-gray-500" />
+            <RiMedicineBottleLine className="w-4 h-4 shrink-0 text-zinc-500" />
             <span className="truncate">{selectedChatTypeLabel}</span>
           </div>
-          <RiArrowDownSLine className="w-4 h-4 shrink-0 text-gray-400" />
+          <RiArrowDownSLine className="w-4 h-4 shrink-0 text-zinc-400" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56 max-h-64 overflow-y-auto bg-white border border-gray-200 shadow-none rounded-md ring-0 outline-none">
+        <DropdownMenuContent align="start" className="w-56 max-h-64 overflow-y-auto bg-white border border-gray-200 shadow-none rounded-lg ring-0 outline-none">
           <DropdownMenuRadioGroup value={chatTypeFilter} onValueChange={onChatTypeChange}>
             <DropdownMenuRadioItem closeOnClick value="ALL">
               All Chat Types
@@ -138,12 +138,12 @@ export function ChatFilter({
           render={
             <Button
               variant="outline"
-              className="h-10 w-64 justify-between gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 text-sm shadow-none focus-visible:ring-0 focus:ring-0 focus-visible:outline-none"
+              className="h-10 w-64 justify-between gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 text-sm rounded-lg shadow-none cursor-pointer"
             />
           }
         >
           <div className="flex items-center gap-2 truncate">
-            <RiCalendarLine className="w-4 h-4 shrink-0 text-gray-500" />
+            <RiCalendarLine className="w-4 h-4 shrink-0 text-zinc-500" />
             <span className="truncate">
               {formattedDateRange || "Filter by date range"}
             </span>
@@ -152,7 +152,7 @@ export function ChatFilter({
             <span
               role="button"
               tabIndex={0}
-              className="p-0.5 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 shrink-0"
+              className="p-0.5 hover:bg-gray-100 rounded text-gray-400 hover:text-gray-600 shrink-0 cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
                 onDateRangeChange(undefined);
@@ -167,10 +167,10 @@ export function ChatFilter({
               <RiCloseLine className="w-4 h-4" />
             </span>
           ) : (
-            <RiArrowDownSLine className="w-4 h-4 shrink-0 text-gray-400" />
+            <RiArrowDownSLine className="w-4 h-4 shrink-0 text-zinc-400" />
           )}
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-auto min-w-70 p-2 bg-white border border-gray-200 shadow-none rounded-md ring-0 outline-none">
+        <PopoverContent align="end" className="w-auto min-w-70 p-2 bg-white border border-gray-200 shadow-none rounded-lg ring-0 outline-none">
           <Calendar
             mode="range"
             selected={dateRange}

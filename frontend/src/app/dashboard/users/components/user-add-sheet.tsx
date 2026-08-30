@@ -182,16 +182,26 @@ export function UserAddSheet({
         </div>
         
         <div className="p-4 border-t border-gray-200 bg-white flex justify-end gap-3">
-          <Button variant="outline" className="bg-white border-gray-200 text-gray-700 hover:bg-gray-50 hover:text-gray-900" onClick={() => onOpenChange(false)}>
-            <RiCloseLine className="mr-2 h-4 w-4 shrink-0" />
+          <Button
+            type="button"
+            variant="outline"
+            className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+            onClick={() => onOpenChange(false)}
+          >
+            <RiCloseLine className="mr-1.5 h-4 w-4 shrink-0" />
             Cancel
           </Button>
-          <Button 
-            className="bg-blue-600 text-white hover:bg-blue-700"
+          <Button
+            type="button"
+            className="bg-blue-600 text-white hover:bg-blue-700 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none disabled:opacity-50"
             onClick={handleAddUser}
             disabled={createStaff.isPending}
           >
-            {createStaff.isPending ? <RiLoader4Line className="mr-2 h-4 w-4 animate-spin shrink-0" /> : <RiAddLine className="mr-2 h-4 w-4 shrink-0" />}
+            {createStaff.isPending ? (
+              <RiLoader4Line className="mr-1.5 h-4 w-4 animate-spin shrink-0" />
+            ) : (
+              <RiAddLine className="mr-1.5 h-4 w-4 shrink-0" />
+            )}
             {createStaff.isPending ? "Adding..." : "Add User"}
           </Button>
         </div>
