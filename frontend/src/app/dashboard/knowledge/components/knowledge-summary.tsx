@@ -31,8 +31,8 @@ export function KnowledgeSummary() {
 	return (
 		<div className="w-full">
 			<div className="mb-4">
-				<h2 className="text-xl font-semibold text-gray-900">Knowledge Base</h2>
-				<p className="text-sm text-gray-500 mt-1">Here is the overview data of the ingestion</p>
+				<h1 className="text-xl font-semibold text-foreground">Knowledge Base</h1>
+				<p className="text-sm text-muted-foreground mt-1">Here is the overview data of the ingestion</p>
 			</div>
 			<div className="inline-flex border border-gray-200 rounded-md bg-white overflow-hidden shadow-none">
 				{summaries.map((item, index) => (

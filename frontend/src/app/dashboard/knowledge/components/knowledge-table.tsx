@@ -33,11 +33,11 @@ import {
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useKnowledgeBaseList, useDeleteKnowledge } from "../../../app/dashboard/knowledge/hooks/use-knowledge";
-import { useCategories } from "../../../app/dashboard/category/hooks/use-categories";
+import { useKnowledgeBaseList, useDeleteKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
+import { useCategories } from "@/app/dashboard/category/hooks/use-categories";
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
-import { AttachProjectDialog } from "@/app/dashboard/knowledge/components/attach-project-dialog";
-import { ConfirmationModal } from "@/components/shared/knowledge/ConfirmationModal";
+import { AttachProjectDialog } from "./attach-project-dialog";
+import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 
 interface DisplayRowItem {
 	id: string;
@@ -363,7 +363,7 @@ export function KnowledgeTable({
 							render={
 								<Button
 									variant="outline"
-									className="min-w-44 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 shadow-none cursor-pointer"
+									className="min-w-44 h-10 justify-start gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 rounded-lg text-sm shadow-none cursor-pointer"
 								/>
 							}
 						>
@@ -392,7 +392,7 @@ export function KnowledgeTable({
 							render={
 								<Button
 									variant="outline"
-									className="min-w-36 justify-start gap-2 bg-white font-normal text-gray-700 hover:bg-gray-50 border-gray-200 shadow-none cursor-pointer"
+									className="min-w-36 h-10 justify-start gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 rounded-lg text-sm shadow-none cursor-pointer"
 								/>
 							}
 						>
@@ -564,7 +564,7 @@ export function KnowledgeTable({
 														<Button
 															variant="ghost"
 															size="icon"
-															className="size-8 text-gray-500 hover:text-gray-900"
+															className="size-8 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
 														>
 															<RiMore2Line className="size-4" />
 														</Button>

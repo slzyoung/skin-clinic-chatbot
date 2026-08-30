@@ -290,7 +290,7 @@ export function PromptInput({
 				<Button
 					size="icon"
 					disabled={disabled || (!inputValue.trim() && attachedFiles.length === 0)}
-					className="h-8 w-8 bg-blue-600 hover:bg-blue-700 rounded-md shrink-0 text-white disabled:opacity-50"
+					className="size-8 bg-blue-600 hover:bg-blue-700 rounded-lg shrink-0 text-white disabled:opacity-50 shadow-none cursor-pointer"
 					onClick={handleSend}
 				>
 					<RiCornerDownLeftLine className="size-4" />

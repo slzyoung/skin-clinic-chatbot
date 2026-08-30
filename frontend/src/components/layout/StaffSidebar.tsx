@@ -19,7 +19,7 @@ import {
 	RiRobot2Line,
 	RiFileAddLine,
 } from "@remixicon/react";
-import { SidebarProfileMenu } from "@/components/shared/SidebarProfileMenu";
+import { SidebarProfileMenu } from "./sidebar-profile-menu";
 
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -118,7 +118,7 @@ export function StaffSidebar({ ...props }: React.ComponentProps<typeof Sidebar>)
 						<Button
 							render={<Link href="/dashboard/ingest" />}
 							nativeButton={false}
-							className="w-full justify-center bg-blue-500 hover:bg-blue-600 text-white shadow-none h-10 px-3 rounded-md group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 shrink-0"
+							className="w-full justify-center bg-blue-600 hover:bg-blue-700 text-white shadow-none h-10 px-3 rounded-lg group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0 shrink-0 cursor-pointer"
 						>
 							<RiFileAddLine className="mr-2 size-5 group-data-[collapsible=icon]:mr-0 group-data-[collapsible=icon]:size-4 shrink-0" />
 							<span className="font-medium text-sm group-data-[collapsible=icon]:hidden">

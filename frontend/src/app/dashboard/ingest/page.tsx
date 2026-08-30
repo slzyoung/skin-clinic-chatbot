@@ -1,6 +1,6 @@
 "use client";
 
-import { PromptInput } from "@/components/shared/prompt-input";
+import { PromptInput } from "./components/prompt-input";
 import {
 	RiFileTextLine,
 	RiRobot2Line,
@@ -122,10 +122,10 @@ function IngestContent() {
 					<RiRobot2Line className="size-6" />
 				</div>
 				<div className="space-y-1">
-					<h1 className="text-lg font-semibold tracking-tight text-zinc-950">
+					<h1 className="text-xl font-semibold text-foreground">
 						{isGeneralMode ? "Knowledge Base Assistant" : "Expand Knowledge Base"}
 					</h1>
-					<p className="text-[13px] text-zinc-500 max-w-95 leading-relaxed">
+					<p className="text-sm text-muted-foreground max-w-95 leading-relaxed">
 						{isGeneralMode
 							? "Search and explore existing knowledge entries by asking questions via prompt."
 							: "Upload product, treatment, or brochure documents to train the AI assistant."}

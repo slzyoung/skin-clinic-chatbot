@@ -8,7 +8,7 @@ import { useDeleteKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledg
 import { useCategories } from "@/app/dashboard/category/hooks/use-categories";
 import { ProjectDialog } from "@/app/dashboard/knowledge/components/project-dialog";
 import { AttachProjectDialog } from "@/app/dashboard/knowledge/components/attach-project-dialog";
-import { ConfirmationModal } from "@/components/shared/knowledge/ConfirmationModal";
+import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { SearchBar } from "@/components/shared/search-bar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -376,7 +376,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 						onClick={() => setDeleteProjectModalOpen(true)}
 						disabled={deleteProjectMutation.isPending}
 						variant="outline"
-						className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 cursor-pointer"
+						className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 					>
 						<RiDeleteBin7Line className="size-4" />
 						Delete Project
@@ -384,7 +384,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
 					<Button
 						variant="outline"
-						className="gap-2 text-zinc-950 cursor-pointer"
+						className="gap-2 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 						onClick={() => setIsEditDialogOpen(true)}
 					>
 						<RiEdit2Line className="size-4" />
@@ -392,7 +392,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 					</Button>
 
 					<Button
-						className="gap-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg cursor-pointer"
+						className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 						onClick={() => router.push(`/dashboard/ingest?projectId=${project.id}`)}
 					>
 						<RiAddCircleLine className="size-4" />

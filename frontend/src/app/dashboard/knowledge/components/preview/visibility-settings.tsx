@@ -77,7 +77,7 @@ function SearchableDropdown({
 				/>
 				<PopoverContent
 					align="start"
-					className="w-80 p-3 flex flex-col gap-2 z-60 bg-white border border-gray-200 shadow-xl rounded-lg"
+					className="w-80 p-3 flex flex-col gap-2 z-60 bg-white border border-gray-200 shadow-none rounded-lg"
 				>
 					{/* Search Bar */}
 					<div className="relative w-full">
@@ -341,12 +341,12 @@ export function VisibilitySettings({
 			</div>
 
 			<Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
-				<DialogContent className="sm:max-w-md p-0 flex flex-col gap-0 rounded-xl overflow-hidden bg-white border-0 shadow-xl">
+				<DialogContent className="sm:max-w-md p-0 flex flex-col gap-0 rounded-lg overflow-hidden bg-white border border-gray-200 shadow-none">
 					<DialogHeader className="p-4 border-b border-gray-100 flex flex-col gap-0.5">
-						<DialogTitle className="text-base font-semibold text-gray-900">
+						<DialogTitle className="text-base font-semibold text-foreground">
 							Edit Visibility Settings
 						</DialogTitle>
-						<DialogDescription className="text-xs text-zinc-500">
+						<DialogDescription className="text-xs text-muted-foreground">
 							Configure access limits for this knowledge document.
 						</DialogDescription>
 					</DialogHeader>
@@ -398,14 +398,14 @@ export function VisibilitySettings({
 						<Button
 							type="button"
 							variant="outline"
-							className="border-gray-200 bg-white"
+							className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 							onClick={handleCancelModal}
 						>
 							Cancel
 						</Button>
 						<Button
 							type="button"
-							className="bg-blue-600 hover:bg-blue-700 text-white font-medium gap-1.5"
+							className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm rounded-lg px-4 h-10 gap-1.5 shadow-none transition-colors cursor-pointer disabled:opacity-50"
 							disabled={
 								(tempSettings.clinics && tempSettings.clinics.length === 0) ||
 								(tempSettings.doctor_types && tempSettings.doctor_types.length === 0) ||

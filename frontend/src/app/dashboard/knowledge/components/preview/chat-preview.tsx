@@ -40,7 +40,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
-import { VisibilitySettings as VisibilitySettingsUI } from "./VisibilitySettings";
+import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
 import {
 	VisibilitySettings as IVisibilitySettings,
 	KnowledgeResponse,
@@ -49,9 +49,9 @@ import {
 	useGeneralChatSession,
 	useSendGeneralChatMessage,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
-import { CategorySettings } from "./CategorySettings";
-import { ClassificationSidebar } from "./ClassificationSidebar";
-import { TitleSettings } from "./TitleSettings";
+import { CategorySettings } from "./category-settings";
+import { ClassificationSidebar } from "./classification-sidebar";
+import { TitleSettings } from "./title-settings";
 
 interface ChatPreviewProps {
 	mode?: "knowledge" | "general";
@@ -1014,7 +1014,7 @@ export function ChatPreview({
 							onClick={handleSend}
 							disabled={isProcessing || (!input.trim() && attachedFiles.length === 0)}
 							size="icon"
-							className="bg-blue-500 text-white hover:bg-blue-600 shrink-0"
+							className="bg-blue-600 text-white hover:bg-blue-700 shrink-0 rounded-lg shadow-none cursor-pointer"
 						>
 							<RiCornerDownLeftLine className="w-4 h-4" />
 						</Button>
