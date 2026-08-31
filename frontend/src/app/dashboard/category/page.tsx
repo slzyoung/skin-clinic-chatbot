@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/shared/search-bar";
+import { useDebounce } from "@/hooks/use-debounce";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import {
 	Table,
@@ -20,6 +21,7 @@ import { useCategories, useDeleteCategory } from "./hooks/use-categories";
 
 export default function CategoriesPage() {
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 300);
 	const [isDialogOpen, setIsDialogOpen] = useState(false);
 	const [dialogMode, setDialogMode] = useState<"add" | "edit">("add");
 	const [selectedCategory, setSelectedCategory] = useState<CategoryResponse | null>(null);
@@ -59,10 +61,10 @@ export default function CategoriesPage() {
 
 	// Filter categories based on search query
 	const filteredCategories = useMemo(() => {
-		if (!searchQuery.trim()) return categories;
-		const q = searchQuery.toLowerCase();
+		if (!debouncedSearch.trim()) return categories;
+		const q = debouncedSearch.toLowerCase();
 		return categories.filter((c) => c.name.toLowerCase().includes(q));
-	}, [categories, searchQuery]);
+	}, [categories, debouncedSearch]);
 
 	return (
 		<div className="p-6 flex flex-col gap-6 h-full">

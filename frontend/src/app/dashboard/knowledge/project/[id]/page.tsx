@@ -10,6 +10,7 @@ import { ProjectDialog } from "@/app/dashboard/knowledge/components/project-dial
 import { AttachProjectDialog } from "@/app/dashboard/knowledge/components/attach-project-dialog";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { SearchBar } from "@/components/shared/search-bar";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -72,6 +73,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 	const deleteKnowledgeMutation = useDeleteKnowledge();
 
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 300);
 	const [statusFilter, setStatusFilter] = useState("ALL");
 	const [categoryFilter, setCategoryFilter] = useState("ALL");
 	const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -279,10 +281,10 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 		?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
 		?.filter(
 			(item) =>
-				item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-				item.allFileNames.some((f) => f.toLowerCase().includes(searchQuery.toLowerCase())) ||
-				item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-				item.categories.some((c) => c.toLowerCase().includes(searchQuery.toLowerCase())),
+				item.title.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+				item.allFileNames.some((f) => f.toLowerCase().includes(debouncedSearch.toLowerCase())) ||
+				item.description.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+				item.categories.some((c) => c.toLowerCase().includes(debouncedSearch.toLowerCase())),
 		)
 		.sort((a, b) => {
 			const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;

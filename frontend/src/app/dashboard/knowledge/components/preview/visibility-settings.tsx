@@ -2,6 +2,7 @@ import React, { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
 	Dialog,
@@ -46,19 +47,20 @@ function SearchableDropdown({
 	displayText,
 }: SearchableDropdownProps) {
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 200);
 	const [isOpen, setIsOpen] = useState(false);
 
 	const isAllSelected = selected.includes("all");
 
 	const filteredOptions = useMemo(() => {
-		if (!searchQuery.trim()) return options;
-		const q = searchQuery.toLowerCase();
+		if (!debouncedSearch.trim()) return options;
+		const q = debouncedSearch.toLowerCase();
 		return options.filter(
 			(opt) =>
 				opt.label.toLowerCase().includes(q) ||
 				(opt.subtitle && opt.subtitle.toLowerCase().includes(q)),
 		);
-	}, [options, searchQuery]);
+	}, [options, debouncedSearch]);
 
 	return (
 		<div className="flex flex-col gap-2 w-full">
@@ -123,7 +125,7 @@ function SearchableDropdown({
 
 						{filteredOptions.length === 0 ? (
 							<div className="py-6 text-center text-xs text-zinc-500">
-								No {title.toLowerCase()} found matching &ldquo;{searchQuery}&rdquo;
+								No {title.toLowerCase()} found matching &ldquo;{debouncedSearch}&rdquo;
 							</div>
 						) : (
 							filteredOptions.map((opt) => {

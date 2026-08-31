@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useDebounce } from "@/hooks/use-debounce";
 import { RiCheckLine, RiSearchLine } from "@remixicon/react";
 import { useEffect, useState } from "react";
 import { useCategories } from "../../category/hooks/use-categories";
@@ -23,6 +24,7 @@ export function DoctorManageKnowledgeDialog({
 	const updateCategories = useUpdateDoctorCategories();
 	const [selectedIds, setSelectedIds] = useState<string[]>([]);
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 200);
 
 	useEffect(() => {
 		if (isOpen && doctor) {
@@ -51,7 +53,7 @@ export function DoctorManageKnowledgeDialog({
 	};
 
 	const filteredCategories = categories.filter((category) => {
-		const query = searchQuery.toLowerCase().trim();
+		const query = debouncedSearch.toLowerCase().trim();
 		if (!query) return true;
 		return (
 			category.name.toLowerCase().includes(query) ||

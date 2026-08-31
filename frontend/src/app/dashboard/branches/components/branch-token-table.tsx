@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { SearchBar } from "@/components/shared/search-bar";
+import { useDebounce } from "@/hooks/use-debounce";
 import {
 	Table,
 	TableBody,
@@ -16,6 +17,7 @@ import { ViewBranchSheet } from "./view-branch-sheet";
 
 export function BranchTokenTable() {
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 300);
 	const { data: branches, isLoading } = useBranches();
 	const { data: configs } = useConfigs();
 
@@ -25,15 +27,15 @@ export function BranchTokenTable() {
 
 	const filteredBranches = useMemo(() => {
 		if (!branches) return [];
-		if (!searchQuery.trim()) return branches;
-		const q = searchQuery.toLowerCase();
+		if (!debouncedSearch.trim()) return branches;
+		const q = debouncedSearch.toLowerCase();
 		return branches.filter(
 			(branch) =>
 				branch.name?.toLowerCase().includes(q) ||
 				branch.code?.toLowerCase().includes(q) ||
 				branch.ecosystem?.toLowerCase().includes(q),
 		);
-	}, [branches, searchQuery]);
+	}, [branches, debouncedSearch]);
 
 	return (
 		<div className="flex flex-col gap-4 w-full">

@@ -6,6 +6,7 @@ import { RiAddLine, RiEdit2Line } from "@remixicon/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SearchBar } from "@/components/shared/search-bar";
+import { useDebounce } from "@/hooks/use-debounce";
 import {
 	Table,
 	TableBody,
@@ -21,6 +22,7 @@ import { RoleDetailResponse } from "./api/types";
 
 export default function RolesPage() {
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 300);
 	const [selectedRole, setSelectedRole] = useState<RoleDetailResponse | null>(null);
 	const [roleDialogMode, setRoleDialogMode] = useState<"add" | "edit">("add");
 	const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false);
@@ -43,14 +45,14 @@ export default function RolesPage() {
 
 	// Filtered roles based on search query
 	const filteredRoles = useMemo(() => {
-		if (!searchQuery.trim()) return rolesData;
-		const q = searchQuery.toLowerCase();
+		if (!debouncedSearch.trim()) return rolesData;
+		const q = debouncedSearch.toLowerCase();
 		return rolesData.filter(
 			(r) =>
 				r.name.toLowerCase().includes(q) ||
 				r.accesses?.some((a) => a.toLowerCase().includes(q)),
 		);
-	}, [rolesData, searchQuery]);
+	}, [rolesData, debouncedSearch]);
 
 	return (
 		<div className="flex flex-col h-full gap-6 p-6">

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { DateRange } from "react-day-picker";
 import { SearchBar } from "@/components/shared/search-bar";
+import { useDebounce } from "@/hooks/use-debounce";
 import { RiLoader4Line } from "@remixicon/react";
 import { ChatFilter } from "./components/chat-filter";
 import { ChatHistoryCard } from "./components/chat-history-card";
@@ -17,6 +18,7 @@ export default function ChatHistoryPage() {
 	const [chatTypeFilter, setChatTypeFilter] = useState("ALL");
 	const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 300);
 
 	// Combine all registered users and users from chat histories
 	const users = useMemo(() => {
@@ -86,8 +88,8 @@ export default function ChatHistoryPage() {
 		}
 
 		// Search Query
-		if (searchQuery.trim()) {
-			const q = searchQuery.toLowerCase();
+		if (debouncedSearch.trim()) {
+			const q = debouncedSearch.toLowerCase();
 			const matchDoctor = item.doctor?.toLowerCase().includes(q);
 			const matchUserName = item.user_name?.toLowerCase().includes(q);
 			const matchQuery = item.query?.toLowerCase().includes(q);

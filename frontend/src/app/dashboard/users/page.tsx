@@ -10,6 +10,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { SearchBar } from "@/components/shared/search-bar";
+import { useDebounce } from "@/hooks/use-debounce";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,10 +44,12 @@ import { useUsers } from "./hooks/use-users";
 export default function UsersPage() {
 	const [activeTab, setActiveTab] = useState<string>("staff");
 	const [searchQuery, setSearchQuery] = useState("");
+	const debouncedSearch = useDebounce(searchQuery, 300);
 	const [selectedDrType, setSelectedDrType] = useState<string>("all");
 	const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
 	const [isBranchPopoverOpen, setIsBranchPopoverOpen] = useState(false);
 	const [branchSearchQuery, setBranchSearchQuery] = useState("");
+	const debouncedBranchSearch = useDebounce(branchSearchQuery, 200);
 
 	const { data: staffData = [] } = useUsers("STAFF");
 	const { data: doctorData = [] } = useUsers("DOCTOR");
@@ -83,23 +86,23 @@ export default function UsersPage() {
 
 	// Filtered items based on search query
 	const filteredStaff = useMemo(() => {
-		if (!searchQuery.trim()) return staffData;
-		const q = searchQuery.toLowerCase();
+		if (!debouncedSearch.trim()) return staffData;
+		const q = debouncedSearch.toLowerCase();
 		return staffData.filter(
 			(s) =>
 				s.name?.toLowerCase().includes(q) ||
 				s.email?.toLowerCase().includes(q) ||
 				s.roles?.some((r) => r.name.toLowerCase().includes(q)),
 		);
-	}, [staffData, searchQuery]);
+	}, [staffData, debouncedSearch]);
 
 	const isAllBranchesSelected = branches.length > 0 && selectedBranches.length === branches.length;
 
 	const filteredDoctors = useMemo(() => {
 		return doctorData.filter((d) => {
 			// Search query match
-			if (searchQuery.trim()) {
-				const q = searchQuery.toLowerCase();
+			if (debouncedSearch.trim()) {
+				const q = debouncedSearch.toLowerCase();
 				const matchesQuery =
 					d.name?.toLowerCase().includes(q) ||
 					d.email?.toLowerCase().includes(q) ||
@@ -124,7 +127,7 @@ export default function UsersPage() {
 
 			return true;
 		});
-	}, [doctorData, searchQuery, selectedDrType, selectedBranches, branches.length]);
+	}, [doctorData, debouncedSearch, selectedDrType, selectedBranches, branches.length]);
 
 	const handleToggleBranch = (id: string) => {
 		setSelectedBranches((prev) =>
@@ -141,10 +144,10 @@ export default function UsersPage() {
 	};
 
 	const filteredBranchOptions = useMemo(() => {
-		const q = branchSearchQuery.toLowerCase().trim();
+		const q = debouncedBranchSearch.toLowerCase().trim();
 		if (!q) return branches;
 		return branches.filter((b) => b.name.toLowerCase().includes(q));
-	}, [branches, branchSearchQuery]);
+	}, [branches, debouncedBranchSearch]);
 
 	// Selected filter labels
 	const selectedBranchLabel = useMemo(() => {
