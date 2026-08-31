@@ -972,13 +972,28 @@ async def process_ingestion_background(
                 result = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
                 k_entry = result.scalars().first()
                 if k_entry:
+                    k_entry.deleted_at = None
                     k_entry.status = KnowledgeStatus.PENDING
                     k_entry.title = recommended_title
                     k_entry.ai_summary = summary
                     k_entry.ai_confidence = float(text_accuracy.replace("%", "")) if isinstance(text_accuracy, str) and "%" in text_accuracy else 95.00
                     if k_entry.metadata_ is None:
                         k_entry.metadata_ = {}
-                    k_entry.metadata_["timing_metrics"] = timing_metrics
+                    k_entry.metadata_.update({
+                        "batch_id": batch_id,
+                        "file_hash": file_hash,
+                        "document_type": extracted_doc_type,
+                        "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+                        "history": history_list,
+                        "chat_history": history_list,
+                        "suggested_categories": suggested_categories,
+                        "categories": [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else [],
+                        "visibility_settings": visibility_settings,
+                        "feedback": feedback,
+                        "timing_metrics": timing_metrics
+                    })
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(k_entry, "metadata_")
                     await session.commit()
         except Exception as db_err:
             logger.warning(f"Could not update status to PENDING in Knowledge DB table: {db_err}")
@@ -994,7 +1009,7 @@ async def process_ingestion_background(
         # If this document is part of a multi-file batch, synthesize/update a unified Batch Executive Summary
         if batch_id and llm:
             try:
-                b_summary = await synthesize_batch_executive_summary(batch_id, llm)
+                b_summary = await synthesize_batch_executive_summary(batch_id, llm, user_prompt=user_prompt)
                 if b_summary:
                     staged_document["batch_summary"] = b_summary
             except Exception as batch_summary_err:
@@ -1012,7 +1027,7 @@ async def process_ingestion_background(
     except Exception as e:
         logger.error(f"Failed background processing for document: {e}")
 
-async def synthesize_batch_executive_summary(batch_id: str, llm: BaseLLMAdapter) -> Optional[str]:
+async def synthesize_batch_executive_summary(batch_id: str, llm: BaseLLMAdapter, user_prompt: Optional[str] = None) -> Optional[str]:
     """
     Synthesizes multiple uploaded document feedbacks/summaries into a concise, unified Executive Summary paragraph.
     Identifies whether documents are clinically/operationally interrelated or independent.
@@ -1069,13 +1084,22 @@ async def synthesize_batch_executive_summary(batch_id: str, llm: BaseLLMAdapter)
 
     docs_text = "\n\n".join(docs_text_parts)
 
+    user_instruction_block = ""
+    effective_prompt = user_prompt or next((d.get("initial_prompt") for d in batch_docs if d.get("initial_prompt")), None)
+    if effective_prompt and str(effective_prompt).strip():
+        user_instruction_block = f"""
+INSTRUKSI KHUSUS PENGGUNA (PRIORITAS TINGGI):
+"{str(effective_prompt).strip()}"
+Harap perhatikan dan penuhi instruksi pengguna di atas saat menyusun ringkasan eksekutif batch ini.
+"""
+
     batch_prompt = f"""
 Anda adalah AI Knowledge Specialist & Clinical Data Integrator untuk klinik ERHA (PT Arya Noble).
 Pengguna mengunggah {len(batch_docs)} dokumen sekaligus dalam satu batch ingest.
 
 Berikut isi lengkap seluruh dokumen yang diunggah dalam batch ini:
 {docs_text}
-
+{user_instruction_block}
 Tugas Anda:
 Lakukan rekonsiliasi dan cross-reference antar dokumen di atas secara teliti.
 Hitung seluruh produk / entitas unik yang ada pada masing-masing dokumen.
@@ -1301,6 +1325,7 @@ async def ingest_document(
 
                     if existing_doc:
                         knowledge = existing_doc
+                        knowledge.deleted_at = None
                         knowledge.status = KnowledgeStatus.PROCESSING
                         knowledge.ai_summary = "Processing..."
                         knowledge.original_path = file_path
@@ -2493,6 +2518,9 @@ async def approve_document(
 
             os.makedirs("data/output", exist_ok=True)
             approved_file = os.path.join("data/output", f"{k_id}.json")
+            staging_hist = data.get("history", []) if isinstance(data, dict) else []
+            initial_prompt_val = data.get("initial_prompt") if isinstance(data, dict) else None
+
             approved_doc_structure = {
                 "knowledge_id": k_id,
                 "batch_id": data.get("batch_id") if isinstance(data, dict) else None,
@@ -2506,6 +2534,9 @@ async def approve_document(
                 "summary": data.get("summary", "") if isinstance(data, dict) else "",
                 "image_url": data.get("image_url") if isinstance(data, dict) else None,
                 "batch_summary": data.get("batch_summary") if isinstance(data, dict) else None,
+                "initial_prompt": initial_prompt_val,
+                "staging_history": staging_hist,
+                "history": [],
                 "categories": parsed_cats,
                 "suggested_categories": raw_cats,
                 "visibility_settings": vis_settings,
@@ -2533,6 +2564,16 @@ async def approve_document(
                     k_entry = res_k.scalars().first()
                     if k_entry:
                         k_entry.status = KnowledgeStatus.APPROVED
+                        if k_entry.metadata_ is None:
+                            k_entry.metadata_ = {}
+                        if staging_hist:
+                            k_entry.metadata_["staging_history"] = staging_hist
+                        k_entry.metadata_["history"] = []
+                        k_entry.metadata_["chat_history"] = []
+                        if initial_prompt_val:
+                            k_entry.metadata_["initial_prompt"] = initial_prompt_val
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(k_entry, "metadata_")
                         await session.commit()
             except Exception as db_err:
                 logger.warning(f"Could not dual-sync approved status to Knowledge DB table for {k_id}: {db_err}")

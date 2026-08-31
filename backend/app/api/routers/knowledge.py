@@ -395,12 +395,24 @@ async def get_knowledge(
                 if isinstance(data, dict):
                     merged_meta = dict(knowledge.metadata_) if isinstance(knowledge.metadata_, dict) else {}
                     merged_meta.update(data)
-                    # Ensure history is preserved
-                    if "history" not in data and "history" in merged_meta:
-                        data["history"] = merged_meta["history"]
-                    if "chat_history" in merged_meta and "chat_history" not in data:
-                        data["chat_history"] = merged_meta["chat_history"]
-                    knowledge.metadata_ = data
+                    # If approved, ensure active history is clean while staging_history and edit_history are retained
+                    if knowledge.status == KnowledgeStatus.APPROVED:
+                        merged_meta["history"] = []
+                        merged_meta["chat_history"] = []
+                        if "staging_history" in data:
+                            merged_meta["staging_history"] = data["staging_history"]
+                        elif isinstance(knowledge.metadata_, dict) and "staging_history" in knowledge.metadata_:
+                            merged_meta["staging_history"] = knowledge.metadata_["staging_history"]
+                        if "edit_history" in data:
+                            merged_meta["edit_history"] = data["edit_history"]
+                        elif isinstance(knowledge.metadata_, dict) and "edit_history" in knowledge.metadata_:
+                            merged_meta["edit_history"] = knowledge.metadata_["edit_history"]
+                    else:
+                        if "history" not in data and "history" in merged_meta:
+                            merged_meta["history"] = merged_meta["history"]
+                        if "chat_history" not in data and "chat_history" in merged_meta:
+                            merged_meta["chat_history"] = merged_meta["chat_history"]
+                    knowledge.metadata_ = merged_meta
         except Exception as e:
             logger.warning(f"Error loading RAG JSON: {e}")
             
@@ -895,8 +907,9 @@ async def approve_knowledge(
         if k_entry.metadata_ is None:
             k_entry.metadata_ = {}
         if staged_history:
-            k_entry.metadata_["history"] = staged_history
-            k_entry.metadata_["chat_history"] = staged_history
+            k_entry.metadata_["staging_history"] = staged_history
+        k_entry.metadata_["history"] = []
+        k_entry.metadata_["chat_history"] = []
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(k_entry, "metadata_")
         await db.commit()
@@ -1166,26 +1179,45 @@ async def refine_knowledge(
                 k_entry.metadata_["chunks"] = res.get("chunks")
 
             # Persist chat turns in metadata
-            existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
-            if not isinstance(existing_history, list):
-                existing_history = []
-            
-            new_history = list(existing_history)
-            if payload.prompt:
-                new_history.append({
-                    "role": "user",
-                    "content": payload.prompt,
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
-            if res.get("summary"):
-                new_history.append({
-                    "role": "assistant",
-                    "content": res.get("summary"),
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                })
+            if k_entry.status == KnowledgeStatus.APPROVED:
+                existing_edit_hist = k_entry.metadata_.get("edit_history") or []
+                if not isinstance(existing_edit_hist, list):
+                    existing_edit_hist = []
+                new_edit_hist = list(existing_edit_hist)
+                if payload.prompt:
+                    new_edit_hist.append({
+                        "role": "user",
+                        "content": payload.prompt,
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+                if res.get("summary"):
+                    new_edit_hist.append({
+                        "role": "assistant",
+                        "content": res.get("summary"),
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+                k_entry.metadata_["edit_history"] = new_edit_hist
+            else:
+                existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
+                if not isinstance(existing_history, list):
+                    existing_history = []
+                
+                new_history = list(existing_history)
+                if payload.prompt:
+                    new_history.append({
+                        "role": "user",
+                        "content": payload.prompt,
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+                if res.get("summary"):
+                    new_history.append({
+                        "role": "assistant",
+                        "content": res.get("summary"),
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
 
-            k_entry.metadata_["history"] = new_history
-            k_entry.metadata_["chat_history"] = new_history
+                k_entry.metadata_["history"] = new_history
+                k_entry.metadata_["chat_history"] = new_history
 
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(k_entry, "metadata_")
