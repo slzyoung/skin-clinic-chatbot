@@ -124,11 +124,17 @@ class BM25Index:
             self.bm25 = None
 
     def remove_file_chunks(self, source_file: str):
-        """Removes all chunks associated with a given source file name."""
-        indices_to_keep = [
-            i for i, chunk in enumerate(self.chunks) 
-            if chunk.get("metadata", {}).get("source_file") != source_file
-        ]
+        """Removes all chunks associated with a given source file name or knowledge_id."""
+        s_clean = str(source_file).strip().lower()
+        indices_to_keep = []
+        for i, chunk in enumerate(self.chunks):
+            meta = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
+            chunk_source = str(meta.get("source_file", "")).strip().lower()
+            chunk_kid = str(meta.get("knowledge_id", "")).strip().lower()
+            chunk_fname = str(meta.get("file_name", "")).strip().lower()
+            if s_clean not in (chunk_source, chunk_kid, chunk_fname):
+                indices_to_keep.append(i)
+
         self.chunks = [self.chunks[i] for i in indices_to_keep]
         self.corpus = [self.corpus[i] for i in indices_to_keep]
         

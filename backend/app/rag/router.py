@@ -1221,26 +1221,18 @@ Saya tidak akan mengasumsikan komposisi, penggunaan, kontraindikasi, atau efek s
         import re
         batch_summary = re.sub(r"^#+\s*(Batch\s+)?Executive\s+Summary\s*\n+", "", batch_summary, flags=re.IGNORECASE).strip()
 
-        # Save batch_summary to each document's metadata maintaining exact key order
-        ordered_keys = [
-            "knowledge_id", "batch_id", "file_name", "file_hash", "title",
-            "type", "status", "text_accuracy", "initial_prompt", "summary",
-            "feedback", "batch_summary", "suggested_categories",
-            "visibility_settings", "history", "chunks", "image_url"
-        ]
-
-        for fp, doc_data in zip(batch_file_paths, batch_docs):
-            doc_data["batch_summary"] = batch_summary
-            reordered = {}
-            for k in ordered_keys:
-                if k in doc_data:
-                    reordered[k] = doc_data[k]
-            for k, v in doc_data.items():
-                if k not in reordered:
-                    reordered[k] = v
-
-            with open(fp, "w", encoding="utf-8") as out_f:
-                json.dump(reordered, out_f, indent=4, ensure_ascii=False)
+        # Save batch_summary to each document's JSON on disk preserving all fields
+        for fp in batch_file_paths:
+            try:
+                if os.path.exists(fp):
+                    with open(fp, "r", encoding="utf-8") as in_f:
+                        cur_doc = json.load(in_f)
+                    if isinstance(cur_doc, dict):
+                        cur_doc["batch_summary"] = batch_summary
+                        with open(fp, "w", encoding="utf-8") as out_f:
+                            json.dump(cur_doc, out_f, indent=4, ensure_ascii=False)
+            except Exception as save_err:
+                logger.warning(f"Could not save batch_summary to file {fp}: {save_err}")
 
         # Sync batch_summary to Postgres DB records metadata_
         try:
@@ -2116,7 +2108,48 @@ async def edit_approved_document(
     Updates summary, categories, and metadata of an approved document and re-indexes vector embeddings.
     """
     approved_file = resolve_approved_file(knowledge_id)
-    if not approved_file:
+    if not approved_file or not os.path.exists(approved_file):
+        # Self-healing DB fallback: reconstruct approved JSON from PostgreSQL record if missing from disk
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge
+            import uuid as _uuid
+
+            async with AsyncSessionLocal() as session:
+                custom_uuid = None
+                try:
+                    custom_uuid = _uuid.UUID(knowledge_id)
+                except ValueError:
+                    pass
+                if custom_uuid:
+                    k_obj = await session.get(Knowledge, custom_uuid)
+                    if k_obj:
+                        os.makedirs("data/output", exist_ok=True)
+                        approved_file = os.path.join("data/output", f"{knowledge_id}.json")
+                        m_dict = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
+                        doc_data = {
+                            "knowledge_id": str(knowledge_id),
+                            "batch_id": m_dict.get("batch_id"),
+                            "file_name": k_obj.file_name or str(knowledge_id),
+                            "title": k_obj.title or k_obj.file_name or "Knowledge Document",
+                            "status": "Approved",
+                            "summary": k_obj.ai_summary or "",
+                            "initial_prompt": m_dict.get("initial_prompt"),
+                            "staging_history": m_dict.get("staging_history", []),
+                            "edit_history": m_dict.get("edit_history", []),
+                            "timing_metrics": m_dict.get("timing_metrics"),
+                            "batch_summary": m_dict.get("batch_summary"),
+                            "image_urls": m_dict.get("image_urls", []),
+                            "categories": m_dict.get("categories", []),
+                            "visibility_settings": m_dict.get("visibility_settings", {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}),
+                            "chunks": m_dict.get("chunks", [{"text": k_obj.ai_summary or k_obj.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}])
+                        }
+                        with open(approved_file, "w", encoding="utf-8") as f:
+                            json.dump(doc_data, f, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
+
+    if not approved_file or not os.path.exists(approved_file):
         raise HTTPException(status_code=404, detail=f"Approved document '{knowledge_id}' not found.")
 
     try:
@@ -2166,6 +2199,11 @@ async def edit_approved_document(
             "valid_until": updated_valid_until,
             "summary": updated_summary,
             "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
+            "image_urls": existing_doc.get("image_urls", []) if isinstance(existing_doc, dict) else [],
+            "initial_prompt": existing_doc.get("initial_prompt") if isinstance(existing_doc, dict) else None,
+            "staging_history": existing_doc.get("staging_history", []) if isinstance(existing_doc, dict) else [],
+            "edit_history": existing_doc.get("edit_history", []) if isinstance(existing_doc, dict) else [],
+            "timing_metrics": existing_doc.get("timing_metrics") if isinstance(existing_doc, dict) else None,
             "batch_summary": existing_doc.get("batch_summary") if isinstance(existing_doc, dict) else None,
             "categories": updated_categories,
             "visibility_settings": vis_settings,
@@ -2211,7 +2249,47 @@ async def edit_pending_document(
     Updates summary, categories, and metadata of a pending staged document.
     """
     pending_file = resolve_pending_file(knowledge_id)
-    if not pending_file:
+    if not pending_file or not os.path.exists(pending_file):
+        # Self-healing DB fallback: reconstruct pending JSON from PostgreSQL record if missing from disk
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge
+            import uuid as _uuid
+
+            async with AsyncSessionLocal() as session:
+                custom_uuid = None
+                try:
+                    custom_uuid = _uuid.UUID(knowledge_id)
+                except ValueError:
+                    pass
+                if custom_uuid:
+                    k_obj = await session.get(Knowledge, custom_uuid)
+                    if k_obj:
+                        os.makedirs("data/pending", exist_ok=True)
+                        pending_file = os.path.join("data/pending", f"{knowledge_id}.json")
+                        m_dict = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
+                        doc_data = {
+                            "knowledge_id": str(knowledge_id),
+                            "batch_id": m_dict.get("batch_id"),
+                            "file_name": k_obj.file_name or str(knowledge_id),
+                            "title": k_obj.title or k_obj.file_name or "Knowledge Document",
+                            "status": "On review",
+                            "summary": k_obj.ai_summary or "",
+                            "initial_prompt": m_dict.get("initial_prompt"),
+                            "history": m_dict.get("history", []),
+                            "staging_history": m_dict.get("staging_history", []),
+                            "timing_metrics": m_dict.get("timing_metrics"),
+                            "batch_summary": m_dict.get("batch_summary"),
+                            "image_urls": m_dict.get("image_urls", []),
+                            "suggested_categories": m_dict.get("suggested_categories", []),
+                            "chunks": m_dict.get("chunks", [{"text": k_obj.ai_summary or k_obj.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}])
+                        }
+                        with open(pending_file, "w", encoding="utf-8") as f:
+                            json.dump(doc_data, f, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
+
+    if not pending_file or not os.path.exists(pending_file):
         raise HTTPException(status_code=404, detail=f"Pending document '{knowledge_id}' not found.")
 
     try:
@@ -2459,6 +2537,30 @@ async def refine_approved_document(
                 if doc_type:
                     chunk["metadata"]["document_type"] = doc_type
 
+        existing_edit_hist = existing_doc.get("edit_history", []) if isinstance(existing_doc, dict) else []
+        new_edit_hist = list(existing_edit_hist) if isinstance(existing_edit_hist, list) else []
+
+        prompt_text = ""
+        if hasattr(request, "prompt"):
+            prompt_text = request.prompt
+        elif isinstance(request, dict):
+            prompt_text = request.get("prompt", "")
+        elif isinstance(request, str):
+            prompt_text = request
+
+        if prompt_text:
+            new_edit_hist.append({
+                "role": "user",
+                "content": prompt_text,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+        if updated_summary:
+            new_edit_hist.append({
+                "role": "assistant",
+                "content": updated_summary,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+
         approved_doc_structure = {
             "knowledge_id": knowledge_id,
             "batch_id": existing_doc.get("batch_id") if isinstance(existing_doc, dict) else None,
@@ -2469,11 +2571,20 @@ async def refine_approved_document(
             "document_type": doc_type,
             "summary": updated_summary,
             "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
+            "image_urls": existing_doc.get("image_urls", []) if isinstance(existing_doc, dict) else [],
+            "initial_prompt": existing_doc.get("initial_prompt") if isinstance(existing_doc, dict) else None,
+            "staging_history": existing_doc.get("staging_history", []) if isinstance(existing_doc, dict) else [],
+            "edit_history": new_edit_hist,
+            "timing_metrics": existing_doc.get("timing_metrics") if isinstance(existing_doc, dict) else None,
             "batch_summary": existing_doc.get("batch_summary") if isinstance(existing_doc, dict) else None,
             "categories": updated_categories,
             "visibility_settings": existing_doc.get("visibility_settings") if isinstance(existing_doc, dict) else None,
             "chunks": updated_chunks
         }
+        # If part of a multi-file batch, re-synthesize updated batch executive summary
+        with open(approved_file, "w", encoding="utf-8") as f:
+            json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
+
         # If part of a multi-file batch, re-synthesize updated batch executive summary
         batch_id_val = approved_doc_structure.get("batch_id")
         if batch_id_val and llm:
@@ -2483,9 +2594,6 @@ async def refine_approved_document(
                     approved_doc_structure["batch_summary"] = b_summary
             except Exception as b_err:
                 logger.warning(f"Could not update batch summary after refine approved: {b_err}")
-
-        with open(approved_file, "w", encoding="utf-8") as f:
-            json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
 
         target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
         if target_store:
@@ -2616,6 +2724,7 @@ async def approve_document(
                 "initial_prompt": initial_prompt_val,
                 "staging_history": staging_hist,
                 "history": [],
+                "edit_history": [],
                 "categories": parsed_cats,
                 "suggested_categories": raw_cats,
                 "visibility_settings": vis_settings,
@@ -2649,6 +2758,7 @@ async def approve_document(
                             k_entry.metadata_["staging_history"] = staging_hist
                         k_entry.metadata_["history"] = []
                         k_entry.metadata_["chat_history"] = []
+                        k_entry.metadata_["edit_history"] = []
                         if initial_prompt_val:
                             k_entry.metadata_["initial_prompt"] = initial_prompt_val
                         from sqlalchemy.orm.attributes import flag_modified
@@ -2696,7 +2806,7 @@ async def delete_document_endpoint(
     for k_id in raw_targets:
         was_deleted = False
 
-        # 1. Scan JSON files in pending and output by knowledge_id OR file_name
+        # 1. Scan JSON files in pending and output by exact knowledge_id OR exact file_name
         for folder in [pending_dir, approved_dir]:
             if os.path.exists(folder):
                 for f in os.listdir(folder):
@@ -2709,7 +2819,7 @@ async def delete_document_endpoint(
                             doc_name = str(f_data.get("file_name", "")) if isinstance(f_data, dict) else ""
                             f_no_ext = f.replace(".json", "").replace("_parsed", "")
 
-                            if k_id in (doc_id, doc_name, f_no_ext, f) or k_id.lower() in doc_name.lower():
+                            if k_id in (doc_id, doc_name, f_no_ext, f):
                                 os.remove(f_path)
                                 if target_store:
                                     target_store.delete_document(doc_id or f_no_ext)
@@ -2721,11 +2831,11 @@ async def delete_document_endpoint(
                         except Exception as file_err:
                             logger.warning(f"Error checking/deleting file {f}: {file_err}")
 
-        # 2. Soft-delete in PostgreSQL Knowledge DB table
+        # 2. Soft-delete in PostgreSQL Knowledge DB table (exact ID / exact filename match only)
         try:
             from app.core.database import AsyncSessionLocal
             from app.models.knowledge import Knowledge
-            from sqlalchemy import select, func, or_
+            from sqlalchemy import select, func
             import uuid as _uuid
 
             async with AsyncSessionLocal() as session:
@@ -2737,23 +2847,17 @@ async def delete_document_endpoint(
 
                 if custom_uuid:
                     stmt = select(Knowledge).where(
-                        or_(Knowledge.id == custom_uuid, Knowledge.file_name.ilike(f"%{k_id}%")),
+                        Knowledge.id == custom_uuid,
                         Knowledge.deleted_at.is_(None)
                     )
                 else:
                     stmt = select(Knowledge).where(
-                        or_(Knowledge.file_name.ilike(f"%{k_id}%"), Knowledge.title.ilike(f"%{k_id}%")),
+                        Knowledge.file_name == k_id,
                         Knowledge.deleted_at.is_(None)
                     )
 
                 res = await session.execute(stmt)
                 db_docs = res.scalars().all()
-                
-                # Fallback: scan all non-deleted records if still not found
-                if not db_docs:
-                    all_res = await session.execute(select(Knowledge).where(Knowledge.deleted_at.is_(None)))
-                    all_docs = all_res.scalars().all()
-                    db_docs = [d for d in all_docs if str(d.id).lower() == k_id.lower() or (d.file_name and k_id.lower() in d.file_name.lower())]
 
                 for d_doc in db_docs:
                     d_doc.deleted_at = func.now()

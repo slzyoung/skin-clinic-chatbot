@@ -4,6 +4,20 @@ All notable changes to the Arya Noble AI Chatbot Backend are documented in this 
 
 ---
 
+## [1.2.2] - 2026-08-31
+
+### Knowledge Lifecycle Data Integrity & Bug Fixes
+- **Exact UUID Match Soft-Deletion & Complete Index Purge (`app/api/routers/knowledge.py`, `app/rag/router.py`, `app/rag/services/vector_store.py`, `app/rag/services/rag_retriever.py`)**:
+  - `list_knowledge` now purges stale staging files strictly by `deleted_ids` (UUIDs), eliminating the bug where files with the same name as previously deleted documents were purged upon upload.
+  - `delete_approved_document` and `delete_knowledge` purge matching chunks completely from PostgreSQL `arya_noble_kb` table, `PGVectorAdapter`, and `BM25Index` across `source_file`, `knowledge_id`, and `file_name`, guaranteeing no "zombie knowledge" can be retrieved after deletion.
+  - Query filtering strictly uses exact `Knowledge.id == target_uuid`, removing broad substring `ilike("%...%")` matching that caused accidental deletion of unrelated documents.
+- **Self-Healing DB Fallback (`app/api/routers/knowledge.py`, `app/rag/router.py`)**:
+  - Added self-healing fallback to `edit_pending_document` and `edit_approved_document` that loads the document from PostgreSQL `Knowledge` if the disk staging JSON is missing, preventing 404 errors during category edits and approval.
+- **Continuous Batch ID Preservation (`app/api/routers/knowledge.py`, `app/rag/router.py`)**:
+  - Explicitly preserved `batch_id`, `upload_batch_id`, and all audit metadata fields (`initial_prompt`, `staging_history`, `edit_history`, `timing_metrics`) across all edit, refine, and status transitions, ensuring multi-file batch groups never separate in the dashboard table.
+
+---
+
 ## [1.2.1] - 2026-08-31
 
 ### Storage Proxy & Structure-Aware Image Support

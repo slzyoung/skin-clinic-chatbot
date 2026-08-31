@@ -291,12 +291,11 @@ async def list_knowledge(
     # 3. Fallback scan: Include any staged JSON files from data/pending or data/output missing in DB
     now = datetime.now(timezone.utc)
     
-    # Query soft-deleted IDs and file names to prevent zombie resurrection
-    del_stmt = select(Knowledge.id, Knowledge.file_name).where(Knowledge.deleted_at.is_not(None))
+    # Query soft-deleted IDs to prevent zombie resurrection (match strictly by unique UUID)
+    del_stmt = select(Knowledge.id).where(Knowledge.deleted_at.is_not(None))
     del_res = await db.execute(del_stmt)
     deleted_records = del_res.all()
     deleted_ids = {str(row[0]).lower() for row in deleted_records}
-    deleted_files = {str(row[1]).lower() for row in deleted_records if row[1]}
     
     seen_ids = set(db_by_id.keys()).union(deleted_ids)
     staged_responses = []
@@ -313,8 +312,8 @@ async def list_knowledge(
                             raw_id = str(data.get("knowledge_id") or f.replace("_parsed.json", "").replace(".json", "")).lower()
                             file_name = str(data.get("file_name", f))
                             
-                            # Clean up and skip if this matches any soft-deleted record
-                            if raw_id in deleted_ids or file_name.lower() in deleted_files:
+                            # Clean up and skip if this matches a soft-deleted UUID
+                            if raw_id in deleted_ids:
                                 try:
                                     os.remove(file_path)
                                     logger.info(f"Purged stale/deleted staging file during list scan: {file_path}")
@@ -399,14 +398,13 @@ async def get_knowledge(
                     if knowledge.status == KnowledgeStatus.APPROVED:
                         merged_meta["history"] = []
                         merged_meta["chat_history"] = []
-                        if "staging_history" in data:
-                            merged_meta["staging_history"] = data["staging_history"]
-                        elif isinstance(knowledge.metadata_, dict) and "staging_history" in knowledge.metadata_:
-                            merged_meta["staging_history"] = knowledge.metadata_["staging_history"]
-                        if "edit_history" in data:
-                            merged_meta["edit_history"] = data["edit_history"]
-                        elif isinstance(knowledge.metadata_, dict) and "edit_history" in knowledge.metadata_:
-                            merged_meta["edit_history"] = knowledge.metadata_["edit_history"]
+                        db_edit_hist = knowledge.metadata_.get("edit_history") if isinstance(knowledge.metadata_, dict) else []
+                        file_edit_hist = data.get("edit_history") if isinstance(data, dict) else []
+                        merged_meta["edit_history"] = db_edit_hist if len(db_edit_hist or []) >= len(file_edit_hist or []) else file_edit_hist
+
+                        db_stage_hist = knowledge.metadata_.get("staging_history") if isinstance(knowledge.metadata_, dict) else []
+                        file_stage_hist = data.get("staging_history") if isinstance(data, dict) else []
+                        merged_meta["staging_history"] = db_stage_hist if len(db_stage_hist or []) >= len(file_stage_hist or []) else file_stage_hist
                     else:
                         if "history" not in data and "history" in merged_meta:
                             merged_meta["history"] = merged_meta["history"]
@@ -766,6 +764,7 @@ async def upload_knowledge_file(
     file: List[UploadFile] = File(...),
     project_id: Optional[uuid.UUID] = Form(None),
     prompt: Optional[str] = Form(None),
+    replace_existing: bool = Form(True),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:write")),
     llm: BaseLLMAdapter = Depends(get_llm)
@@ -797,6 +796,7 @@ async def upload_knowledge_file(
         background_tasks=background_tasks,
         file=file,
         prompt=prompt,
+        replace_existing=replace_existing,
         pipeline=pipeline,
         llm=llm
     )
@@ -941,18 +941,26 @@ async def edit_knowledge(
 
     # DB fallback if JSON file is missing from disk but exists in PostgreSQL
     if not p_file and not a_file and k_entry:
+        m_dict = dict(k_entry.metadata_) if isinstance(k_entry.metadata_, dict) else {}
         if k_entry.status == KnowledgeStatus.APPROVED:
             a_file = os.path.join("data/output", f"{knowledge_id}.json")
             os.makedirs("data/output", exist_ok=True)
             doc_data = {
                 "knowledge_id": str(knowledge_id),
+                "batch_id": m_dict.get("batch_id"),
                 "file_name": k_entry.file_name or str(knowledge_id),
                 "title": k_entry.title or k_entry.file_name or "Knowledge Document",
                 "status": "Approved",
                 "summary": k_entry.ai_summary or "",
-                "categories": k_entry.metadata_.get("categories", []) if k_entry.metadata_ else [],
-                "visibility_settings": k_entry.metadata_.get("visibility_settings", {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}) if k_entry.metadata_ else {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]},
-                "chunks": k_entry.metadata_.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]) if k_entry.metadata_ else [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]
+                "initial_prompt": m_dict.get("initial_prompt"),
+                "staging_history": m_dict.get("staging_history", []),
+                "edit_history": m_dict.get("edit_history", []),
+                "timing_metrics": m_dict.get("timing_metrics"),
+                "batch_summary": m_dict.get("batch_summary"),
+                "image_urls": m_dict.get("image_urls", []),
+                "categories": m_dict.get("categories", []),
+                "visibility_settings": m_dict.get("visibility_settings", {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}),
+                "chunks": m_dict.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}])
             }
             with open(a_file, "w", encoding="utf-8") as f:
                 json.dump(doc_data, f, indent=4, ensure_ascii=False)
@@ -961,11 +969,19 @@ async def edit_knowledge(
             os.makedirs("data/pending", exist_ok=True)
             doc_data = {
                 "knowledge_id": str(knowledge_id),
+                "batch_id": m_dict.get("batch_id"),
                 "file_name": k_entry.file_name or str(knowledge_id),
                 "title": k_entry.title or k_entry.file_name or "Knowledge Document",
                 "status": "On review",
                 "summary": k_entry.ai_summary or "",
-                "chunks": k_entry.metadata_.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]) if k_entry.metadata_ else [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]
+                "initial_prompt": m_dict.get("initial_prompt"),
+                "history": m_dict.get("history", []),
+                "staging_history": m_dict.get("staging_history", []),
+                "timing_metrics": m_dict.get("timing_metrics"),
+                "batch_summary": m_dict.get("batch_summary"),
+                "image_urls": m_dict.get("image_urls", []),
+                "suggested_categories": m_dict.get("suggested_categories", []),
+                "chunks": m_dict.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}])
             }
             with open(p_file, "w", encoding="utf-8") as f:
                 json.dump(doc_data, f, indent=4, ensure_ascii=False)
@@ -1003,6 +1019,13 @@ async def edit_knowledge(
         if payload.visibility_settings is not None:
             k_entry.metadata_["visibility_settings"] = payload.visibility_settings.model_dump()
             
+        # Ensure batch_id and audit keys from res are preserved
+        if isinstance(res, dict):
+            if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
+                k_entry.metadata_["batch_id"] = res["batch_id"]
+            if res.get("chunks"):
+                k_entry.metadata_["chunks"] = res["chunks"]
+
         # Ensure SQLAlchemy sees the mutation in the JSON column
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(k_entry, "metadata_")
@@ -1028,7 +1051,7 @@ async def refine_knowledge(
     history = []
     file_attachment: Optional[UploadFile] = None
 
-    if "multipart/form-data" in content_type:
+    if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
         form = await request.form()
         prompt = str(form.get("prompt", "") or "")
         history_raw = form.get("history", "[]")
@@ -1118,18 +1141,26 @@ async def refine_knowledge(
         db_res = await db.execute(stmt)
         k_entry = db_res.scalar_one_or_none()
         if k_entry:
+            m_dict = dict(k_entry.metadata_) if isinstance(k_entry.metadata_, dict) else {}
             if k_entry.status == KnowledgeStatus.APPROVED:
                 a_file = os.path.join("data/output", f"{knowledge_id}.json")
                 os.makedirs("data/output", exist_ok=True)
                 doc_data = {
                     "knowledge_id": str(knowledge_id),
+                    "batch_id": m_dict.get("batch_id"),
                     "file_name": k_entry.file_name or str(knowledge_id),
                     "title": k_entry.title or k_entry.file_name or "Knowledge Document",
                     "status": "Approved",
                     "summary": k_entry.ai_summary or "",
-                    "categories": k_entry.metadata_.get("categories", []) if k_entry.metadata_ else [],
-                    "visibility_settings": k_entry.metadata_.get("visibility_settings", {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}) if k_entry.metadata_ else {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]},
-                    "chunks": k_entry.metadata_.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]) if k_entry.metadata_ else [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]
+                    "initial_prompt": m_dict.get("initial_prompt"),
+                    "staging_history": m_dict.get("staging_history", []),
+                    "edit_history": m_dict.get("edit_history", []),
+                    "timing_metrics": m_dict.get("timing_metrics"),
+                    "batch_summary": m_dict.get("batch_summary"),
+                    "image_urls": m_dict.get("image_urls", []),
+                    "categories": m_dict.get("categories", []),
+                    "visibility_settings": m_dict.get("visibility_settings", {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}),
+                    "chunks": m_dict.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}])
                 }
                 with open(a_file, "w", encoding="utf-8") as f:
                     json.dump(doc_data, f, indent=4, ensure_ascii=False)
@@ -1138,22 +1169,34 @@ async def refine_knowledge(
                 os.makedirs("data/pending", exist_ok=True)
                 doc_data = {
                     "knowledge_id": str(knowledge_id),
+                    "batch_id": m_dict.get("batch_id"),
                     "file_name": k_entry.file_name or str(knowledge_id),
                     "title": k_entry.title or k_entry.file_name or "Knowledge Document",
                     "status": "On review",
                     "summary": k_entry.ai_summary or "",
-                    "chunks": k_entry.metadata_.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]) if k_entry.metadata_ else [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}]
+                    "initial_prompt": m_dict.get("initial_prompt"),
+                    "history": m_dict.get("history", []),
+                    "staging_history": m_dict.get("staging_history", []),
+                    "timing_metrics": m_dict.get("timing_metrics"),
+                    "batch_summary": m_dict.get("batch_summary"),
+                    "image_urls": m_dict.get("image_urls", []),
+                    "suggested_categories": m_dict.get("suggested_categories", []),
+                    "chunks": m_dict.get("chunks", [{"text": k_entry.ai_summary or k_entry.title or "", "metadata": {"knowledge_id": str(knowledge_id)}}])
                 }
                 with open(p_file, "w", encoding="utf-8") as f:
                     json.dump(doc_data, f, indent=4, ensure_ascii=False)
 
-    if p_file:
-        res = await refine_pending_document(str(knowledge_id), payload, llm, file_attachment=file_attachment)
-    elif a_file:
+    stmt_check = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
+    res_check = await db.execute(stmt_check)
+    k_check = res_check.scalar_one_or_none()
+
+    if (k_check and k_check.status == KnowledgeStatus.APPROVED) or (not p_file and a_file):
         pipeline = get_ingestion_pipeline(request)
         bm25 = get_bm25_index(request)
         vector_store = get_vector_store(request)
         res = await refine_approved_document(str(knowledge_id), payload, pipeline, bm25, vector_store, llm, file_attachment=file_attachment)
+    elif p_file:
+        res = await refine_pending_document(str(knowledge_id), payload, llm, file_attachment=file_attachment)
     else:
         raise HTTPException(status_code=404, detail="Document not found for refinement.")
 
@@ -1169,6 +1212,8 @@ async def refine_knowledge(
                 k_entry.ai_summary = res.get("summary")
             if k_entry.metadata_ is None:
                 k_entry.metadata_ = {}
+            if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
+                k_entry.metadata_["batch_id"] = res.get("batch_id")
             if res.get("categories") is not None:
                 k_entry.metadata_["categories"] = res.get("categories")
             elif res.get("suggested_categories") is not None:
@@ -1183,41 +1228,61 @@ async def refine_knowledge(
                 existing_edit_hist = k_entry.metadata_.get("edit_history") or []
                 if not isinstance(existing_edit_hist, list):
                     existing_edit_hist = []
-                new_edit_hist = list(existing_edit_hist)
-                if payload.prompt:
-                    new_edit_hist.append({
-                        "role": "user",
-                        "content": payload.prompt,
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    })
-                if res.get("summary"):
-                    new_edit_hist.append({
-                        "role": "assistant",
-                        "content": res.get("summary"),
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    })
-                k_entry.metadata_["edit_history"] = new_edit_hist
-            else:
-                existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
-                if not isinstance(existing_history, list):
-                    existing_history = []
                 
-                new_history = list(existing_history)
-                if payload.prompt:
-                    new_history.append({
-                        "role": "user",
-                        "content": payload.prompt,
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    })
-                if res.get("summary"):
-                    new_history.append({
-                        "role": "assistant",
-                        "content": res.get("summary"),
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    })
+                prompt_str = prompt or getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
 
-                k_entry.metadata_["history"] = new_history
-                k_entry.metadata_["chat_history"] = new_history
+                if res.get("edit_history") and len(res.get("edit_history")) >= 2:
+                    k_entry.metadata_["edit_history"] = res.get("edit_history")
+                else:
+                    new_edit_hist = list(existing_edit_hist)
+                    if prompt_str:
+                        new_edit_hist.append({
+                            "role": "user",
+                            "content": prompt_str,
+                            "created_at": datetime.now(timezone.utc).isoformat()
+                        })
+                    if res.get("summary"):
+                        new_edit_hist.append({
+                            "role": "assistant",
+                            "content": res.get("summary"),
+                            "created_at": datetime.now(timezone.utc).isoformat()
+                        })
+                    k_entry.metadata_["edit_history"] = new_edit_hist
+                    res["edit_history"] = new_edit_hist
+                    if a_file and os.path.exists(a_file):
+                        try:
+                            with open(a_file, "r", encoding="utf-8") as af_r:
+                                cur_af = json.load(af_r)
+                            if isinstance(cur_af, dict):
+                                cur_af["edit_history"] = new_edit_hist
+                                with open(a_file, "w", encoding="utf-8") as af_w:
+                                    json.dump(cur_af, af_w, indent=4, ensure_ascii=False)
+                        except Exception:
+                            pass
+            else:
+                if res.get("history"):
+                    k_entry.metadata_["history"] = res.get("history")
+                    k_entry.metadata_["chat_history"] = res.get("history")
+                else:
+                    existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
+                    if not isinstance(existing_history, list):
+                        existing_history = []
+                    new_history = list(existing_history)
+                    prompt_str = getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
+                    if prompt_str:
+                        new_history.append({
+                            "role": "user",
+                            "content": prompt_str,
+                            "created_at": datetime.now(timezone.utc).isoformat()
+                        })
+                    if res.get("summary"):
+                        new_history.append({
+                            "role": "assistant",
+                            "content": res.get("summary"),
+                            "created_at": datetime.now(timezone.utc).isoformat()
+                        })
+                    k_entry.metadata_["history"] = new_history
+                    k_entry.metadata_["chat_history"] = new_history
 
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(k_entry, "metadata_")
@@ -1379,20 +1444,27 @@ async def delete_knowledge(
     try:
         from app.rag.config import settings as rag_settings
         table_name = rag_settings.pg_collection_name
-        cleanup_query = text(f"""
-            DELETE FROM {table_name} 
-            WHERE source_file = :kid 
-               OR source_file ILIKE :kid_pattern
-               OR (:fname IS NOT NULL AND (source_file = :fname OR source_file ILIKE :fname_pattern))
-               OR metadata ->> 'knowledge_id' = :kid
-               OR (:fname IS NOT NULL AND metadata ->> 'file_name' = :fname)
-        """)
-        await db.execute(cleanup_query, {
-            "kid": kid_str,
-            "kid_pattern": f"%{kid_str}%",
-            "fname": file_name,
-            "fname_pattern": f"%{file_name}%" if file_name else None
-        })
+        if file_name:
+            cleanup_query = text(f"""
+                DELETE FROM {table_name} 
+                WHERE source_file = :kid 
+                   OR source_file = :fname
+                   OR metadata ->> 'knowledge_id' = :kid
+                   OR metadata ->> 'file_name' = :fname
+            """)
+            await db.execute(cleanup_query, {
+                "kid": kid_str,
+                "fname": file_name
+            })
+        else:
+            cleanup_query = text(f"""
+                DELETE FROM {table_name} 
+                WHERE source_file = :kid 
+                   OR metadata ->> 'knowledge_id' = :kid
+            """)
+            await db.execute(cleanup_query, {
+                "kid": kid_str
+            })
         await db.commit()
     except Exception as sql_err:
         logger.warning(f"Direct vector store table purge warning: {sql_err}")

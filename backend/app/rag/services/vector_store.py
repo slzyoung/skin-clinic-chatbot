@@ -36,7 +36,7 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
         
         logger.info(f"Initializing PGVector client (Dimension: {dim})...")
         try:
-            self.engine = create_engine(self.conn_str)
+            self.engine = create_engine(self.conn_str, pool_pre_ping=True, pool_recycle=300)
             with self.engine.connect() as conn:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 conn.commit()
@@ -187,8 +187,14 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
     def delete_document(self, source_file: str):
         try:
             logger.info(f"Deleting chunks for source_file: {source_file}")
+            from sqlalchemy import or_, text
             with self.Session() as session:
-                session.query(DocumentChunk).filter_by(source_file=source_file).delete()
+                session.execute(text(f"""
+                    DELETE FROM {self.collection_name}
+                    WHERE source_file = :src
+                       OR metadata ->> 'knowledge_id' = :src
+                       OR metadata ->> 'file_name' = :src
+                """), {"src": str(source_file)})
                 session.commit()
             logger.info(f"Successfully deleted chunks for {source_file} from PGVector.")
         except Exception as e:
