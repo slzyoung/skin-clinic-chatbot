@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     S3_BUCKET: str = "erha-knowledge-assets"
     S3_REGION: str = "us-east-1"
     S3_USE_PATH_STYLE: bool = True
+    S3_PUBLIC_URL: Optional[str] = None # Optional public CDN / API prefix (e.g. "https://dokterpedia.aryanoble.co.id/api/storage")
 
     COOKIE_DOMAIN: Optional[str] = None # e.g. ".aryanoble.web.id" or ".aryanoble.co.id"
     COOKIE_SECURE: Optional[bool] = None

@@ -4,6 +4,17 @@ All notable changes to the Arya Noble AI Chatbot Backend are documented in this 
 
 ---
 
+## [1.2.1] - 2026-08-31
+
+### Storage Proxy & Structure-Aware Image Support
+- **FastAPI Public Storage Proxy (`app/api/routers/storage.py`, `app/services/storage.py`)**:
+  - Implemented `GET /api/storage/{s3_key:path}` endpoint to stream MinIO and local assets via FastAPI with HTTP 200 and `Cache-Control: public, max-age=86400`, eliminating the need to expose MinIO port 9000 to external networks or firewalls.
+  - Added configurable `S3_PUBLIC_URL` setting and automatic failover in `_get_client()`.
+- **Structure-Aware Image Extraction (`app/rag/utils/summary_chunker.py`)**:
+  - Enhanced markdown image regex `!\[.*?\]\(([^\s\)]+)\)` to extract both relative proxy URLs (`/api/storage/...`) and absolute URLs into chunk metadata.
+
+---
+
 ## [1.2.0] - 2026-08-31
 
 ### Ingestion Prompt Lifecycle & Metadata Archival

@@ -106,14 +106,38 @@ def _ensure_bucket():
         logger.warning(f"Could not connect or ensure MinIO bucket '{_bucket()}': {e}")
 
 
-def _format_browser_url(raw_url: str, s3_key: str) -> str:
-    """Ensures image URL is accessible by the user's browser (converts docker 'minio:9000' to 'localhost:9000')."""
-    if not raw_url:
-        bucket_name = _bucket()
-        return f"http://localhost:9000/{bucket_name}/{s3_key}"
-    if "minio:9000" in raw_url:
-        return raw_url.replace("minio:9000", "localhost:9000")
-    return raw_url
+def _format_browser_url(raw_url: str = None, s3_key: str = "") -> str:
+    """
+    Ensures image URL is accessible by the user's browser across all environments:
+    1. If S3_PUBLIC_URL is configured (e.g. 'https://dokterpedia.aryanoble.co.id/api/storage' or CDN), use that.
+    2. Otherwise, returns universal relative backend proxy path '/api/storage/{s3_key}'.
+    """
+    clean_key = (s3_key or "").lstrip("/")
+    if hasattr(settings, "S3_PUBLIC_URL") and settings.S3_PUBLIC_URL and str(settings.S3_PUBLIC_URL).strip():
+        base = str(settings.S3_PUBLIC_URL).rstrip("/")
+        return f"{base}/{clean_key}"
+    
+    # Universal fallback proxy path via FastAPI
+    return f"/api/storage/{clean_key}"
+
+
+def get_s3_object_data(s3_key: str) -> tuple:
+    """
+    Fetches raw object bytes and content_type from MinIO.
+    Returns (bytes, content_type) or (None, None).
+    """
+    clean_key = (s3_key or "").lstrip("/")
+    if not HAS_BOTO3:
+        return None, None
+    try:
+        client = _get_client()
+        resp = client.get_object(Bucket=_bucket(), Key=clean_key)
+        body = resp["Body"].read()
+        ctype = resp.get("ContentType", "image/png")
+        return body, ctype
+    except Exception as e:
+        logger.warning(f"Failed to fetch S3 object '{clean_key}': {e}")
+        return None, None
 
 
 def upload_image(content: bytes, filename: str, content_type: str = "image/png") -> dict:
@@ -121,19 +145,20 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
     Synchronously uploads image binary content to MinIO bucket and returns s3_key & browser-accessible image_url.
     """
     s3_key = f"images/{uuid.uuid4().hex}_{filename}"
-    bucket_name = _bucket()
+    browser_url = _format_browser_url(None, s3_key)
 
     if not HAS_BOTO3:
         logger.warning(f"boto3 package not installed. Returning fallback image info for '{filename}'.")
         return {
             "s3_key": s3_key,
-            "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+            "image_url": browser_url,
             "size": len(content),
             "status": "fallback"
         }
     try:
         _ensure_bucket()
         client = _get_client()
+        bucket_name = _bucket()
 
         extra_args = {}
         if content_type:
@@ -146,8 +171,6 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
             **extra_args
         )
 
-        browser_url = f"http://localhost:9000/{bucket_name}/{s3_key}"
-
         logger.info(f"✅ Successfully uploaded image '{filename}' to MinIO -> {browser_url}")
         return {
             "s3_key": s3_key,
@@ -156,11 +179,10 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
             "status": "success"
         }
     except Exception as e:
-        logger.warning(f"MinIO upload failed for '{filename}': {e}. Returning fallback URL.")
-        fallback_url = f"http://localhost:9000/{bucket_name}/{s3_key}"
+        logger.warning(f"MinIO upload failed for '{filename}': {e}. Returning proxy URL.")
         return {
             "s3_key": s3_key,
-            "image_url": fallback_url,
+            "image_url": browser_url,
             "size": len(content),
             "status": "fallback"
         }
@@ -181,14 +203,13 @@ def upload_images_parallel(images: list) -> list:
         return []
 
     if not HAS_BOTO3:
-        logger.warning("boto3 not installed. Returning fallback URLs for all images.")
+        logger.warning("boto3 not installed. Returning proxy URLs for all images.")
         results = []
-        bucket_name = _bucket()
         for img in images:
             s3_key = f"images/{uuid.uuid4().hex}_{img['filename']}"
             results.append({
                 "s3_key": s3_key,
-                "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+                "image_url": _format_browser_url(None, s3_key),
                 "size": len(img.get("content", b"")),
                 "status": "fallback"
             })
@@ -200,14 +221,13 @@ def upload_images_parallel(images: list) -> list:
         client = _get_client()
         bucket_name = _bucket()
     except Exception as e:
-        logger.warning(f"MinIO init failed: {e}. Returning fallback URLs.")
+        logger.warning(f"MinIO init failed: {e}. Returning proxy URLs.")
         results = []
-        bucket_name = _bucket()
         for img in images:
             s3_key = f"images/{uuid.uuid4().hex}_{img['filename']}"
             results.append({
                 "s3_key": s3_key,
-                "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+                "image_url": _format_browser_url(None, s3_key),
                 "size": len(img.get("content", b"")),
                 "status": "fallback"
             })
@@ -218,6 +238,7 @@ def upload_images_parallel(images: list) -> list:
         content = img_data["content"]
         ctype = img_data.get("content_type", "image/png")
         s3_key = f"images/{uuid.uuid4().hex}_{fname}"
+        browser_url = _format_browser_url(None, s3_key)
         try:
             extra_args = {}
             if ctype:
@@ -228,7 +249,6 @@ def upload_images_parallel(images: list) -> list:
                 Body=content,
                 **extra_args
             )
-            browser_url = f"http://localhost:9000/{bucket_name}/{s3_key}"
             logger.info(f"Uploaded '{fname}' to MinIO -> {browser_url}")
             return {
                 "s3_key": s3_key,
@@ -240,7 +260,7 @@ def upload_images_parallel(images: list) -> list:
             logger.warning(f"MinIO upload failed for '{fname}': {e}")
             return {
                 "s3_key": s3_key,
-                "image_url": f"http://localhost:9000/{bucket_name}/{s3_key}",
+                "image_url": browser_url,
                 "size": len(content),
                 "status": "fallback"
             }
@@ -266,7 +286,7 @@ def get_presigned_url(s3_key: str, expires: int = 604800) -> str:
         return _format_browser_url(raw_url, s3_key)
     except Exception as e:
         logger.warning(f"Failed to generate presigned URL for key '{s3_key}': {e}")
-        return f"http://localhost:9000/{_bucket()}/{s3_key}"
+        return _format_browser_url(None, s3_key)
 
 
 def delete_image(s3_key: str) -> None:

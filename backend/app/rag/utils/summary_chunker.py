@@ -64,8 +64,8 @@ def chunk_summary_markdown(
         else:
             meta["product_name"] = entity_name
         if chunk_text:
-            # Extract image_url from markdown images in this chunk's text
-            img_matches = re.findall(r'!\[.*?\]\((https?://[^\s\)]+)\)', chunk_text)
+            # Extract image_url from markdown images in this chunk's text (handles both /api/storage/... and https?://...)
+            img_matches = re.findall(r'!\[.*?\]\(([^\s\)]+)\)', chunk_text)
             if img_matches:
                 meta["image_url"] = img_matches[0]
 
