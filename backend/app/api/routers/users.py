@@ -235,7 +235,7 @@ async def update_user(
                 gl_stmt = select(AppConfig.value).where(AppConfig.key == "GLOBAL_TOKEN_LIMIT")
                 gl_res = await db.execute(gl_stmt)
                 gl_val = gl_res.scalar_one_or_none()
-                max_branch_limit = int(gl_val) if (gl_val and gl_val.isdigit() and int(gl_val) > 0) else max([b.token_limit for b in user_branches if b.token_limit] or [0])
+                max_branch_limit = int(gl_val) if (gl_val and gl_val.isdigit() and int(gl_val) > 0) else 3000000
             else:
                 max_branch_limit = max([b.token_limit for b in user_branches if b.token_limit] or [0])
 
