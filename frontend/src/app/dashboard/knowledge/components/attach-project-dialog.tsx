@@ -142,7 +142,7 @@ export function AttachProjectDialog({
 							variant="outline"
 							onClick={onClose}
 							disabled={updateKnowledgeProjectMutation.isPending}
-							className="h-10 px-4 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg text-sm font-medium cursor-pointer shadow-none"
+							className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 						>
 							Cancel
 						</Button>
