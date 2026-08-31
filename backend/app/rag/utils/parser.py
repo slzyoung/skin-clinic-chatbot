@@ -125,19 +125,24 @@ class DocumentParser:
 
             with zipfile.ZipFile(file_path, 'r') as z:
                 media_files = [f for f in z.namelist() if f.startswith('word/media/')]
-                for idx, media_name in enumerate(media_files[:5], start=1):
+                extracted_image_urls = []
+                for idx, media_name in enumerate(media_files, start=1):
                     img_bytes = z.read(media_name)
                     img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
                     if img_ext in ["png", "jpg", "jpeg", "webp"]:
                         fname = f"docx_img_{idx}_{os.path.basename(media_name)}"
                         upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
                         img_url = upload_res.get("image_url")
-                        if img_url and pages:
-                            clean_img_title = os.path.splitext(os.path.basename(file_path))[0]
-                            pages[0]["text"] = f"![{clean_img_title}]({img_url})\n\n" + pages[0]["text"]
-                            pages[0]["image_url"] = img_url
-                            logger.info(f"🖼️ Extracted and uploaded embedded DOCX image '{media_name}' to MinIO -> {img_url}")
-                            break
+                        if img_url:
+                            extracted_image_urls.append(img_url)
+                            logger.info(f"🖼️ Extracted and uploaded embedded DOCX image #{idx} '{media_name}' to MinIO -> {img_url}")
+                
+                if extracted_image_urls and pages:
+                    clean_img_title = os.path.splitext(os.path.basename(file_path))[0]
+                    img_md_block = "\n".join([f"![{clean_img_title} Image {i+1}]({u})" for i, u in enumerate(extracted_image_urls)])
+                    pages[0]["text"] = f"{img_md_block}\n\n" + pages[0]["text"]
+                    pages[0]["image_urls"] = extracted_image_urls
+                    pages[0]["image_url"] = extracted_image_urls[0]
         except Exception as img_err:
             logger.debug(f"DOCX embedded image extraction skipped: {img_err}")
 
@@ -198,8 +203,9 @@ class DocumentParser:
             doc = fitz.open(file_path)
             for i, page in enumerate(doc):
                 img_list = page.get_images()
+                page_image_urls = []
                 img_markdowns = []
-                for img_idx, img_info in enumerate(img_list[:3]):
+                for img_idx, img_info in enumerate(img_list):
                     xref = img_info[0]
                     base_img = doc.extract_image(xref)
                     img_bytes = base_img.get("image")
@@ -209,10 +215,12 @@ class DocumentParser:
                         upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
                         img_url = upload_res.get("image_url")
                         if img_url:
+                            page_image_urls.append(img_url)
                             img_markdowns.append(f"![{fname}]({img_url})")
                 if img_markdowns and i < len(pages):
                     pages[i]["text"] += "\n\n" + "\n".join(img_markdowns)
-                    pages[i]["image_url"] = upload_res.get("image_url")
+                    pages[i]["image_urls"] = page_image_urls
+                    pages[i]["image_url"] = page_image_urls[0] if page_image_urls else None
         except Exception as img_err:
             logger.debug(f"PDF embedded image extraction skipped/optional: {img_err}")
 
@@ -227,12 +235,55 @@ class DocumentParser:
 
         ext = os.path.splitext(file_path)[1].lower()
         pages = []
+        extracted_image_urls = []
+
+        # Extract embedded images from .xlsx/.xlsm media parts and upload to MinIO first
+        if ext in [".xlsx", ".xlsm"]:
+            try:
+                import zipfile
+                from app.services.storage import upload_images_parallel
+
+                with zipfile.ZipFile(file_path, 'r') as z:
+                    media_files = [f for f in z.namelist() if f.startswith('xl/media/')]
+                    # Collect all image data first
+                    upload_batch = []
+                    for idx, media_name in enumerate(media_files, start=1):
+                        img_bytes = z.read(media_name)
+                        img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
+                        if img_ext in ["png", "jpg", "jpeg", "webp"]:
+                            upload_batch.append({
+                                "content": img_bytes,
+                                "filename": f"excel_img_{idx}_{os.path.basename(media_name)}",
+                                "content_type": f"image/{img_ext}"
+                            })
+
+                    # Upload all images in parallel (1x client init, concurrent put_object)
+                    if upload_batch:
+                        results = upload_images_parallel(upload_batch)
+                        for res in results:
+                            img_url = res.get("image_url")
+                            if img_url:
+                                extracted_image_urls.append(img_url)
+                        logger.info(f"Parallel upload: {len(extracted_image_urls)} Excel images uploaded to MinIO.")
+            except Exception as img_err:
+                logger.debug(f"Excel embedded image extraction skipped: {img_err}")
 
         try:
+            def _df_to_markdown_safe(dataframe) -> str:
+                try:
+                    return dataframe.to_markdown(index=False)
+                except Exception:
+                    headers = [str(c) for c in dataframe.columns]
+                    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
+                    for _, row in dataframe.iterrows():
+                        row_vals = ["" if pd.isna(v) else str(v).replace("\n", " ").strip() for v in row]
+                        lines.append("| " + " | ".join(row_vals) + " |")
+                    return "\n".join(lines)
+
             if ext == ".csv":
                 df = pd.read_csv(file_path)
                 df = df.dropna(how="all")
-                md_table = df.to_markdown(index=False)
+                md_table = _df_to_markdown_safe(df)
                 pages.append({
                     "page": 1,
                     "text": f"### CSV Data Table\n\n{md_table}"
@@ -244,39 +295,55 @@ class DocumentParser:
                         if df.empty:
                             continue
                         df = df.dropna(how="all")
-                        md_table = df.to_markdown(index=False)
+
+                        # If Excel has an image/photo column, inject extracted image URLs row-by-row
+                        if extracted_image_urls:
+                            photo_col = None
+                            for col in df.columns:
+                                col_str = str(col).lower()
+                                if any(k in col_str for k in ["foto", "gambar", "photo", "image", "picture"]):
+                                    photo_col = col
+                                    break
+                            
+                            if photo_col is not None:
+                                img_idx = 0
+                                new_col_vals = []
+                                for r_idx in range(len(df)):
+                                    if img_idx < len(extracted_image_urls):
+                                        prod_name = ""
+                                        for name_col in df.columns:
+                                            if any(nk in str(name_col).lower() for nk in ["nama", "product", "title", "item"]):
+                                                val = str(df.at[df.index[r_idx], name_col])
+                                                if val and val != "nan":
+                                                    prod_name = val
+                                                    break
+                                        img_alt = prod_name or f"Foto Produk {img_idx+1}"
+                                        new_col_vals.append(f"![{img_alt}]({extracted_image_urls[img_idx]})")
+                                        img_idx += 1
+                                    else:
+                                        val_existing = str(df.at[df.index[r_idx], photo_col])
+                                        new_col_vals.append("" if val_existing == "nan" else val_existing)
+                                df[photo_col] = new_col_vals
+
+                        md_table = _df_to_markdown_safe(df)
                         sheet_text = f"### Sheet: {sheet_name}\n\n{md_table}"
                         pages.append({
                             "page": page_idx,
-                            "text": sheet_text
+                            "text": sheet_text,
+                            "image_urls": extracted_image_urls,
+                            "image_url": extracted_image_urls[0] if extracted_image_urls else None
                         })
 
             if not pages:
                 pages = [{"page": 1, "text": "Dokumen spreadsheet kosong."}]
 
-            # Extract embedded images from .xlsx media parts and upload to MinIO
-            if ext in [".xlsx", ".xlsm"]:
-                try:
-                    import zipfile
-                    from app.services.storage import upload_image
-
-                    with zipfile.ZipFile(file_path, 'r') as z:
-                        media_files = [f for f in z.namelist() if f.startswith('xl/media/')]
-                        for idx, media_name in enumerate(media_files[:5], start=1):
-                            img_bytes = z.read(media_name)
-                            img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
-                            if img_ext in ["png", "jpg", "jpeg", "webp"]:
-                                fname = f"excel_img_{idx}_{os.path.basename(media_name)}"
-                                upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
-                                img_url = upload_res.get("image_url")
-                                if img_url and pages:
-                                    clean_img_title = os.path.splitext(os.path.basename(file_path))[0]
-                                    pages[0]["text"] = f"![{clean_img_title}]({img_url})\n\n" + pages[0]["text"]
-                                    pages[0]["image_url"] = img_url
-                                    logger.info(f"🖼️ Extracted and uploaded embedded Excel image '{media_name}' to MinIO -> {img_url}")
-                                    break
-                except Exception as img_err:
-                    logger.debug(f"Excel embedded image extraction skipped: {img_err}")
+            if extracted_image_urls and pages:
+                clean_img_title = os.path.splitext(os.path.basename(file_path))[0]
+                img_md_block = "\n".join([f"![{clean_img_title} Image {i+1}]({u})" for i, u in enumerate(extracted_image_urls)])
+                if not any(u in pages[0]["text"] for u in extracted_image_urls):
+                    pages[0]["text"] = f"{img_md_block}\n\n" + pages[0]["text"]
+                pages[0]["image_urls"] = extracted_image_urls
+                pages[0]["image_url"] = extracted_image_urls[0]
 
             return ParseResult(pages=pages, method="fast")
         except Exception as e:
@@ -296,6 +363,7 @@ class DocumentParser:
 
             for slide_idx, slide in enumerate(prs.slides, start=1):
                 slide_texts = []
+                slide_image_urls = []
                 slide_title = f"Slide {slide_idx}"
 
                 # Extract title if present
@@ -327,6 +395,22 @@ class DocumentParser:
                                 table_rows.insert(1, delimiter)
                             slide_texts.append("\n".join(table_rows))
 
+                    # Extract embedded images in shapes
+                    elif hasattr(shape, "image"):
+                        try:
+                            from app.services.storage import upload_image
+                            img_obj = shape.image
+                            img_bytes = img_obj.blob
+                            img_ext = img_obj.ext
+                            fname = f"pptx_s{slide_idx}_img.{img_ext}"
+                            upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
+                            img_url = upload_res.get("image_url")
+                            if img_url:
+                                slide_image_urls.append(img_url)
+                                slide_texts.append(f"![{slide_title} Image]({img_url})")
+                        except Exception as shape_img_err:
+                            logger.debug(f"PPTX slide image shape extraction skipped: {shape_img_err}")
+
                 # Extract speaker notes if any
                 if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
                     notes = slide.notes_slide.notes_text_frame.text.strip()
@@ -337,32 +421,43 @@ class DocumentParser:
                     full_slide_content = f"### Slide {slide_idx}: {slide_title}\n\n" + "\n".join(slide_texts)
                     pages.append({
                         "page": slide_idx,
-                        "text": full_slide_content
+                        "text": full_slide_content,
+                        "image_urls": slide_image_urls,
+                        "image_url": slide_image_urls[0] if slide_image_urls else None
                     })
 
             if not pages:
                 pages = [{"page": 1, "text": "Presentasi PowerPoint kosong."}]
 
-            # Extract embedded images from .pptx media parts and upload to MinIO
+            # Extract embedded images from .pptx media parts zip fallback
             try:
                 import zipfile
                 from app.services.storage import upload_image
 
                 with zipfile.ZipFile(file_path, 'r') as z:
                     media_files = [f for f in z.namelist() if f.startswith('ppt/media/')]
-                    for idx, media_name in enumerate(media_files[:5], start=1):
+                    extracted_image_urls = []
+                    for idx, media_name in enumerate(media_files, start=1):
                         img_bytes = z.read(media_name)
                         img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
                         if img_ext in ["png", "jpg", "jpeg", "webp"]:
                             fname = f"pptx_img_{idx}_{os.path.basename(media_name)}"
                             upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
                             img_url = upload_res.get("image_url")
-                            if img_url and pages:
-                                clean_img_title = os.path.splitext(os.path.basename(file_path))[0]
-                                pages[0]["text"] = f"![{clean_img_title}]({img_url})\n\n" + pages[0]["text"]
-                                pages[0]["image_url"] = img_url
-                                logger.info(f"🖼️ Extracted and uploaded embedded PPTX image '{media_name}' to MinIO -> {img_url}")
-                                break
+                            if img_url:
+                                extracted_image_urls.append(img_url)
+                                logger.info(f"🖼️ Extracted and uploaded embedded PPTX image #{idx} '{media_name}' to MinIO -> {img_url}")
+                    
+                    if extracted_image_urls and pages:
+                        clean_img_title = os.path.splitext(os.path.basename(file_path))[0]
+                        img_md_block = "\n".join([f"![{clean_img_title} Image {i+1}]({u})" for i, u in enumerate(extracted_image_urls)])
+                        if not any(u in pages[0]["text"] for u in extracted_image_urls):
+                            pages[0]["text"] = f"{img_md_block}\n\n" + pages[0]["text"]
+                        
+                        existing_urls = pages[0].get("image_urls", [])
+                        combined_urls = list(dict.fromkeys(existing_urls + extracted_image_urls))
+                        pages[0]["image_urls"] = combined_urls
+                        pages[0]["image_url"] = combined_urls[0]
             except Exception as img_err:
                 logger.debug(f"PPTX embedded image extraction skipped: {img_err}")
 
@@ -622,6 +717,7 @@ class DocumentParser:
             page_data = {
                 "page": 1,
                 "text": extracted_text,
+                "image_urls": [image_url] if image_url else [],
                 "image_url": image_url,
                 "s3_key": s3_key,
                 "storage_key": s3_key,

@@ -351,6 +351,57 @@ def align_chunks_with_multitreatment(
         if doc_type:
             chunk_meta["document_type"] = doc_type
 
+    # Aggregate entity-level metadata (SKU, Price, Promo dates, Image URL) per entity across all chunks
+    entity_props = {}
+    for chunk in chunks:
+        if not isinstance(chunk, dict) or not chunk.get("metadata"):
+            continue
+        m = chunk["metadata"]
+        ent = m.get("entity") or m.get("product_name")
+        if not ent or ent == doc_title:
+            continue
+        if ent not in entity_props:
+            entity_props[ent] = {
+                "sku": None,
+                "price": None,
+                "valid_from": None,
+                "valid_until": None,
+                "image_url": None
+            }
+        p = entity_props[ent]
+        if m.get("sku") and not p["sku"]:
+            p["sku"] = m["sku"]
+        if m.get("price") and not p["price"]:
+            p["price"] = m["price"]
+        if m.get("valid_from") and not p["valid_from"]:
+            p["valid_from"] = m["valid_from"]
+        if m.get("valid_until") and not p["valid_until"]:
+            p["valid_until"] = m["valid_until"]
+        if m.get("image_url") and not p["image_url"]:
+            p["image_url"] = m["image_url"]
+
+    # Propagate aggregated entity metadata across ALL sub-chunks belonging to that product/treatment
+    for chunk in chunks:
+        if not isinstance(chunk, dict) or not chunk.get("metadata"):
+            continue
+        m = chunk["metadata"]
+        ent = m.get("entity") or m.get("product_name")
+        if ent and ent in entity_props:
+            p = entity_props[ent]
+            m["entity"] = ent
+            m["product_name"] = ent
+            m["treatment_name"] = ent
+            if p["sku"] and not m.get("sku"):
+                m["sku"] = p["sku"]
+            if p["price"] and not m.get("price"):
+                m["price"] = p["price"]
+            if p["valid_from"] and not m.get("valid_from"):
+                m["valid_from"] = p["valid_from"]
+            if p["valid_until"] and not m.get("valid_until"):
+                m["valid_until"] = p["valid_until"]
+            if p["image_url"] and not m.get("image_url"):
+                m["image_url"] = p["image_url"]
+
     return chunks
 
 
@@ -692,39 +743,63 @@ async def process_ingestion_background(
                     {user_instruction_block}
 
                     FLEXIBLE & COMPREHENSIVE STRUCTURING GUIDELINES:
-                    1. **Adaptive Structure for Any Document Type**:
+                    1. **STRICT FACTUAL INTEGRITY & ZERO HALLUCINATION DIRECTIVE (CRITICAL)**:
+                       - ALL descriptions, numbers, prices, SKUs, ingredients, durations, downtimes, and statements MUST be strictly derived from the extracted file text.
+                       - You are STRICTLY FORBIDDEN from inventing, hallucinating, estimating, or altering any numbers, percentages, figures, prices, SKU codes, or technical specifications that do NOT explicitly exist in the uploaded file text.
+                       - If a specific price, SKU, or ingredient is not mentioned in the source file, DO NOT make one up. Omit that specific field entirely.
+                       - Retain exact numbers, units (e.g. 100 g, 30 ml, 415 nm, Rp 150.000), percentages, and dates verbatim as written in the source document.
+                    2. **Adaptive Structure for Any Document Type**:
                        - Documents can be of ANY nature (e.g. Skincare/Cosmetics, Treatment Protocols, SOP / Clinic Guidelines, Promotional/Discounts/Flyer, Training Slides / Presentations, Research / Clinical Literature, Price Lists, FAQ, Device/Equipment Guides, etc.).
                        - Dynamically structure the Markdown using clear hierarchical headers (`# [Document Title]`, `## Section`, `### Subsection`), bold key terms (`**`), structured bullet points (`-`), and crisp Markdown tables (`| Col 1 | Col 2 |`) tailored to the document's actual topic.
-                    2. **100% Content & Information Preservation**:
+                    3. **100% Content & Information Preservation**:
                        - ALL key points, steps, promo terms, specifications, numbers, ingredients/substances, parameters, tables, questions/answers, and details present in the raw text MUST be fully retained and organized.
                        - DO NOT omit, over-condense, or skip substantive sections. Ensure all factual information from the uploaded file is thoroughly represented.
-                    3. **Promotional Period Extraction (For Promo/Flyer Documents)**:
+                    4. **Promotional Period Extraction (For Promo/Flyer Documents)**:
                        - If this document contains promotional programs, discounts, flash sales, or vouchers with validity dates, extract the start date (`valid_from`) and end date (`valid_until`) in strict `YYYY-MM-DD` format (e.g. "2026-08-01", "2026-08-31").
                        - If no expiration date exists or if it is a general document, set `valid_from` and `valid_until` to null.
                        - Set `document_type` to `"PROMOTIONAL"` for promotional flyers/discounts, `"PRODUCT"` for product catalog, `"TREATMENT"` for clinic treatments, `"SOP"` for SOP guidelines, or `"GENERAL"` otherwise.
-                    4. **Professional Markdown Formatting**:
+                    5. **Professional Markdown Formatting**:
                        - Fix any OCR noise, broken line breaks, or formatting typos while preserving 100% factual accuracy.
                        - Start directly with `# [Document Title]`. Do NOT add meta introductions like "Here is the summary".
-                    5. **Zero Redundancy & Clean Natural Phrasing (STRICT)**:
+                    6. **Zero Redundancy & Clean Natural Phrasing (STRICT)**:
                         - Do NOT duplicate tables, bullet points, or identical sentences across different sections.
                         - Maintain concise, clean, and distinct sections without circular phrasing.
                         - Write in fluent, natural, and precise language suitable for clinical doctors and functional administrators, ensuring sentences are cohesive and well-connected.
                         - For individual product documents, prioritize a clear `## Product Overview`, a fluent 1-paragraph `## Deskripsi & Fungsi Produk` (which summarizes what the product is, intended skin types, key benefits, and usage context in one cohesive narrative), and `## Active Ingredients`.
-                    6. **Dynamic Fields & Single SKU Identifier**:
+                    7. **Dynamic Fields & Single SKU Identifier**:
                        - If a product or document has a SKU, place `- **SKU**: [Kode SKU]` directly below Brand or Product Name.
                        - NEVER spill/write empty placeholders (e.g. do NOT write 'SKU: None', 'Product ID: N/A', or 'Not visible'). If any information is absent, omit that field completely.
+                       - If the source data contains `nan`, `NaN`, `None`, `null`, `-`, `N/A`, or empty cells: DO NOT write these values. Completely omit the field/bullet point/row. For example, if Active Ingredients is `nan`, do NOT write `- nan`. Simply omit the entire `### Active Ingredients` section.
                     7. **DO NOT Include Category Sections in Markdown Body**:
                        - Categories belong ONLY in the `suggested_categories` JSON field, as the user interface already displays and manages categories separately via UI badge tags.
-                    8. **Multi-Product / Catalog Document Structuring (CRITICAL)**:
-                       - If the document contains MULTIPLE products (e.g. Spot Gel AND Pressed Powder, or a full product series):
-                         - Give the document a collective title in `# [Title]` (e.g. `# Katalog ERHA Acneact Series` or `# Rangkaian Produk ERHA Acneact`).
-                         - Separate EACH individual product into its own distinct `## [Product Name]` section (e.g. `## ERHA Acneact Acne Spot Gel`, `## ERHA Acneact Acne Pressed Powder`).
-                         - Under each product section, provide:
-                           - `### Product Overview` with its specific `- **Product Name**`, `- **Brand**`, `- **Variant**`, `- **Product Type**`, `- **Intended Skin Types**`, `- **Net Content**`, `- **Harga**`, `- **SKU**`.
-                           - `### Deskripsi & Fungsi Produk` (Clear 1-paragraph narrative).
-                           - `### Active Ingredients` & `### Cara Penggunaan` (if present).
-                         - NEVER duplicate product titles consecutively (e.g. do NOT output `ERHA Acneact Acne Spot Gel\n\nERHA Acneact Acne Spot Gel`).
-                         - Keep each product's SKU, price, and specifications completely distinct and strictly local to that product.
+                    8. **Multi-Product / Catalog Document Structuring & Product Image Placement (STRICT REQUIREMENT)**:
+                       - If the document contains MULTIPLE products (e.g. Facial Wash AND Moisturizer, or an Excel product catalog with product photos):
+                         - Give the document a collective title in `# [Title]` (e.g. `# Katalog ERHA Acneact Series`).
+                         - Separate EACH individual product into its own distinct `## [Product Name]` section (e.g. `## ERHA Acneact Witch Hazel & BHA Gentle Acne Facial Wash 100G`).
+                         - IMMEDIATELY BELOW each `## [Product Name]` header, embed ONLY its specific product photo markdown `![Product Name](image_url)`.
+                         - Direct mandatory layout for each product:
+                           ```markdown
+                           ## [Product Name]
+                           ![Product Name](image_url)
+
+                           ### Product Overview
+                           - **Product Name**: ...
+                           - **Brand**: ...
+                           - **Variant**: ...
+                           - **Product Type**: ...
+                           - **Intended Skin Types**: ...
+                           - **Net Content**: ...
+                           - **Harga**: ...
+                           - **SKU**: ...
+
+                           ### Deskripsi & Fungsi Produk
+                           [Single fluent narrative paragraph detailing this specific product...]
+
+                           ### Active Ingredients
+                           - ...
+                           ```
+                         - NEVER group or dump all product images together at the top of the document. Every image MUST be placed strictly inside its own corresponding `## [Product Name]` section right above its overview and description.
+                         - Keep each product's image, SKU, price, and specifications completely local to that product section.
                          - Recommend ALL relevant categories in `suggested_categories` covering all products in the document.
                     9. **Multi-Treatment / Clinic Protocol Structuring (CRITICAL)**:
                        - If the document contains CLINICAL TREATMENTS, AESTHETIC PROCEDURES, or MULTI-TREATMENT PROTOCOLS (e.g. Acne Intensive Program, Acne Peel Therapy, Blue Light Therapy, Deep Acne Extraction, Microneedling, Facial):
@@ -745,7 +820,10 @@ async def process_ingestion_background(
                          - Format ALL procedure tables with clean Markdown pipes `| Parameter | Keterangan |\n| :--- | :--- |`.
                          - Set `document_type` to `"TREATMENT"`.
                          - Recommend ALL relevant categories in `suggested_categories` (e.g. `Acne Care`, `Scar Treatment`).
-                    10. **Clean, Compact Markdown Formatting (Zero Messiness & Zero Data Loss)**:
+                    10. **Treatment Before-After Photos & Visual Assets (CRITICAL)**:
+                       - If the document contains Before-After clinical treatment photos, clinical trial results, or procedure photos:
+                         - Embed each Before-After image markdown `![Foto Before After - Treatment Name](image_url)` directly inside that treatment's section under `### Hasil & Foto Before-After Treatment`.
+                    11. **Clean, Compact Markdown Formatting (Zero Messiness & Zero Data Loss)**:
                        - NEVER output loose scattered lines or double blank lines between bullet items. Every list must be tightly formatted with standard `- `.
                        - Convert all unformatted tab-separated text into standard Markdown tables.
                        - 100% preservation of all details: retain EVERY treatment, duration, downtime, session count, interval, preparation step, procedure step, aftercare rule, side effect, and ingredient.
@@ -807,6 +885,14 @@ async def process_ingestion_background(
                         "",
                         summary
                     ).strip()
+
+                    # Remove nan/None/N/A values from summary (e.g. "- nan", "- None", "- N/A", "nan")
+                    # Remove bullet lines that are just nan/None/N/A
+                    summary = re.sub(r'^-\s*(?:nan|NaN|None|null|N/?A|-)\s*$', '', summary, flags=re.MULTILINE)
+                    # Remove sections where the only content is nan (e.g. "### Active Ingredients\n- nan")
+                    summary = re.sub(r'###\s+[^\n]+\n\s*-\s*(?:nan|NaN|None|null|N/?A)\s*(?:\n|$)', '', summary, flags=re.IGNORECASE)
+                    # Clean up resulting triple+ newlines
+                    summary = re.sub(r'\n{3,}', '\n\n', summary).strip()
                     
                     text_accuracy = parsed_review.get("text_accuracy", "100%")
                     feedback = parsed_review.get("feedback", feedback)
@@ -835,77 +921,56 @@ async def process_ingestion_background(
             "doctors": ["all"]
         }
 
-        # Align chunks with multi-treatment or multi-product sections
-        enriched_chunks = align_chunks_with_multitreatment(
-            summary=summary,
-            chunks=enriched_chunks,
-            doc_title=recommended_title,
-            doc_type=extracted_doc_type
-        )
-
-        # Inject metadata cleanly into every chunk with granular category priority, dates, and visibility settings
-        cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
-        for chunk in enriched_chunks:
-            if isinstance(chunk, dict):
-                if "metadata" not in chunk:
-                    chunk["metadata"] = {}
-                chunk["metadata"]["knowledge_id"] = knowledge_id
-                chunk["metadata"]["source_file"] = file_name
-                chunk["metadata"]["title"] = recommended_title
-                if not chunk["metadata"].get("product_name"):
-                    chunk["metadata"]["product_name"] = chunk.get("metadata", {}).get("entity") or recommended_title
-                chunk["metadata"]["clinics"] = visibility_settings["clinics"]
-                chunk["metadata"]["doctor_types"] = visibility_settings["doctor_types"]
-                chunk["metadata"]["doctors"] = visibility_settings["doctors"]
-                if extracted_doc_type:
-                    chunk["metadata"]["document_type"] = extracted_doc_type
-                if extracted_valid_from:
-                    chunk["metadata"]["valid_from"] = str(extracted_valid_from).strip()
-                if extracted_valid_until:
-                    chunk["metadata"]["valid_until"] = str(extracted_valid_until).strip()
-                
-                # Chunk-level category priority, falling back to smart content matching or document-level categories
-                chunk_specific_cat = chunk.get("chunk_category")
-                if not chunk_specific_cat and cat_names:
-                    chunk_txt_lower = (chunk.get("text", "") + " " + str(chunk.get("metadata", {}).get("section", ""))).lower()
-                    for cat_candidate in cat_names:
-                        if cat_candidate.lower() in chunk_txt_lower:
-                            chunk_specific_cat = cat_candidate
-                            break
-
-                if chunk_specific_cat:
-                    chunk["metadata"]["category"] = chunk_specific_cat
-                    chunk["metadata"]["categories"] = [chunk_specific_cat] + [c for c in cat_names if c != chunk_specific_cat]
-                elif cat_names:
-                    chunk["metadata"]["category"] = cat_names[0]
-                    chunk["metadata"]["categories"] = cat_names
-                    
-                chunk.pop("chunk_category", None)
-                chunk["metadata"].pop("suggested_categories", None)
-
-        # Preserve image_url, s3_key, storage_key and prepend visual image tag if present
-        doc_image_url = None
+        # Collect ALL document-level image URLs from parser chunks AND from AI summary
+        all_doc_image_urls = []
         doc_s3_key = None
         for c in enriched_chunks:
             if isinstance(c, dict) and c.get("metadata"):
                 m = c["metadata"]
-                if m.get("image_url") and not doc_image_url:
-                    doc_image_url = m["image_url"]
+                if m.get("image_url") and m["image_url"] not in all_doc_image_urls:
+                    all_doc_image_urls.append(m["image_url"])
                 if m.get("s3_key") and not doc_s3_key:
                     doc_s3_key = m["s3_key"]
                 elif m.get("storage_key") and not doc_s3_key:
                     doc_s3_key = m["storage_key"]
 
-        if doc_image_url:
-            if doc_image_url not in summary:
-                summary = f"![{recommended_title}]({doc_image_url})\n\n{summary}"
-            if enriched_chunks and isinstance(enriched_chunks[0], dict):
-                if doc_image_url not in enriched_chunks[0].get("text", ""):
-                    enriched_chunks[0]["text"] = f"![{recommended_title}]({doc_image_url})\n\n{enriched_chunks[0].get('text', '')}"
-                enriched_chunks[0]["metadata"]["image_url"] = doc_image_url
-                if doc_s3_key:
-                    enriched_chunks[0]["metadata"]["s3_key"] = doc_s3_key
-                    enriched_chunks[0]["metadata"]["storage_key"] = doc_s3_key
+        # Also extract image URLs embedded in AI summary (covers ALL products)
+        if summary:
+            import re as _re
+            for url in _re.findall(r'!\[.*?\]\((https?://[^\s\)]+)\)', summary):
+                if url and url not in all_doc_image_urls:
+                    all_doc_image_urls.append(url)
+
+        # Inject image URLs into summary if not already present (for dashboard display)
+        if all_doc_image_urls:
+            if not any(u in summary for u in all_doc_image_urls):
+                img_header_block = "\n".join([f"![{recommended_title} Image {i+1}]({u})" for i, u in enumerate(all_doc_image_urls)])
+                summary = f"{img_header_block}\n\n{summary}"
+
+        # Category names for chunk metadata
+        cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
+
+        # Structure-aware chunking from AI summary (replaces raw parser chunks)
+        # chunk_summary_markdown splits by ## headings, extracts contextual image_url/sku/price per chunk
+        if summary and summary.strip():
+            try:
+                from app.rag.utils.summary_chunker import chunk_summary_markdown
+                enriched_chunks = chunk_summary_markdown(
+                    summary=summary,
+                    source_file=file_name,
+                    knowledge_id=knowledge_id,
+                    batch_id=batch_id,
+                    file_hash=file_hash,
+                    title=recommended_title,
+                    doc_type=extracted_doc_type or "GENERAL",
+                    categories=cat_names,
+                    valid_from=str(extracted_valid_from).strip() if extracted_valid_from else None,
+                    valid_until=str(extracted_valid_until).strip() if extracted_valid_until else None,
+                    visibility_settings=visibility_settings,
+                )
+                logger.info(f"Structure-aware chunking produced {len(enriched_chunks)} chunks from summary.")
+            except Exception as rechunk_err:
+                logger.warning(f"Summary structure-aware chunking failed, keeping parser chunks: {rechunk_err}")
 
         history_list = []
         if user_prompt and str(user_prompt).strip():
@@ -925,10 +990,8 @@ async def process_ingestion_background(
             "title": recommended_title,
             "status": "On review",
             "document_type": extracted_doc_type,
-            "valid_from": extracted_valid_from,
-            "valid_until": extracted_valid_until,
             "summary": summary,
-            "image_url": doc_image_url,
+            "image_urls": all_doc_image_urls,
             "text_accuracy": text_accuracy,
             "feedback": feedback,
             "batch_summary": None,
@@ -1006,18 +1069,9 @@ async def process_ingestion_background(
         with open(pending_file_path, 'w', encoding='utf-8') as f:
             json.dump(staged_document, f, indent=4, ensure_ascii=False)
 
-        # If this document is part of a multi-file batch, synthesize/update a unified Batch Executive Summary
-        if batch_id and llm:
-            try:
-                b_summary = await synthesize_batch_executive_summary(batch_id, llm, user_prompt=user_prompt)
-                if b_summary:
-                    staged_document["batch_summary"] = b_summary
-            except Exception as batch_summary_err:
-                logger.warning(f"Could not synthesize batch summary: {batch_summary_err}")
-
         logger.info(
             f"\n"
-            f"⏱️ [INGESTION TIMING] File: '{file_name}' (ID: {knowledge_id})\n"
+            f"⏱️ [SINGLE FILE INGESTION TIMING] File: '{file_name}' (ID: {knowledge_id})\n"
             f"  - Parsing Stage        : {timing_metrics['parsing_ms']} ms\n"
             f"  - LLM Review Stage     : {timing_metrics['llm_review_ms']} ms\n"
             f"  - DB Staging Stage     : {timing_metrics['database_insert_ms']} ms\n"
@@ -1026,6 +1080,46 @@ async def process_ingestion_background(
 
     except Exception as e:
         logger.error(f"Failed background processing for document: {e}")
+
+async def trigger_batch_summary_after_all_done(batch_id: str, expected_count: int, llm: BaseLLMAdapter, user_prompt: Optional[str] = None, timeout_sec: int = 180):
+    """
+    Coordinator task that waits until all documents in a multi-file batch finish Parsing & LLM Review,
+    then triggers synthesize_batch_executive_summary EXACTLY ONCE for the entire batch.
+    """
+    import time as _time
+    t0 = _time.time()
+    logger.info(f"🚀 [BATCH COORDINATOR] Monitoring Batch '{batch_id}' ({expected_count} files)...")
+
+    while _time.time() - t0 < timeout_sec:
+        completed_count = 0
+        dirs_to_check = ["data/pending", "data/output"]
+        for d in dirs_to_check:
+            if os.path.exists(d):
+                for f in os.listdir(d):
+                    if f.endswith(".json") and f != "bm25_index.pkl":
+                        try:
+                            with open(os.path.join(d, f), "r", encoding="utf-8") as fj:
+                                data = json.load(fj)
+                            if isinstance(data, dict) and data.get("batch_id") == batch_id:
+                                if data.get("summary") and data.get("status") in ["On review", "PENDING", "APPROVED"]:
+                                    completed_count += 1
+                        except Exception:
+                            pass
+        if completed_count >= expected_count:
+            break
+        await asyncio.sleep(1.5)
+
+    t0_batch = _time.time()
+    try:
+        b_summary = await synthesize_batch_executive_summary(batch_id, llm, user_prompt=user_prompt)
+        batch_duration_ms = int((_time.time() - t0_batch) * 1000)
+        logger.info(
+            f"\n"
+            f"⏱️ [BATCH EXECUTIVE SUMMARY TIMING] Batch ID: '{batch_id}' ({expected_count} files)\n"
+            f"  - Unified Batch Summary Stage : {batch_duration_ms} ms (Executed 1x for full batch)\n"
+        )
+    except Exception as err:
+        logger.warning(f"Could not trigger unified batch summary for {batch_id}: {err}")
 
 async def synthesize_batch_executive_summary(batch_id: str, llm: BaseLLMAdapter, user_prompt: Optional[str] = None) -> Optional[str]:
     """
@@ -1390,6 +1484,12 @@ async def ingest_document(
                 "duplicate_status": "PENDING_REPLACED" if (dup_status == "PENDING" and replace_existing) else "NEW",
                 "status": status_display
             })
+
+        # Spawn batch coordinator task if multi-file batch upload
+        if batch_id and len(response_items) > 1 and llm:
+            asyncio.create_task(
+                trigger_batch_summary_after_all_done(batch_id, len(response_items), llm, user_prompt=prompt)
+            )
 
         return {
             "status": "success",
@@ -2037,31 +2137,22 @@ async def edit_approved_document(
             "doctors": ["all"]
         })
 
-        primary_cat = updated_categories[0] if updated_categories else None
-        for chunk in updated_chunks:
-            if isinstance(chunk, dict):
-                if "metadata" not in chunk:
-                    chunk["metadata"] = {}
-                chunk["metadata"]["knowledge_id"] = knowledge_id
-                chunk["metadata"]["source_file"] = updated_title
-                chunk["metadata"]["title"] = updated_title
-                chunk["metadata"]["product_name"] = updated_title
-                if primary_cat:
-                    chunk["metadata"]["category"] = primary_cat
-                if updated_categories:
-                    chunk["metadata"]["categories"] = updated_categories
-                if updated_summary:
-                    chunk["metadata"]["summary"] = updated_summary
-                if updated_doc_type:
-                    chunk["metadata"]["document_type"] = updated_doc_type
-                if updated_valid_from:
-                    chunk["metadata"]["valid_from"] = str(updated_valid_from).strip()
-                if updated_valid_until:
-                    chunk["metadata"]["valid_until"] = str(updated_valid_until).strip()
-                if vis_settings:
-                    chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
-                    chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
-                    chunk["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
+        if updated_summary and updated_summary.strip():
+            try:
+                from app.rag.utils.summary_chunker import chunk_summary_markdown
+                updated_chunks = chunk_summary_markdown(
+                    summary=updated_summary,
+                    source_file=existing_doc.get("file_name", updated_title),
+                    knowledge_id=knowledge_id,
+                    batch_id=existing_doc.get("batch_id"),
+                    file_hash=existing_doc.get("file_hash", ""),
+                    title=updated_title,
+                    doc_type=updated_doc_type or "GENERAL",
+                    categories=updated_categories,
+                    visibility_settings=vis_settings,
+                )
+            except Exception as rechunk_err:
+                logger.warning(f"Update approved re-chunking failed: {rechunk_err}")
 
         approved_doc_structure = {
             "knowledge_id": knowledge_id,
@@ -2161,30 +2252,24 @@ async def edit_pending_document(
         })
         existing_doc["visibility_settings"] = vis_settings
 
-        updated_chunks = existing_doc.get("chunks", existing_doc.get("corrected_chunks", existing_doc.get("raw_chunks", [])))
-        primary_cat = updated_categories[0] if updated_categories else None
         str_categories = [c["name"] if isinstance(c, dict) else c for c in normalized_categories]
-        
-        for chunk in updated_chunks:
-            if isinstance(chunk, dict):
-                if "metadata" not in chunk:
-                    chunk["metadata"] = {}
-                if str_categories:
-                    chunk["metadata"]["categories"] = str_categories
-                if primary_cat:
-                    chunk["metadata"]["category"] = primary_cat["name"] if isinstance(primary_cat, dict) else primary_cat
-                if updated_summary:
-                    chunk["metadata"]["summary"] = updated_summary
-                if updated_doc_type:
-                    chunk["metadata"]["document_type"] = updated_doc_type
-                if updated_valid_from:
-                    chunk["metadata"]["valid_from"] = str(updated_valid_from).strip()
-                if updated_valid_until:
-                    chunk["metadata"]["valid_until"] = str(updated_valid_until).strip()
-                if vis_settings:
-                    chunk["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
-                    chunk["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
-                    chunk["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
+        if updated_summary and updated_summary.strip():
+            try:
+                from app.rag.utils.summary_chunker import chunk_summary_markdown
+                updated_chunks = chunk_summary_markdown(
+                    summary=updated_summary,
+                    source_file=existing_doc.get("file_name", updated_title),
+                    knowledge_id=knowledge_id,
+                    batch_id=existing_doc.get("batch_id"),
+                    file_hash=existing_doc.get("file_hash", ""),
+                    title=updated_title,
+                    doc_type=updated_doc_type or "GENERAL",
+                    categories=str_categories,
+                    visibility_settings=vis_settings,
+                )
+                existing_doc["chunks"] = updated_chunks
+            except Exception as rechunk_err:
+                logger.warning(f"Update pending re-chunking failed: {rechunk_err}")
 
         with open(pending_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
@@ -2463,44 +2548,9 @@ async def approve_document(
             doc_valid_from = data.get("valid_from") if isinstance(data, dict) else None
             doc_valid_until = data.get("valid_until") if isinstance(data, dict) else None
             
-            for chunk in chunks:
-                if isinstance(chunk, dict):
-                    if "metadata" not in chunk:
-                        chunk["metadata"] = {}
-                    chunk["metadata"]["knowledge_id"] = k_id
-                    chunk["metadata"]["source_file"] = doc_title
-                    chunk["metadata"]["title"] = doc_title
-                    chunk["metadata"]["product_name"] = doc_title
-                    if doc_type:
-                        chunk["metadata"]["document_type"] = doc_type
-                    if doc_valid_from:
-                        chunk["metadata"]["valid_from"] = str(doc_valid_from).strip()
-                    if doc_valid_until:
-                        chunk["metadata"]["valid_until"] = str(doc_valid_until).strip()
-                    
-                    # Ensure categories are preserved
-                    cats = data.get("suggested_categories", data.get("categories", []))
-                    str_cats = [c["name"] if isinstance(c, dict) else c for c in cats]
-                    if str_cats:
-                        chunk["metadata"]["categories"] = str_cats
-                    if "summary" not in chunk["metadata"] and "summary" in data:
-                        chunk["metadata"]["summary"] = data.get("summary")
-                    if data.get("image_url") and "image_url" not in chunk["metadata"]:
-                        chunk["metadata"]["image_url"] = data.get("image_url")
-                    if data.get("sku") and "sku" not in chunk["metadata"]:
-                        chunk["metadata"]["sku"] = data.get("sku")
-                    
-            if pipeline.vector_store:
-                logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
-                pipeline.vector_store.insert_chunks(chunks)
-            else:
-                logger.warning("No vector store instance available for indexing.")
-                
-            if bm25:
-                logger.info(f"Indexing chunks for knowledge_id {k_id} into BM25 index...")
-                bm25.add_chunks(chunks)
-                bm25.save(settings.bm25_index_path)
-                
+            # Re-chunk from the LATEST summary (admin may have refined it)
+            # This ensures chunks always match the approved summary content
+            approve_summary = data.get("summary", "") if isinstance(data, dict) else ""
             raw_cats = data.get("categories") or data.get("suggested_categories") or []
             parsed_cats = []
             if isinstance(raw_cats, list):
@@ -2516,6 +2566,37 @@ async def approve_document(
                 "doctors": ["all"]
             }
 
+            if approve_summary and approve_summary.strip():
+                try:
+                    from app.rag.utils.summary_chunker import chunk_summary_markdown
+                    chunks = chunk_summary_markdown(
+                        summary=approve_summary,
+                        source_file=file_name,
+                        knowledge_id=k_id,
+                        batch_id=data.get("batch_id") if isinstance(data, dict) else None,
+                        file_hash=data.get("file_hash", "") if isinstance(data, dict) else "",
+                        title=doc_title,
+                        doc_type=doc_type or "GENERAL",
+                        categories=parsed_cats,
+                        valid_from=str(doc_valid_from).strip() if doc_valid_from else None,
+                        valid_until=str(doc_valid_until).strip() if doc_valid_until else None,
+                        visibility_settings=vis_settings,
+                    )
+                    logger.info(f"Approve: re-chunked summary into {len(chunks)} structure-aware chunks for indexing.")
+                except Exception as rechunk_err:
+                    logger.warning(f"Approve: re-chunking failed, using existing chunks: {rechunk_err}")
+
+            if pipeline.vector_store:
+                logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
+                pipeline.vector_store.insert_chunks(chunks)
+            else:
+                logger.warning("No vector store instance available for indexing.")
+                
+            if bm25:
+                logger.info(f"Indexing chunks for knowledge_id {k_id} into BM25 index...")
+                bm25.add_chunks(chunks)
+                bm25.save(settings.bm25_index_path)
+
             os.makedirs("data/output", exist_ok=True)
             approved_file = os.path.join("data/output", f"{k_id}.json")
             staging_hist = data.get("history", []) if isinstance(data, dict) else []
@@ -2529,10 +2610,8 @@ async def approve_document(
                 "title": doc_title,
                 "status": "Approved",
                 "document_type": doc_type,
-                "valid_from": doc_valid_from,
-                "valid_until": doc_valid_until,
-                "summary": data.get("summary", "") if isinstance(data, dict) else "",
-                "image_url": data.get("image_url") if isinstance(data, dict) else None,
+                "summary": approve_summary,
+                "image_urls": data.get("image_urls", []) if isinstance(data, dict) else [],
                 "batch_summary": data.get("batch_summary") if isinstance(data, dict) else None,
                 "initial_prompt": initial_prompt_val,
                 "staging_history": staging_hist,
