@@ -171,17 +171,6 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					<h1 className="text-base font-semibold text-zinc-900">Batch Review Session</h1>
 				</div>
 				<div className="flex items-center gap-2">
-					{hasWriteAccess && hasPendingDocs && (
-						<Button
-							variant="default"
-							className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
-							disabled={isLoading || approveBatchMutation.isPending}
-							onClick={() => setIsApproveAllOpen(true)}
-						>
-							<RiCheckLine className="size-4" />
-							Approve All
-						</Button>
-					)}
 					{hasDeleteAccess && activeDoc?.status === "APPROVED" && (
 						<Button
 							variant="outline"
@@ -202,6 +191,17 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						>
 							{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
 							{isEditMode ? "Save" : "Edit Knowledge"}
+						</Button>
+					)}
+					{hasWriteAccess && hasPendingDocs && (
+						<Button
+							variant="default"
+							className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+							disabled={isLoading || approveBatchMutation.isPending}
+							onClick={() => setIsApproveAllOpen(true)}
+						>
+							<RiCheckLine className="size-4" />
+							Approve All
 						</Button>
 					)}
 				</div>
