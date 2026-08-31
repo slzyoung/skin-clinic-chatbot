@@ -84,8 +84,8 @@ function IngestContent() {
 		}
 
 		const formData = new FormData();
-		if (value) {
-			formData.append("prompt", value);
+		if (value && value.trim()) {
+			formData.append("prompt", value.trim());
 		}
 
 		const isValidProject = selectedProjectId !== "none" && projects.some((p) => p.id === selectedProjectId);

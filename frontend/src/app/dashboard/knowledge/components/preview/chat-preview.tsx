@@ -113,6 +113,9 @@ export function ChatPreview({
 	const sendGeneralMsg = useSendGeneralChatMessage(mode === "general" ? sessionId : null);
 
 	const [userChatMessages, setUserChatMessages] = useState<Message[]>(() => {
+		if (knowledgeStatus === "APPROVED" && !isEditMode) {
+			return [];
+		}
 		// If Knowledge document has saved chat history in DB metadata, load it
 		const meta = knowledge?.metadata as Record<string, unknown> | undefined;
 		const savedHistory = (meta?.history || meta?.chat_history) as
@@ -134,7 +137,9 @@ export function ChatPreview({
 				| Array<{ role: "user" | "assistant"; content: string }>
 				| undefined;
 			const timer = setTimeout(() => {
-				if (Array.isArray(savedHistory) && savedHistory.length > 0) {
+				if (knowledgeStatus === "APPROVED" && !isEditMode) {
+					setUserChatMessages([]);
+				} else if (Array.isArray(savedHistory) && savedHistory.length > 0) {
 					setUserChatMessages(
 						savedHistory.map((m) => ({
 							role: m.role,
@@ -147,7 +152,7 @@ export function ChatPreview({
 			}, 0);
 			return () => clearTimeout(timer);
 		}
-	}, [mode, knowledgeId, knowledge?.id, knowledge?.metadata]);
+	}, [mode, knowledgeId, knowledge?.id, knowledge?.metadata, knowledgeStatus, isEditMode]);
 
 	const sessionMessages = generalSession?.messages;
 	const dbMessages: Message[] = useMemo(() => {
@@ -331,9 +336,13 @@ export function ChatPreview({
 			: null;
 
 	const messages: Message[] = [];
+	const hasInitialInHistory = userChatMessages.some(
+		(m, idx) => idx <= 1 && m.role === "assistant" && m.content === aiSummary,
+	);
+
 	if (
 		initialSummaryMessage &&
-		userChatMessages.length === 0 &&
+		!hasInitialInHistory &&
 		(!sessionId || mode !== "general")
 	) {
 		messages.push(initialSummaryMessage);
