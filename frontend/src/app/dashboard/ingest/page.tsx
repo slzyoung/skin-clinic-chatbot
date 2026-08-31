@@ -8,14 +8,9 @@ import {
 	RiGitRepositoryLine,
 	RiGitMergeLine,
 } from "@remixicon/react";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect, useMemo, Suspense } from "react";
 import { useUploadKnowledge, useIngestionQuota, useCreateGeneralChatSession } from "../knowledge/hooks/use-knowledge";
@@ -228,23 +223,48 @@ function IngestContent() {
 
 				{/* Mode Switch & Controls below prompt input */}
 				<div className="w-full flex flex-wrap items-center justify-between gap-3 mt-3 px-0.5">
-					{/* Toggle Switch */}
-					<div className="flex items-center gap-2">
+					{/* Toggle Switch: Ingest [Switch] Prompting */}
+					<div className="flex items-center gap-2.5">
+						<button
+							type="button"
+							onClick={() => {
+								if (!uploadMutation.isPending) {
+									setMode("ingest");
+									setErrorMsg(null);
+								}
+							}}
+							className={cn(
+								"text-sm cursor-pointer select-none transition-colors",
+								!isGeneralMode ? "font-medium text-zinc-900" : "text-zinc-500 hover:text-zinc-800"
+							)}
+						>
+							Ingest
+						</button>
 						<Switch
-							id="general-mode-toggle"
+							id="ingest-mode-toggle"
 							checked={isGeneralMode}
 							onCheckedChange={(checked) => {
 								setMode(checked ? "general" : "ingest");
 								setErrorMsg(null);
 							}}
 							disabled={uploadMutation.isPending}
+							className="data-checked:bg-blue-500 data-[state=checked]:bg-blue-500 cursor-pointer"
 						/>
-						<label
-							htmlFor="general-mode-toggle"
-							className="text-xs font-medium text-zinc-700 cursor-pointer select-none"
+						<button
+							type="button"
+							onClick={() => {
+								if (!uploadMutation.isPending) {
+									setMode("general");
+									setErrorMsg(null);
+								}
+							}}
+							className={cn(
+								"text-sm cursor-pointer select-none transition-colors",
+								isGeneralMode ? "font-medium text-zinc-900" : "text-zinc-500 hover:text-zinc-800"
+							)}
 						>
-							{isGeneralMode ? "General Assistant Mode" : "File Ingestion Mode"}
-						</label>
+							Prompting
+						</button>
 					</div>
 
 					{/* Right Side: Project selector only when navigated from Project detail page, or helper for General */}
