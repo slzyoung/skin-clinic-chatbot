@@ -49,7 +49,7 @@ import {
 import { MarkdownContent } from "@/components/shared/markdown-content";
 import { toast } from "sonner";
 import { CategorySettings } from "./category-settings";
-import { ClassificationSidebar } from "./classification-sidebar";
+import { ApprovalActions } from "./approval-actions";
 import { TitleSettings } from "./title-settings";
 import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
 
@@ -395,6 +395,107 @@ export function ChatPreview({
 		}
 	}
 
+	const renderConfidenceScore = () => {
+		if (!knowledge || mode === "general") return null;
+		const confidence = knowledge.ai_confidence;
+		const isProcessing = knowledgeStatus === "PROCESSING" || knowledge.status === "PROCESSING";
+
+		const numConfidence = confidence !== null && confidence !== undefined ? Number(confidence) : 0;
+		const clampedPercent = Math.min(100, Math.max(0, numConfidence));
+
+		const docTitle =
+			title ||
+			knowledge.title ||
+			(fileName
+				? fileName
+						.replace(/\.[^/.]+$/, "")
+						.replace(/[_-]/g, " ")
+						.replace(/\b\w/g, (c) => c.toUpperCase())
+				: "Knowledge Document");
+
+		const docFileName = fileName || knowledge.file_name || "document.pdf";
+		const ext = docFileName.includes(".")
+			? docFileName.split(".").pop()?.toUpperCase() || "DOC"
+			: "DOC";
+		const { Icon: DocIcon } = getFileIconAndColor(docFileName);
+		const status = (knowledgeStatus || knowledge.status || "PENDING").toUpperCase();
+
+		const renderStatusBadge = () => {
+			switch (status) {
+				case "PENDING":
+					return (
+						<span className="bg-amber-50 text-amber-800 border border-amber-200/80 px-2.5 py-0.5 rounded-md text-xs font-medium">
+							On review
+						</span>
+					);
+				case "APPROVED":
+					return (
+						<span className="bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2.5 py-0.5 rounded-md text-xs font-medium">
+							Approved
+						</span>
+					);
+				case "PROCESSING":
+					return (
+						<span className="bg-blue-50 text-blue-800 border border-blue-200/80 px-2.5 py-0.5 rounded-md text-xs font-medium animate-pulse">
+							Processing
+						</span>
+					);
+				case "REJECTED":
+					return (
+						<span className="bg-red-50 text-red-800 border border-red-200/80 px-2.5 py-0.5 rounded-md text-xs font-medium">
+							Rejected
+						</span>
+					);
+				default:
+					return (
+						<span className="bg-zinc-50 text-zinc-700 border border-zinc-200 px-2.5 py-0.5 rounded-md text-xs font-medium">
+							{status}
+						</span>
+					);
+			}
+		};
+
+		return (
+			<div className="flex flex-col gap-3 mb-6 w-full">
+				{/* Title and Status Row */}
+				<div className="flex items-start justify-between gap-4 w-full">
+					<h2 className="text-base font-semibold text-zinc-900 leading-snug">
+						{docTitle}
+					</h2>
+					<div className="shrink-0">{renderStatusBadge()}</div>
+				</div>
+
+				{/* Document Type with Icon */}
+				<div className="flex items-center gap-1.5 text-zinc-500 text-xs font-medium">
+					<DocIcon className="size-4 text-zinc-400" />
+					<span>{ext}</span>
+				</div>
+
+				{/* Text Accuracy & Progress Bar */}
+				{(confidence !== null && confidence !== undefined || isProcessing) && (
+					<div className="flex flex-col gap-2 w-full mt-1">
+						<div className="flex items-center justify-between text-sm w-full font-medium">
+							<span className="text-zinc-800">Text Accuracy</span>
+							<span className="text-blue-600">
+								{confidence !== null && confidence !== undefined
+									? `${numConfidence}%`
+									: isProcessing
+										? "Calculating..."
+										: "—"}
+							</span>
+						</div>
+						<div className="w-full bg-blue-100/60 h-2 rounded-full overflow-hidden">
+							<div
+								className="bg-blue-600 h-full rounded-full transition-all duration-300"
+								style={{ width: `${clampedPercent}%` }}
+							/>
+						</div>
+					</div>
+				)}
+			</div>
+		);
+	};
+
 	const renderCategoriesBlock = (standalone = false) => {
 		if (mode === "general") return null;
 		const shouldShow =
@@ -425,7 +526,7 @@ export function ChatPreview({
 				)}
 
 				{knowledge && (
-					<ClassificationSidebar
+					<ApprovalActions
 						knowledge={knowledge}
 						pendingCategories={categories}
 						pendingVisibilitySettings={visibilitySettings}
@@ -687,6 +788,7 @@ export function ChatPreview({
 											</div>
 											<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full min-w-0 max-w-full border border-blue-100 flex flex-col gap-3">
 												{headerNode}
+												{renderConfidenceScore()}
 												<p className="text-zinc-500 italic">No summary available.</p>
 											</div>
 										</div>
@@ -856,6 +958,7 @@ export function ChatPreview({
 												{messages[0].role === "assistant" ? (
 													<>
 														{0 === firstAssistantIndex && headerNode}
+														{0 === firstAssistantIndex && renderConfidenceScore()}
 														<MarkdownContent content={messages[0].content} />
 													</>
 												) : (
@@ -931,6 +1034,7 @@ export function ChatPreview({
 													{msg.role === "assistant" ? (
 														<>
 															{actualIndex === firstAssistantIndex && headerNode}
+															{actualIndex === firstAssistantIndex && renderConfidenceScore()}
 															<MarkdownContent content={msg.content} />
 														</>
 													) : (

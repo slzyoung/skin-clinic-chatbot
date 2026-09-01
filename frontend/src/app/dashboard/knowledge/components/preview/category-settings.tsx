@@ -68,14 +68,14 @@ export function CategorySettings({
 				{categories.map((c) => (
 					<div
 						key={c}
-						className="flex items-center gap-1 bg-white border border-zinc-200 px-3 py-1.5 rounded-md text-sm font-medium text-zinc-800 shadow-sm"
+						className="flex items-center gap-1.5 bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-sm font-medium text-zinc-800 shadow-none"
 					>
 						<span>{c}</span>
 						{isEditing && (
 							<button
 								type="button"
 								onClick={() => handleRemoveCategory(c)}
-								className="text-zinc-400 hover:text-zinc-700 transition-colors"
+								className="text-zinc-400 hover:text-zinc-700 transition-colors cursor-pointer"
 							>
 								<RiCloseLine className="size-4" />
 							</button>
@@ -98,10 +98,10 @@ export function CategorySettings({
 								setTimeout(() => setOpen(false), 150);
 							}}
 							placeholder="Type new category..."
-							className="bg-white border-zinc-200 h-9 shadow-sm"
+							className="border-gray-200 bg-white focus-visible:ring-blue-500 shadow-none h-9 rounded-lg"
 						/>
 						{open && (
-							<div className="absolute top-full left-0 mt-1 w-full bg-white border border-zinc-200 rounded-md shadow-md p-1 max-h-60 overflow-y-auto z-50">
+							<div className="absolute top-full left-0 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-none p-1 max-h-60 overflow-y-auto z-50">
 								{filteredCategories.length > 0 ? (
 									<div className="flex flex-col">
 										{filteredCategories.map((cat) => (
@@ -111,7 +111,7 @@ export function CategorySettings({
 													e.preventDefault(); // prevent input blur
 													handleAddCategory(cat.name);
 												}}
-												className="px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-100 cursor-pointer rounded-sm"
+												className="px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-100 cursor-pointer rounded-md"
 											>
 												{cat.name}
 											</div>

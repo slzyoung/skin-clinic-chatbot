@@ -70,7 +70,7 @@ function SearchableDropdown({
 						<Button
 							type="button"
 							variant="outline"
-							className="w-full justify-between font-normal text-sm bg-white border-gray-200 focus-visible:ring-blue-500 shadow-none h-10"
+							className="w-full justify-between font-normal text-sm bg-white border-gray-200 focus-visible:ring-blue-500 rounded-lg shadow-none h-10 cursor-pointer"
 						>
 							<span className="truncate">{displayText}</span>
 							<RiArrowDownSLine className="size-4 text-zinc-400 shrink-0" />
@@ -88,14 +88,14 @@ function SearchableDropdown({
 							placeholder={`Search ${title.toLowerCase()}...`}
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							className="h-8.5 pl-8 pr-8 text-xs bg-zinc-50 border-gray-200 focus-visible:ring-blue-500"
+							className="h-8.5 pl-8 pr-8 text-xs bg-zinc-50 border-gray-200 focus-visible:ring-blue-500 rounded-lg shadow-none"
 							autoFocus
 						/>
 						{searchQuery && (
 							<button
 								type="button"
 								onClick={() => setSearchQuery("")}
-								className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+								className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
 							>
 								<RiCloseLine className="size-3.5" />
 							</button>
@@ -108,7 +108,7 @@ function SearchableDropdown({
 						{!searchQuery && (
 							<>
 								<div
-									className="flex items-center gap-2.5 p-2 hover:bg-zinc-100/80 rounded-md cursor-pointer transition-colors"
+									className="flex items-center gap-2.5 p-2 hover:bg-zinc-100 rounded-lg cursor-pointer transition-colors"
 									onClick={() => onToggle("all")}
 								>
 									<Checkbox checked={isAllSelected} />
@@ -133,7 +133,7 @@ function SearchableDropdown({
 								return (
 									<div
 										key={opt.value}
-										className="flex items-center gap-2.5 p-2 hover:bg-zinc-100/80 rounded-md cursor-pointer transition-colors"
+										className="flex items-center gap-2.5 p-2 hover:bg-zinc-100 rounded-lg cursor-pointer transition-colors"
 										onClick={() => onToggle(opt.value)}
 									>
 										<Checkbox checked={isChecked} />
@@ -172,15 +172,15 @@ function SearchableDropdown({
 						return (
 							<span
 								key={val}
-								className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200"
+								className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-white text-zinc-800 border border-gray-200 shadow-none"
 							>
 								<span className="truncate max-w-40">{label}</span>
 								<button
 									type="button"
 									onClick={() => onToggle(val)}
-									className="hover:bg-blue-200/60 rounded-full p-0.5 transition-colors"
+									className="text-zinc-400 hover:text-zinc-700 transition-colors cursor-pointer"
 								>
-									<RiCloseLine className="size-3" />
+									<RiCloseLine className="size-3.5" />
 								</button>
 							</span>
 						);
@@ -204,8 +204,8 @@ export function VisibilitySettings({
 	settings,
 	onChange,
 	isEditMode = false,
+	showSaveActions = false,
 	onSave,
-	onCancel,
 }: VisibilitySettingsProps) {
 	const { data: branches = [] } = useBranches();
 	const { data: doctors = [] } = useUsers("DOCTOR");
@@ -229,13 +229,14 @@ export function VisibilitySettings({
 	const handleSaveModal = () => {
 		onChange(tempSettings);
 		setIsModalOpen(false);
-		onSave?.();
+		if (showSaveActions) {
+			onSave?.();
+		}
 	};
 
 	const handleCancelModal = () => {
 		setTempSettings(settings);
 		setIsModalOpen(false);
-		onCancel?.();
 	};
 
 	// Multi-select helper handlers for modal
@@ -332,7 +333,7 @@ export function VisibilitySettings({
 						<Button
 							type="button"
 							variant="outline"
-							className="w-fit mt-2 bg-white gap-2 font-medium"
+							className="w-fit mt-2 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-9 font-medium text-sm transition-colors cursor-pointer shadow-none gap-2"
 							onClick={handleOpenModal}
 						>
 							<RiEdit2Line className="size-4" />
