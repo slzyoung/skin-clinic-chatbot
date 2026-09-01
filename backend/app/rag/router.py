@@ -3553,19 +3553,20 @@ def _apply_kb_edit(
     field: str,
     new_value: str,
     vector_store,
-    bm25_index
+    bm25_index,
+    pipeline=None
 ) -> Dict[str, Any]:
     """
-    Applies an edit for ANY topic/field to a KB document (approved or pending) and re-indexes.
+    Applies a dynamic sentence-level edit for ANY topic/field to an approved KB document and re-indexes.
     Preserves all other fields, metadata, and document summaries 100% intact.
-    Automatically synchronizes chunk text content for vector & BM25 search.
+    Uses LLM for targeted sentence-level precision without destroying surrounding text.
     """
-    target_file = resolve_approved_file(knowledge_id) or resolve_pending_file(knowledge_id)
-    if not target_file:
-        return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di Knowledge Base."}
+    approved_file = resolve_approved_file(knowledge_id)
+    if not approved_file:
+        return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di approved KB."}
 
     try:
-        with open(target_file, "r", encoding="utf-8") as f:
+        with open(approved_file, "r", encoding="utf-8") as f:
             existing_doc = json.load(f)
 
         doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
@@ -3638,62 +3639,47 @@ def _apply_kb_edit(
                 # Universal metadata assignment for the target field
                 chunk["metadata"][clean_field] = formatted_val
 
-                # Specific chunk text updates for maximum search synchronization
+                # Sentence-level chunk text updates using LLM if available, fallback to regex
                 chunk_text = chunk.get("text", "")
                 if chunk_text:
+                    if pipeline and hasattr(pipeline, "llm_adapter") and pipeline.llm_adapter:
+                        try:
+                            edit_prompt = (
+                                "Kamu adalah Editor Dokumen Presisi. Tugasmu adalah merevisi TEKS DOKUMEN di bawah ini "
+                                f"sesuai instruksi admin: ubah/perbarui '{clean_field}' menjadi '{formatted_val}'.\n"
+                                "ATURAN KETAT:\n"
+                                "1. REVISI HANYA KALIMAT / ANGKA / INFORMASI TARGET yang diminta.\n"
+                                "2. DILARANG KERAS merusak, mengubah, atau menghapus kalimat, paragraf, deskripsi, atau format markdown lainnya.\n"
+                                "3. Kembalikan teks lengkap dokumen yang sudah direvisi tanpa tambahan komentar percakapan.\n\n"
+                                f"TEKS DOKUMEN ASLI:\n{chunk_text}\n\n"
+                                "TEKS DOKUMEN REVISI:"
+                            )
+                            revised_text = pipeline.llm_adapter.generate(edit_prompt)
+                            if revised_text and len(revised_text.strip()) > 10:
+                                chunk["text"] = revised_text.strip()
+                        except Exception as llm_edit_err:
+                            logger.warning(f"[QUERY-GENERAL] LLM chunk edit error: {llm_edit_err}")
+
                     if clean_field in ("price", "harga", "biaya"):
                         price_pattern = r'((?:Harga|Price|Biaya):\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
-                        if _re.search(price_pattern, chunk_text, _re.IGNORECASE):
-                            chunk["text"] = _re.sub(price_pattern, rf'\g<1>Rp {formatted_val}', chunk_text, flags=_re.IGNORECASE)
-                        else:
-                            chunk["text"] = chunk_text.strip() + f"\n- **Harga**: Rp {formatted_val}"
+                        if _re.search(price_pattern, chunk.get("text", ""), _re.IGNORECASE):
+                            chunk["text"] = _re.sub(price_pattern, rf'\g<1>Rp {formatted_val}', chunk["text"], flags=_re.IGNORECASE)
+                        elif "Harga" not in chunk.get("text", ""):
+                            chunk["text"] = chunk.get("text", "").strip() + f"\n- **Harga**: Rp {formatted_val}"
 
                     elif clean_field in ("title", "nama", "nama_produk"):
                         chunk["metadata"]["source_file"] = formatted_val
                         chunk["metadata"]["title"] = formatted_val
                         chunk["metadata"]["product_name"] = formatted_val
-                        if _re.search(r'^(#+\s*)(.+)$', chunk_text, _re.MULTILINE):
-                            chunk["text"] = _re.sub(r'^(#+\s*)(.+)$', rf'\g<1>{formatted_val}', chunk_text, count=1, flags=_re.MULTILINE)
-                        elif _re.search(r'(Product Name:\s*)(.+)', chunk_text, _re.IGNORECASE):
-                            chunk["text"] = _re.sub(r'(Product Name:\s*)(.+)', rf'\g<1>{formatted_val}', chunk_text, count=1, flags=_re.IGNORECASE)
-
-                    elif clean_field in ("valid_until", "expiry_date", "end_date", "periode", "masa_berlaku"):
-                        promo_pattern = r'((?:Periode Promo|Valid Until|Berlaku Hingga|Masa Berlaku):\s*)(.+)'
-                        if _re.search(promo_pattern, chunk_text, _re.IGNORECASE):
-                            chunk["text"] = _re.sub(promo_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
-                        else:
-                            chunk["text"] = chunk_text.strip() + f"\n- **Berlaku Hingga**: {formatted_val}"
-
-                    elif clean_field in ("ingredients", "kandungan", "bahan_aktif", "komposisi"):
-                        ing_pattern = r'((?:Key Ingredients|Kandungan Aktif|Bahan Aktif|Komposisi):\s*)(.+)'
-                        if _re.search(ing_pattern, chunk_text, _re.IGNORECASE):
-                            chunk["text"] = _re.sub(ing_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
-                        else:
-                            chunk["text"] = chunk_text.strip() + f"\n- **Kandungan Aktif**: {formatted_val}"
-
-                    elif clean_field in ("how_to_use", "cara_pakai", "aturan_pakai", "dosis"):
-                        use_pattern = r'((?:How to Use|Cara Pakai|Aturan Pakai|Dosis):\s*)(.+)'
-                        if _re.search(use_pattern, chunk_text, _re.IGNORECASE):
-                            chunk["text"] = _re.sub(use_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
-                        else:
-                            chunk["text"] = chunk_text.strip() + f"\n- **Cara Pakai**: {formatted_val}"
-
-                    elif clean_field in ("suitable_for", "indikasi", "cocok_untuk"):
-                        ind_pattern = r'((?:Suitable For|Indikasi|Diperuntukkan):\s*)(.+)'
-                        if _re.search(ind_pattern, chunk_text, _re.IGNORECASE):
-                            chunk["text"] = _re.sub(ind_pattern, rf'\g<1>{formatted_val}', chunk_text, flags=_re.IGNORECASE)
-                        else:
-                            chunk["text"] = chunk_text.strip() + f"\n- **Indikasi**: {formatted_val}"
-
-                    elif clean_field in ("summary", "deskripsi", "ringkasan"):
-                        chunk["metadata"]["summary"] = formatted_val
+                        if _re.search(r'^(#+\s*)(.+)$', chunk.get("text", ""), _re.MULTILINE):
+                            chunk["text"] = _re.sub(r'^(#+\s*)(.+)$', rf'\g<1>{formatted_val}', chunk["text"], count=1, flags=_re.MULTILINE)
 
                 if primary_cat:
                     chunk["metadata"]["category"] = primary_cat
                 if existing_doc.get("categories"):
                     chunk["metadata"]["categories"] = existing_doc["categories"]
 
-        with open(target_file, "w", encoding="utf-8") as f:
+        with open(approved_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
 
         if vector_store:
@@ -3715,7 +3701,7 @@ def _apply_kb_edit(
                 summary=existing_doc.get("summary", "")
             )
 
-        logger.info(f"[QUERY-GENERAL] Successfully edited '{doc_kid}' field='{field}'")
+        logger.info(f"[QUERY-GENERAL] Successfully edited approved '{doc_kid}' field='{field}'")
         return {
             "success": True,
             "knowledge_id": doc_kid,
@@ -3967,7 +3953,7 @@ async def query_general_endpoint(
             new_val = last_preview_action.get("new_value", "")
 
             if is_affirmative and not is_negative:
-                edit_res = _apply_kb_edit(kid, field, new_val, target_vs, target_bm25)
+                edit_res = _apply_kb_edit(kid, field, new_val, target_vs, target_bm25, pipeline=pipeline)
                 if edit_res.get("success"):
                     action_type = "edit_executed"
                     target_kid = kid
@@ -3977,7 +3963,7 @@ async def query_general_endpoint(
                         f"- **Dokumen ID**: `{kid}`\n"
                         f"- **Bagian yang Diperbarui**: {field}\n"
                         f"- **Nilai Baru**: {new_val}\n"
-                        f"- **Status**: Aktif & Terpublikasi"
+                        f"- **Status**: Aktif & Terpublikasi (Siap Diretrieve)"
                     )
                 else:
                     action_type = "edit_failed"
@@ -4057,14 +4043,19 @@ async def query_general_endpoint(
                     action_type = "delete_executed"
                     target_kid = kid
 
+        # Clean raw technical JSON action block from final AI answer text for Admin UI display
+        import re as _re
+        clean_answer = _re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
+        clean_answer = _re.sub(r'\{"action":\s*"[^"]+",\s*"knowledge_id":\s*"[^"]+".*?\}', '', clean_answer, flags=_re.DOTALL).strip()
+
         logger.info(
             f"[QUERY-GENERAL] prompt='{user_prompt}' | "
-            f"action={action_type} | results={len(results)} | answer_len={len(answer)}"
+            f"action={action_type} | results={len(results)} | answer_len={len(clean_answer)}"
         )
 
         return QueryGeneralResponse(
             prompt=user_prompt,
-            answer=answer,
+            answer=clean_answer,
             action=action_type,
             target_knowledge_id=target_kid,
             total_found=len(results),
