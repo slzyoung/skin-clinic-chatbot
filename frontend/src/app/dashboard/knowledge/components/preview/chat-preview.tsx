@@ -1,45 +1,41 @@
 import { knowledgeKeys } from "@/app/dashboard/knowledge/api/keys";
+import {
+	Attachment,
+	AttachmentAction,
+	AttachmentActions,
+	AttachmentContent,
+	AttachmentDescription,
+	AttachmentMedia,
+	AttachmentTitle,
+} from "@/components/ui/attachment";
 import { Button } from "@/components/ui/button";
 import {
 	MessageScroller,
-	MessageScrollerSmartButton,
 	MessageScrollerContent,
 	MessageScrollerItem,
 	MessageScrollerProvider,
+	MessageScrollerSmartButton,
 	MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import {
-	Attachment,
-	AttachmentMedia,
-	AttachmentContent,
-	AttachmentTitle,
-	AttachmentDescription,
-	AttachmentActions,
-	AttachmentAction,
-} from "@/components/ui/attachment";
 import { api } from "@/lib/axios";
 import {
 	RiAttachment2,
 	RiCheckLine,
 	RiCloseLine,
 	RiCornerDownLeftLine,
-	RiFilePdf2Line,
-	RiFileWord2Line,
 	RiFileExcel2Line,
-	RiImage2Line,
+	RiFilePdf2Line,
 	RiFileTextLine,
+	RiFileWord2Line,
+	RiImage2Line,
 	RiLoader4Line,
 	RiRobot2Line,
-	RiUser3Line,
 	RiUploadCloud2Line,
+	RiUser3Line,
 } from "@remixicon/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { toast } from "sonner";
-import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
 import {
 	VisibilitySettings as IVisibilitySettings,
 	KnowledgeResponse,
@@ -48,9 +44,12 @@ import {
 	useGeneralChatSession,
 	useSendGeneralChatMessage,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
+import { MarkdownContent } from "@/components/shared/markdown-content";
+import { toast } from "sonner";
 import { CategorySettings } from "./category-settings";
 import { ClassificationSidebar } from "./classification-sidebar";
 import { TitleSettings } from "./title-settings";
+import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
 
 interface ChatPreviewProps {
 	mode?: "knowledge" | "general";
@@ -340,11 +339,7 @@ export function ChatPreview({
 		(m, idx) => idx <= 1 && m.role === "assistant" && m.content === aiSummary,
 	);
 
-	if (
-		initialSummaryMessage &&
-		!hasInitialInHistory &&
-		(!sessionId || mode !== "general")
-	) {
+	if (initialSummaryMessage && !hasInitialInHistory && (!sessionId || mode !== "general")) {
 		messages.push(initialSummaryMessage);
 	}
 	if (mode === "general" && sessionId) {
@@ -423,10 +418,12 @@ export function ChatPreview({
 							{files.find((f) => f.file_name === currentTab) ? (
 								<div>
 									<h4 className="text-zinc-900 font-semibold mb-3">Individual Summary</h4>
-									<ReactMarkdown remarkPlugins={[remarkGfm]}>
-										{(files.find((f) => f.file_name === currentTab)?.summary as string) ||
-											"No summary available."}
-									</ReactMarkdown>
+									<MarkdownContent
+										content={
+											(files.find((f) => f.file_name === currentTab)?.summary as string) ||
+											"No summary available."
+										}
+									/>
 								</div>
 							) : (
 								<p className="text-zinc-500 italic">Select a document to view its details.</p>
@@ -786,14 +783,12 @@ export function ChatPreview({
 												)}
 											</div>
 											<div
-												className={`${messages[0].role === "user" ? "bg-primary text-primary-foreground" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
+												className={`${messages[0].role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden`}
 											>
 												{messages[0].role === "assistant" ? (
 													<>
 														{0 === firstAssistantIndex && headerNode}
-														<ReactMarkdown remarkPlugins={[remarkGfm]}>
-															{messages[0].content}
-														</ReactMarkdown>
+														<MarkdownContent content={messages[0].content} />
 													</>
 												) : (
 													messages[0].content
@@ -863,14 +858,12 @@ export function ChatPreview({
 													)}
 												</div>
 												<div
-													className={`${msg.role === "user" ? "bg-primary text-primary-foreground" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-p:my-1.5 prose-ul:my-1.5 prose-ul:pl-4 prose-ol:my-1.5 prose-ol:pl-4 prose-li:my-0.5 prose-headings:my-2.5 prose-table:w-full prose-table:border prose-table:border-blue-200/60 prose-table:rounded-md prose-table:overflow-hidden prose-table:my-3 prose-table:bg-white prose-th:bg-blue-100/50 prose-th:px-3 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:text-blue-900 prose-th:border-b prose-th:border-blue-200/60 prose-td:px-3 prose-td:py-2.5 prose-td:border-b prose-td:border-blue-100/60 last:prose-td:border-0 whitespace-pre-wrap`}
+													className={`${msg.role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden`}
 												>
 													{msg.role === "assistant" ? (
 														<>
 															{actualIndex === firstAssistantIndex && headerNode}
-															<ReactMarkdown remarkPlugins={[remarkGfm]}>
-																{msg.content}
-															</ReactMarkdown>
+															<MarkdownContent content={msg.content} />
 														</>
 													) : (
 														msg.content

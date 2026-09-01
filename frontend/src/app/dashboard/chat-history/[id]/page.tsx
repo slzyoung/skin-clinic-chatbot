@@ -1,101 +1,109 @@
 "use client";
 
-import { RiRobot2Line, RiUser3Line, RiLoader4Line, RiArrowLeftLine } from "@remixicon/react";
-import * as React from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import {
-  MessageScrollerProvider,
-  MessageScroller,
-  MessageScrollerViewport,
-  MessageScrollerContent,
-  MessageScrollerItem,
-  MessageScrollerSmartButton,
-} from "@/components/ui/message-scroller";
-import { useParams, useRouter } from "next/navigation";
-import { useChatMessages } from "@/hooks/use-chat-messages";
+import { MarkdownContent } from "@/components/shared/markdown-content";
 import { Button } from "@/components/ui/button";
+import {
+	MessageScroller,
+	MessageScrollerContent,
+	MessageScrollerItem,
+	MessageScrollerProvider,
+	MessageScrollerSmartButton,
+	MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
+import { useChatMessages } from "@/hooks/use-chat-messages";
+import { RiArrowLeftLine, RiLoader4Line, RiRobot2Line, RiUser3Line } from "@remixicon/react";
+import { useParams, useRouter } from "next/navigation";
 
 export default function ChatHistoryDetailPage() {
-  const params = useParams();
-  const router = useRouter();
-  const sessionId = params.id as string;
-  
-  const { data: messages, isLoading } = useChatMessages(sessionId);
+	const params = useParams();
+	const router = useRouter();
+	const sessionId = params.id as string;
 
-  return (
-    <div className="flex flex-col absolute inset-0 bg-white overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-4 p-4 border-b border-gray-200 shrink-0 bg-white z-10">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => router.back()}
-          className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
-        >
-          <RiArrowLeftLine className="size-5" />
-        </Button>
-        <div>
-          <h1 className="text-lg font-semibold text-gray-900">Chat Session Details</h1>
-          <p className="text-sm text-zinc-600">Read-only view of the conversation history</p>
-        </div>
-      </div>
+	const { data: messages, isLoading } = useChatMessages(sessionId);
 
-      {/* Chat Messages */}
-      <MessageScrollerProvider>
-        <MessageScroller className="flex-1 w-full px-4 max-w-3xl mx-auto">
-          <MessageScrollerViewport className="py-2">
-            <MessageScrollerContent className="gap-6 py-6 w-full">
-              {isLoading && (
-                <div className="flex justify-center items-center py-10 text-zinc-500">
-                  <RiLoader4Line className="size-6 animate-spin" />
-                </div>
-              )}
-              
-              {!isLoading && messages?.length === 0 && (
-                <div className="text-center text-zinc-500 py-10">
-                  <p>No messages yet.</p>
-                </div>
-              )}
+	return (
+		<div className="flex flex-col absolute inset-0 bg-white overflow-hidden">
+			{/* Header */}
+			<div className="flex items-center gap-4 p-4 border-b border-gray-200 shrink-0 bg-white z-10">
+				<Button
+					variant="ghost"
+					size="icon"
+					onClick={() => router.back()}
+					className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+				>
+					<RiArrowLeftLine className="size-5" />
+				</Button>
+				<div>
+					<h1 className="text-lg font-semibold text-gray-900">Chat Session Details</h1>
+					<p className="text-sm text-zinc-600">Read-only view of the conversation history</p>
+				</div>
+			</div>
 
-              {!isLoading && messages?.map((msg) => {
-                const isUser = msg.role?.toUpperCase() === "USER";
-                return (
-                  <MessageScrollerItem key={msg.id}>
-                    <div className={`flex items-start gap-3 mt-2 ${isUser ? 'flex-row-reverse' : ''}`}>
-                      <div className="bg-zinc-100 rounded-md text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-                        {isUser ? <RiUser3Line className="size-4" /> : <RiRobot2Line className="size-4" />}
-                      </div>
-                      <div className={`${isUser ? 'bg-blue-500 text-white' : 'bg-blue-50 text-zinc-950 border border-blue-100'} p-3 rounded-md text-sm w-full leading-relaxed`}>
-                        {isUser ? (
-                          <p className="whitespace-pre-wrap">{msg.content}</p>
-                        ) : (
-                          <div className="prose prose-sm max-w-none text-zinc-900 leading-relaxed wrap-break-word [&>p]:mb-2 [&>ul]:list-disc [&>ul]:pl-4 [&>ol]:list-decimal [&>ol]:pl-4">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {msg.content}
-                            </ReactMarkdown>
-                          </div>
-                        )}
-                        
-                        {msg.attachments && Object.keys(msg.attachments).length > 0 && (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {Object.keys(msg.attachments).map((filename) => (
-                              <div key={filename} className={`px-2 py-1 text-xs rounded border ${isUser ? 'border-blue-400 bg-blue-600 text-white' : 'border-blue-200 bg-white text-zinc-700'}`}>
-                                📎 {filename}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </MessageScrollerItem>
-                );
-              })}
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerSmartButton />
-        </MessageScroller>
-      </MessageScrollerProvider>
-    </div>
-  );
+			{/* Chat Messages */}
+			<MessageScrollerProvider>
+				<MessageScroller className="flex-1 w-full px-4 max-w-3xl mx-auto">
+					<MessageScrollerViewport className="py-2">
+						<MessageScrollerContent className="gap-6 py-6 w-full">
+							{isLoading && (
+								<div className="flex justify-center items-center py-10 text-zinc-500">
+									<RiLoader4Line className="size-6 animate-spin" />
+								</div>
+							)}
+
+							{!isLoading && messages?.length === 0 && (
+								<div className="text-center text-zinc-500 py-10">
+									<p>No messages yet.</p>
+								</div>
+							)}
+
+							{!isLoading &&
+								messages?.map((msg) => {
+									const isUser = msg.role?.toUpperCase() === "USER";
+									return (
+										<MessageScrollerItem key={msg.id}>
+											<div
+												className={`flex items-start gap-3 mt-2 ${isUser ? "flex-row-reverse" : ""}`}
+											>
+												<div className="bg-zinc-100 rounded-md text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+													{isUser ? (
+														<RiUser3Line className="size-4" />
+													) : (
+														<RiRobot2Line className="size-4" />
+													)}
+												</div>
+												<div
+													className={`${isUser ? "bg-blue-500 text-white" : "bg-blue-50 text-zinc-950 border border-blue-100"} p-3 rounded-md text-sm w-full leading-relaxed`}
+												>
+													{isUser ? (
+														<p className="whitespace-pre-wrap">{msg.content}</p>
+													) : (
+														<div className="prose prose-sm max-w-none text-zinc-900 leading-relaxed wrap-break-word [&>p]:mb-2 [&>ul]:list-disc [&>ul]:pl-4 [&>ol]:list-decimal [&>ol]:pl-4">
+															<MarkdownContent content={msg.content} />
+														</div>
+													)}
+
+													{msg.attachments && Object.keys(msg.attachments).length > 0 && (
+														<div className="mt-3 flex flex-wrap gap-2">
+															{Object.keys(msg.attachments).map((filename) => (
+																<div
+																	key={filename}
+																	className={`px-2 py-1 text-xs rounded border ${isUser ? "border-blue-400 bg-blue-600 text-white" : "border-blue-200 bg-white text-zinc-700"}`}
+																>
+																	📎 {filename}
+																</div>
+															))}
+														</div>
+													)}
+												</div>
+											</div>
+										</MessageScrollerItem>
+									);
+								})}
+						</MessageScrollerContent>
+					</MessageScrollerViewport>
+					<MessageScrollerSmartButton />
+				</MessageScroller>
+			</MessageScrollerProvider>
+		</div>
+	);
 }
