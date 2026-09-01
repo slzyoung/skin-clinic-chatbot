@@ -3701,6 +3701,41 @@ def _apply_kb_edit(
                 summary=existing_doc.get("summary", "")
             )
 
+        # Synchronize PostgreSQL DB Knowledge table record for instant review visibility
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge
+            from sqlalchemy import select
+            import asyncio
+
+            async def _sync_db_record():
+                try:
+                    async with AsyncSessionLocal() as db:
+                        import uuid as _uuid
+                        try:
+                            kid_uuid = _uuid.UUID(doc_kid)
+                            stmt = select(Knowledge).where(Knowledge.id == kid_uuid)
+                            res = await db.execute(stmt)
+                            k_obj = res.scalar_one_or_none()
+                            if k_obj:
+                                k_obj.title = existing_doc.get("title", k_obj.title)
+                                k_obj.ai_summary = existing_doc.get("summary", k_obj.ai_summary)
+                                meta = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
+                                meta.update(existing_doc.get("metadata", {}))
+                                if "price" in existing_doc:
+                                    meta["price"] = existing_doc["price"]
+                                k_obj.metadata_ = meta
+                                await db.commit()
+                                logger.info(f"[QUERY-GENERAL] Synced PostgreSQL Knowledge DB record for '{doc_kid}'")
+                        except Exception as db_parse_err:
+                            logger.debug(f"[QUERY-GENERAL] DB UUID sync bypass for non-UUID id: {db_parse_err}")
+                except Exception as sync_inner_err:
+                    logger.warning(f"[QUERY-GENERAL] DB sync inner warning: {sync_inner_err}")
+
+            asyncio.create_task(_sync_db_record())
+        except Exception as sync_err:
+            logger.warning(f"[QUERY-GENERAL] DB sync task launch warning: {sync_err}")
+
         logger.info(f"[QUERY-GENERAL] Successfully edited approved '{doc_kid}' field='{field}'")
         return {
             "success": True,
