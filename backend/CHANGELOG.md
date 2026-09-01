@@ -2,6 +2,27 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.3] - 2026-09-01
+
+### Ingestion Failure Resilience, Prompt Processing & Active Cancellation
+- **Active Background Ingestion Cancellation & Abort Guards (`app/rag/router.py`, `app/api/routers/knowledge.py`)**:
+  - Implemented thread-safe cancellation tracking (`CANCELLED_INGESTION_IDS`, `cancel_ingestion_job`, `is_ingestion_cancelled`).
+  - Added cancellation checkpoints throughout `process_ingestion_background` (pre-parsing, post-parsing, pre-LLM review, post-LLM review, pre-DB commit) to immediately halt background processing and discard temporary files when a user cancels an ingestion.
+  - Linked `cancel_ingestion_job` directly into `DELETE /api/knowledge/{knowledge_id}`.
+- **Parallel PDF Image Uploads (`app/rag/utils/parser.py`)**:
+  - Refactored `_parse_pdf_fast` to batch embedded images and upload concurrently via `upload_images_parallel`, eliminating sequential HTTP latency and preventing lingering uploads when parsing is aborted.
+- **Ingestion Failure Resilience & Error State Persistence (`app/rag/router.py`)**:
+  - Replaced silent return on missing parser output with explicit error handling.
+  - In `process_ingestion_background`, unhandled exceptions now write a `"status": "FAILED"` document in `data/pending/{knowledge_id}.json` with error diagnostics and update PostgreSQL `Knowledge.status` to `REJECTED` with `"error"` and `"status": "FAILED"` stored in `metadata_`.
+  - Automatic cleanup of temporary files in `data/temp/` on error.
+- **Batch Coordinator Fault Tolerance (`app/rag/router.py`)**:
+  - `trigger_batch_summary_after_all_done` now counts failed/rejected files as completed states, preventing the coordinator from hanging for 180 seconds when a file in a batch fails.
+- **SSE Streaming Client Disconnect Detection (`app/api/routers/chats.py`)**:
+  - Added `if await request.is_disconnected(): break` guards in `POST /api/chats/{session_id}/messages` SSE generator loop to halt token generation immediately when a client aborts or closes the session.
+- **Prompt Processing Stop Generation & Error Boundaries (`frontend`, `mock-cis`)**:
+  - Added `AbortController` signal and Stop button controls to `ChatPreview` (`chat-preview.tsx`) and Doctor CIS floating chat (`FloatingChatbot.jsx`).
+  - Added dedicated failed document alert banner in `ChatPreview` and Cancel Ingestion confirmation action in `KnowledgeDetailPage` (`[id]/page.tsx`) and `BatchKnowledgePage` (`batch/[id]/page.tsx`).
+
 ---
 
 ## [1.2.2] - 2026-08-31

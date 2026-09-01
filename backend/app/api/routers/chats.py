@@ -688,6 +688,10 @@ async def create_chat_message(
                     history=history,
                     filter_metadata=doctor_filter or None
                 ):
+                    if await request.is_disconnected():
+                        logger.info(f"Client disconnected from chat session {session_id}")
+                        break
+
                     # check if the chunk is the initial JSON context string
                     if chunk.startswith('{"type": "context"'):
                         yield f"data: {chunk}\n\n"

@@ -1372,6 +1372,13 @@ async def delete_knowledge(
 ):
     kid_str = str(knowledge_id)
     
+    # 0. Register active background job cancellation immediately
+    try:
+        from app.rag.router import cancel_ingestion_job
+        cancel_ingestion_job(kid_str)
+    except Exception:
+        pass
+
     # 1. Fetch DB record to gather all identifiers
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
     result = await db.execute(stmt)

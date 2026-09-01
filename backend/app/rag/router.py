@@ -572,6 +572,21 @@ def check_sha256_duplicate(file_hash: str, file_name: str) -> Optional[str]:
         return res.get("existing_file")
     return None
 
+CANCELLED_INGESTION_IDS: set[str] = set()
+
+def cancel_ingestion_job(knowledge_id: Union[str, uuid.UUID]):
+    """Register a knowledge_id as cancelled so active background workers abort immediately."""
+    if knowledge_id:
+        k_str = str(knowledge_id).lower()
+        CANCELLED_INGESTION_IDS.add(k_str)
+        logger.info(f"🛑 [INGESTION CANCELLED] Registered cancellation for knowledge_id: {k_str}")
+
+def is_ingestion_cancelled(knowledge_id: Union[str, uuid.UUID]) -> bool:
+    """Check whether a knowledge ingestion job was cancelled by user."""
+    if not knowledge_id:
+        return False
+    return str(knowledge_id).lower() in CANCELLED_INGESTION_IDS
+
 _ingestion_semaphore = asyncio.Semaphore(settings.max_ingestion_concurrency)
 
 async def process_ingestion_background(
@@ -584,6 +599,15 @@ async def process_ingestion_background(
     file_hash: Optional[str] = None,
     batch_id: Optional[str] = None
 ):
+    if is_ingestion_cancelled(knowledge_id):
+        logger.info(f"🛑 [INGESTION ABORTED] Knowledge ID '{knowledge_id}' ({file_name}) was cancelled before processing started.")
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        return
+
     import time as _time
     t0_total = _time.time()
     timing_metrics = {
@@ -600,6 +624,15 @@ async def process_ingestion_background(
 
     try:
         async with _ingestion_semaphore:
+            if is_ingestion_cancelled(knowledge_id):
+                logger.info(f"🛑 [INGESTION ABORTED] Knowledge ID '{knowledge_id}' ({file_name}) was cancelled while waiting for semaphore.")
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+                return
+
             # Temporarily configure pipeline to stage file in data/pending without indexing
             original_output_dir = pipeline.output_dir
             original_store = pipeline.vector_store
@@ -626,9 +659,17 @@ async def process_ingestion_background(
             except Exception as cleanup_err:
                 logger.warning(f"Could not delete temporary file {file_path}: {cleanup_err}")
                 
-            if not output_file:
-                logger.error("Ingestion failed: no output file.")
+            if is_ingestion_cancelled(knowledge_id):
+                logger.info(f"🛑 [INGESTION ABORTED] Knowledge ID '{knowledge_id}' ({file_name}) was cancelled during parsing. Discarding output.")
+                if output_file and os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                    except Exception:
+                        pass
                 return
+                
+            if not output_file:
+                raise RuntimeError(f"Gagal mengekstrak teks dari dokumen '{file_name}'. Format file mungkin rusak atau tidak didukung.")
                 
             # Load the staged JSON containing raw parsed chunks
             with open(output_file, 'r', encoding='utf-8') as f:
@@ -687,6 +728,15 @@ async def process_ingestion_background(
             with open(pending_file_path, 'w', encoding='utf-8') as f:
                 json.dump(initial_staged_doc, f, indent=4, ensure_ascii=False)
                 
+            if is_ingestion_cancelled(knowledge_id):
+                logger.info(f"🛑 [INGESTION ABORTED] Knowledge ID '{knowledge_id}' was cancelled before LLM review.")
+                if os.path.exists(pending_file_path):
+                    try:
+                        os.remove(pending_file_path)
+                    except Exception:
+                        pass
+                return
+
             summary = full_extracted_text
             text_accuracy = "100%"
             feedback = f"Dokumen {file_name} telah berhasil diekstrak dan tersimpan di area peninjauan."
@@ -1018,6 +1068,15 @@ async def process_ingestion_background(
             except Exception:
                 pass
 
+        if is_ingestion_cancelled(knowledge_id):
+            logger.info(f"🛑 [INGESTION ABORTED] Knowledge ID '{knowledge_id}' was cancelled before final DB commit. Discarding.")
+            if os.path.exists(pending_file_path):
+                try:
+                    os.remove(pending_file_path)
+                except Exception:
+                    pass
+            return
+
         # Update Knowledge DB table status to PENDING
         t0_db = _time.time()
         try:
@@ -1079,7 +1138,75 @@ async def process_ingestion_background(
         )
 
     except Exception as e:
-        logger.error(f"Failed background processing for document: {e}")
+        err_msg = str(e)
+        logger.error(f"Failed background processing for document '{file_name}' (ID: {knowledge_id}): {err_msg}")
+        
+        # Cleanup temporary file on error
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+
+        # 1. Update/write FAILED document JSON in data/pending
+        try:
+            os.makedirs("data/pending", exist_ok=True)
+            pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
+            failed_doc = {
+                "knowledge_id": knowledge_id,
+                "batch_id": batch_id,
+                "file_name": file_name,
+                "file_hash": file_hash,
+                "title": file_name,
+                "status": "FAILED",
+                "document_type": "GENERAL",
+                "error_message": err_msg,
+                "summary": f"[Gagal Diproses] Terjadi kesalahan saat memproses dokumen '{file_name}': {err_msg}",
+                "feedback": f"Gagal mengekstrak atau menganalisis dokumen: {err_msg}",
+                "suggested_categories": [],
+                "visibility_settings": {
+                    "clinics": ["all"],
+                    "doctor_types": ["all"],
+                    "doctors": ["all"]
+                },
+                "history": [],
+                "chunks": [],
+                "timing_metrics": timing_metrics
+            }
+            with open(pending_file_path, 'w', encoding='utf-8') as f:
+                json.dump(failed_doc, f, indent=4, ensure_ascii=False)
+        except Exception as json_err:
+            logger.warning(f"Could not write failed state JSON: {json_err}")
+
+        # 2. Update PostgreSQL Knowledge DB record to REJECTED / FAILED
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge, KnowledgeStatus
+            from sqlalchemy import select
+            import uuid as _uuid
+
+            async with AsyncSessionLocal() as session:
+                try:
+                    k_uuid = _uuid.UUID(str(knowledge_id))
+                except ValueError:
+                    k_uuid = knowledge_id
+
+                result = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
+                k_entry = result.scalars().first()
+                if k_entry:
+                    k_entry.status = KnowledgeStatus.REJECTED
+                    k_entry.ai_summary = f"[Gagal Diproses] {err_msg}"
+                    if k_entry.metadata_ is None:
+                        k_entry.metadata_ = {}
+                    k_entry.metadata_["error"] = err_msg
+                    k_entry.metadata_["status"] = "FAILED"
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(k_entry, "metadata_")
+                    await session.commit()
+        except Exception as db_err:
+            logger.warning(f"Could not update Knowledge DB record on failure: {db_err}")
+    finally:
+        CANCELLED_INGESTION_IDS.discard(str(knowledge_id).lower())
 
 async def trigger_batch_summary_after_all_done(batch_id: str, expected_count: int, llm: BaseLLMAdapter, user_prompt: Optional[str] = None, timeout_sec: int = 180):
     """
@@ -1101,7 +1228,7 @@ async def trigger_batch_summary_after_all_done(batch_id: str, expected_count: in
                             with open(os.path.join(d, f), "r", encoding="utf-8") as fj:
                                 data = json.load(fj)
                             if isinstance(data, dict) and data.get("batch_id") == batch_id:
-                                if data.get("summary") and data.get("status") in ["On review", "PENDING", "APPROVED"]:
+                                if data.get("status") in ["On review", "PENDING", "APPROVED", "FAILED", "REJECTED"]:
                                     completed_count += 1
                         except Exception:
                             pass

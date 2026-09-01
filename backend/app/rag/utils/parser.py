@@ -196,15 +196,15 @@ class DocumentParser:
             )
             return None  # Signal to use Docling OCR
 
-        # Try to extract embedded images from PDF pages and upload to MinIO
+        # Try to extract embedded images from PDF pages and upload to MinIO in parallel
         try:
             import fitz  # PyMuPDF
-            from app.services.storage import upload_image
+            from app.services.storage import upload_images_parallel
             doc = fitz.open(file_path)
+            upload_batch = []
+            
             for i, page in enumerate(doc):
                 img_list = page.get_images()
-                page_image_urls = []
-                img_markdowns = []
                 for img_idx, img_info in enumerate(img_list):
                     xref = img_info[0]
                     base_img = doc.extract_image(xref)
@@ -212,15 +212,28 @@ class DocumentParser:
                     img_ext = base_img.get("ext", "png")
                     if img_bytes:
                         fname = f"pdf_p{i+1}_img{img_idx+1}.{img_ext}"
-                        upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
-                        img_url = upload_res.get("image_url")
-                        if img_url:
-                            page_image_urls.append(img_url)
-                            img_markdowns.append(f"![{fname}]({img_url})")
-                if img_markdowns and i < len(pages):
-                    pages[i]["text"] += "\n\n" + "\n".join(img_markdowns)
-                    pages[i]["image_urls"] = page_image_urls
-                    pages[i]["image_url"] = page_image_urls[0] if page_image_urls else None
+                        upload_batch.append({
+                            "content": img_bytes,
+                            "filename": fname,
+                            "content_type": f"image/{img_ext}",
+                            "page_index": i,
+                            "img_fname": fname
+                        })
+            
+            if upload_batch:
+                results = upload_images_parallel(upload_batch)
+                for item, res in zip(upload_batch, results):
+                    img_url = res.get("image_url")
+                    p_idx = item["page_index"]
+                    fname = item["img_fname"]
+                    if img_url and p_idx < len(pages):
+                        if "image_urls" not in pages[p_idx]:
+                            pages[p_idx]["image_urls"] = []
+                        pages[p_idx]["image_urls"].append(img_url)
+                        pages[p_idx]["text"] += f"\n\n![{fname}]({img_url})"
+                for i in range(len(pages)):
+                    if pages[i].get("image_urls"):
+                        pages[i]["image_url"] = pages[i]["image_urls"][0]
         except Exception as img_err:
             logger.debug(f"PDF embedded image extraction skipped/optional: {img_err}")
 
