@@ -130,7 +130,7 @@ class CustomChunker:
                 "metadata": base_metadata
             })
 
-        return self._merge_and_split(processed_chunks, max_length_for_semantic)
+        return processed_chunks
 
     # =========================================================================
     # STRUCTURE-AWARE SUMMARY CHUNKING

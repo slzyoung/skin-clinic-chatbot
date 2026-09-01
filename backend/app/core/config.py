@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     S3_ENDPOINT_URL: str = "http://localhost:9000"
     S3_ACCESS_KEY: str = "minioadmin"
     S3_SECRET_KEY: str = "minioadmin"
-    S3_BUCKET: str = "erha-knowledge-assets"
+    S3_BUCKET: str = "images"
+    S3_DOCUMENTS_BUCKET: str = "knowledge-documents"
     S3_REGION: str = "us-east-1"
     S3_USE_PATH_STYLE: bool = True
 
