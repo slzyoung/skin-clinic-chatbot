@@ -89,6 +89,15 @@ export default function FloatingChatbot({
 
 	const chatEndRef = useRef(null);
 	const fileInputRef = useRef(null);
+	const abortControllerRef = useRef(null);
+
+	const stopGeneration = () => {
+		if (abortControllerRef.current) {
+			abortControllerRef.current.abort();
+			abortControllerRef.current = null;
+		}
+		setIsLoading(false);
+	};
 
 	useEffect(() => {
 		chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -216,6 +225,9 @@ export default function FloatingChatbot({
 		setSelectedFiles([]);
 		setIsLoading(true);
 
+		const controller = new AbortController();
+		abortControllerRef.current = controller;
+
 		try {
 			let res;
 			if (currentFiles.length > 0) {
@@ -232,6 +244,7 @@ export default function FloatingChatbot({
 						Authorization: `Bearer ${token}`,
 					},
 					body: formData,
+					signal: controller.signal,
 				});
 			} else {
 				const payload = JSON.stringify({
@@ -246,6 +259,7 @@ export default function FloatingChatbot({
 						Authorization: `Bearer ${token}`,
 					},
 					body: payload,
+					signal: controller.signal,
 				});
 			}
 
@@ -316,8 +330,12 @@ export default function FloatingChatbot({
 				}
 			}
 		} catch (err) {
-			console.error("Message send error:", err);
 			setIsLoading(false);
+			if (err.name === "AbortError") {
+				console.log("Chat stream aborted by user");
+				return;
+			}
+			console.error("Message send error:", err);
 			
 			if (err.message.toLowerCase().includes("closed") || err.message.toLowerCase().includes("expired") || err.message.includes("403")) {
 				setSessionStatus("CLOSED");
@@ -332,6 +350,8 @@ export default function FloatingChatbot({
 					},
 				]);
 			}
+		} finally {
+			abortControllerRef.current = null;
 		}
 	};
 
@@ -686,17 +706,36 @@ export default function FloatingChatbot({
 									placeholder="Describe what your concern is..."
 									disabled={isLoading || !sessionId}
 								/>
-								<button type="submit" disabled={isLoading || (!input.trim() && selectedFiles.length === 0) || !sessionId}>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										viewBox="0 0 24 24"
-										fill="currentColor"
-										width="20"
-										height="20"
+								{isLoading ? (
+									<button
+										type="button"
+										onClick={stopGeneration}
+										style={{ backgroundColor: "#ef4444", color: "#ffffff", border: "none", cursor: "pointer" }}
+										title="Stop Generation"
 									>
-										<path d="M1.946 9.315c-.522-.174-.527-.455.01-.634l19.087-6.362c.529-.176.832.12.684.638l-5.454 19.086c-.15.529-.455.547-.679.045L12 14l6-8-8 6-8.054-2.685z" />
-									</svg>
-								</button>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											width="18"
+											height="18"
+										>
+											<rect x="6" y="6" width="12" height="12" rx="2" />
+										</svg>
+									</button>
+								) : (
+									<button type="submit" disabled={(!input.trim() && selectedFiles.length === 0) || !sessionId}>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											width="20"
+											height="20"
+										>
+											<path d="M1.946 9.315c-.522-.174-.527-.455.01-.634l19.087-6.362c.529-.176.832.12.684.638l-5.454 19.086c-.15.529-.455.547-.679.045L12 14l6-8-8 6-8.054-2.685z" />
+										</svg>
+									</button>
+								)}
 							</form>
 						</div>
 					</>

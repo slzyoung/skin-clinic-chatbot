@@ -20,6 +20,7 @@ import {
 	RiFileWord2Line,
 	RiImage2Line,
 	RiSparklingLine,
+	RiStopCircleLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
 import { use, useRef, useState } from "react";
@@ -44,6 +45,8 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 
 	const [isApproveAllOpen, setIsApproveAllOpen] = useState(false);
 	const [isSuccessOpen, setIsSuccessOpen] = useState(false);
+	const [isCancelDocOpen, setIsCancelDocOpen] = useState(false);
+	const [isDeleteDocOpen, setIsDeleteDocOpen] = useState(false);
 	const [editModes, setEditModes] = useState<Record<string, boolean>>({});
 	const tabRefs = useRef<Record<string, BatchTabHandle | null>>({});
 
@@ -90,7 +93,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const displayedSummary = batchSummary || (fallbackFeedbacks.length > 0 ? fallbackFeedbacks.join("\n\n") : undefined);
 
 	const isEditMode = editModes[currentTab] || false;
-	const hasPendingDocs = batchDocuments.some((d) => d.status !== "APPROVED");
+	const hasApprovableDocs = batchDocuments.some((d) => d.status === "PENDING");
 
 	const handleEditToggle = async () => {
 		if (isEditMode) {
@@ -171,6 +174,28 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					<h1 className="text-base font-semibold text-zinc-900">Batch Review Session</h1>
 				</div>
 				<div className="flex items-center gap-2">
+					{hasDeleteAccess && activeDoc?.status === "PROCESSING" && (
+						<Button
+							variant="outline"
+							className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+							onClick={() => setIsCancelDocOpen(true)}
+							disabled={deleteMutation.isPending || isLoading}
+						>
+							<RiStopCircleLine className="size-4" />
+							Cancel Ingestion
+						</Button>
+					)}
+					{hasDeleteAccess && (activeDoc?.status === "PENDING" || activeDoc?.status === "REJECTED") && (
+						<Button
+							variant="outline"
+							className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+							onClick={() => setIsDeleteDocOpen(true)}
+							disabled={deleteMutation.isPending || isLoading}
+						>
+							<RiDeleteBin7Line className="size-4" />
+							Delete Document
+						</Button>
+					)}
 					{hasDeleteAccess && activeDoc?.status === "APPROVED" && (
 						<Button
 							variant="outline"
@@ -193,7 +218,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 							{isEditMode ? "Save" : "Edit Knowledge"}
 						</Button>
 					)}
-					{hasWriteAccess && hasPendingDocs && (
+					{hasWriteAccess && hasApprovableDocs && (
 						<Button
 							variant="default"
 							className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
@@ -283,6 +308,42 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					})}
 				</div>
 			</div>
+
+			{/* Cancel Ingestion Confirmation Modal */}
+			<ConfirmationModal
+				isOpen={isCancelDocOpen}
+				onOpenChange={setIsCancelDocOpen}
+				title="Cancel Ingestion?"
+				description={`Are you sure you want to cancel the ingestion process for "${activeDoc?.file_name || activeDoc?.title || "this document"}"? The pending draft will be discarded.`}
+				confirmText="Cancel Ingestion"
+				cancelText="Keep Processing"
+				variant="destructive"
+				isLoading={deleteMutation.isPending}
+				onConfirm={async () => {
+					await deleteMutation.mutateAsync(currentTab);
+					setIsCancelDocOpen(false);
+					toast.success("Ingestion cancelled successfully.");
+					handleDeleteSuccess(currentTab);
+				}}
+			/>
+
+			{/* Delete Document Confirmation Modal */}
+			<ConfirmationModal
+				isOpen={isDeleteDocOpen}
+				onOpenChange={setIsDeleteDocOpen}
+				title="Delete Document?"
+				description={`Are you sure you want to delete "${activeDoc?.file_name || activeDoc?.title || "this document"}" from the batch?`}
+				confirmText="Delete Document"
+				cancelText="Cancel"
+				variant="destructive"
+				isLoading={deleteMutation.isPending}
+				onConfirm={async () => {
+					await deleteMutation.mutateAsync(currentTab);
+					setIsDeleteDocOpen(false);
+					toast.success("Document removed from batch.");
+					handleDeleteSuccess(currentTab);
+				}}
+			/>
 
 			{/* Approve All Confirmation Modal */}
 			<ConfirmationModal

@@ -336,8 +336,9 @@ export const useSendGeneralChatMessage = (sessionId?: string | null) => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async (payload: { prompt: string; attachments?: Record<string, unknown> }): Promise<GeneralChatSessionResponse> => {
-			const response = await api.post(`/knowledge/general-session/${sessionId}/messages`, payload);
+		mutationFn: async (payload: { prompt: string; attachments?: Record<string, unknown>; signal?: AbortSignal }): Promise<GeneralChatSessionResponse> => {
+			const { signal, ...body } = payload;
+			const response = await api.post(`/knowledge/general-session/${sessionId}/messages`, body, { signal });
 			return response.data;
 		},
 		onSuccess: (data) => {
@@ -353,7 +354,10 @@ export const useSendGeneralChatMessage = (sessionId?: string | null) => {
 			}
 		},
 		onError: (error: unknown) => {
-			toast.error(getErrorMessage(error, "Failed to send message."));
+			const isCanceled = (error as { name?: string; code?: string })?.name === "CanceledError" || (error as { name?: string; code?: string })?.code === "ERR_CANCELED";
+			if (!isCanceled) {
+				toast.error(getErrorMessage(error, "Failed to send message."));
+			}
 		},
 	});
 };

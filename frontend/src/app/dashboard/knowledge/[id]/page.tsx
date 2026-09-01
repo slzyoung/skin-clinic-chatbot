@@ -3,7 +3,7 @@
 import { ChatPreview } from "@/app/dashboard/knowledge/components/preview/chat-preview";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { Button } from "@/components/ui/button";
-import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line, RiCheckLine } from "@remixicon/react";
+import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line, RiCheckLine, RiStopCircleLine } from "@remixicon/react";
 import { toast } from "sonner";
 
 import { useRouter } from "next/navigation";
@@ -23,6 +23,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const hasDeleteAccess = user?.accesses?.includes("knowledge:delete");
 	const [isEditMode, setIsEditMode] = useState(false);
 	const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+	const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
 	const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
 	const editKnowledge = useEditKnowledge();
 
@@ -108,7 +109,18 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 				</div>
 
 				<div className="flex items-center gap-2">
-					{hasDeleteAccess && data?.status === "APPROVED" && (
+					{data?.status === "PROCESSING" && (
+						<Button
+							onClick={() => setIsCancelModalOpen(true)}
+							disabled={deleteMutation.isPending || isLoading}
+							variant="outline"
+							className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+						>
+							<RiStopCircleLine className="size-4" />
+							Cancel Ingestion
+						</Button>
+					)}
+					{(hasDeleteAccess || data?.status === "REJECTED") && (data?.status === "APPROVED" || data?.status === "REJECTED") && (
 						<Button
 							onClick={() => setIsDeleteModalOpen(true)}
 							disabled={deleteMutation.isPending || isLoading}
@@ -116,7 +128,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 							className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
 						>
 							<RiDeleteBin7Line className="size-4" />
-							Delete Knowledge
+							{data?.status === "REJECTED" ? "Delete Record" : "Delete Knowledge"}
 						</Button>
 					)}
 					{hasWriteAccess && data?.status === "APPROVED" && (
@@ -174,6 +186,18 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 				cancelText="Cancel"
 				isLoading={editKnowledge.isPending}
 				onConfirm={handleSave}
+			/>
+
+			{/* Cancel Ingestion Confirmation Modal */}
+			<ConfirmationModal
+				isOpen={isCancelModalOpen}
+				onOpenChange={setIsCancelModalOpen}
+				title="Cancel Ingestion?"
+				description="Are you sure you want to cancel the ingestion process for this document? The pending draft and temporary files will be discarded."
+				confirmText="Cancel Ingestion"
+				cancelText="Keep Processing"
+				isLoading={deleteMutation.isPending}
+				onConfirm={handleDelete}
 			/>
 
 			{/* Delete Knowledge Confirmation Modal */}

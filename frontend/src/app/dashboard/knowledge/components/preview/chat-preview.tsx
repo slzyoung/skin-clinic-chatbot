@@ -20,6 +20,7 @@ import {
 import { api } from "@/lib/axios";
 import {
 	RiAttachment2,
+	RiAlertLine,
 	RiCheckLine,
 	RiCloseLine,
 	RiCornerDownLeftLine,
@@ -30,6 +31,7 @@ import {
 	RiImage2Line,
 	RiLoader4Line,
 	RiRobot2Line,
+	RiStopCircleLine,
 	RiUploadCloud2Line,
 	RiUser3Line,
 } from "@remixicon/react";
@@ -184,6 +186,28 @@ export function ChatPreview({
 	const [isDragging, setIsDragging] = useState(false);
 	const dragCounter = useRef(0);
 	const initialPromptTriggeredRef = useRef<string | null>(null);
+	const abortControllerRef = useRef<AbortController | null>(null);
+
+	const isFailedState =
+		knowledgeStatus === "REJECTED" ||
+		(knowledge?.metadata as Record<string, unknown> | undefined)?.status === "FAILED" ||
+		(typeof knowledge?.ai_summary === "string" && knowledge.ai_summary.startsWith("[Gagal Diproses]"));
+
+	const failureErrorMsg =
+		((knowledge?.metadata as Record<string, unknown> | undefined)?.error as string) ||
+		(typeof knowledge?.ai_summary === "string" && knowledge.ai_summary.startsWith("[Gagal Diproses]")
+			? knowledge.ai_summary
+			: "Document processing failed. The file format may be corrupted, password-protected, or unsupported.");
+
+	const handleStop = () => {
+		if (abortControllerRef.current) {
+			abortControllerRef.current.abort();
+			abortControllerRef.current = null;
+		}
+		setIsLoading(false);
+		setOptimisticUserMsg(null);
+		toast.info("AI generation stopped.");
+	};
 
 	useEffect(() => {
 		if (
@@ -198,11 +222,17 @@ export function ChatPreview({
 				const sendInitialDB = async () => {
 					setIsLoading(true);
 					setOptimisticUserMsg({ role: "user", content: initialPrompt });
+					const controller = new AbortController();
+					abortControllerRef.current = controller;
 					try {
-						await sendGeneralMsg.mutateAsync({ prompt: initialPrompt });
-					} catch {
-						toast.error("Failed to send message to AI.");
+						await sendGeneralMsg.mutateAsync({ prompt: initialPrompt, signal: controller.signal });
+					} catch (err: unknown) {
+						const isCanceled = (err as { name?: string; code?: string })?.name === "CanceledError" || (err as { name?: string; code?: string })?.code === "ERR_CANCELED";
+						if (!isCanceled) {
+							toast.error("Failed to send message to AI.");
+						}
 					} finally {
+						abortControllerRef.current = null;
 						sendGeneralMsg.reset();
 						setIsLoading(false);
 						setOptimisticUserMsg(null);
@@ -222,11 +252,13 @@ export function ChatPreview({
 					const userMsg: Message = { role: "user", content: initialPrompt };
 					setUserChatMessages([userMsg]);
 					setIsLoading(true);
+					const controller = new AbortController();
+					abortControllerRef.current = controller;
 					try {
 						const response = await api.post("/knowledge/query-general", {
 							prompt: initialPrompt,
 							history: [],
-						});
+						}, { signal: controller.signal });
 						const data = response.data;
 						setUserChatMessages([
 							userMsg,
@@ -238,9 +270,13 @@ export function ChatPreview({
 								total_found: data.total_found,
 							},
 						]);
-					} catch {
-						toast.error("Failed to send message to AI.");
+					} catch (err: unknown) {
+						const isCanceled = (err as { name?: string; code?: string })?.name === "CanceledError" || (err as { name?: string; code?: string })?.code === "ERR_CANCELED";
+						if (!isCanceled) {
+							toast.error("Failed to send message to AI.");
+						}
 					} finally {
+						abortControllerRef.current = null;
 						setIsLoading(false);
 					}
 				};
@@ -477,18 +513,22 @@ export function ChatPreview({
 			textareaRef.current.style.height = "auto";
 		}
 
+		const controller = new AbortController();
+		abortControllerRef.current = controller;
+
 		try {
 			if (mode === "general") {
 				if (sessionId) {
 					await sendGeneralMsg.mutateAsync({
 						prompt: userMsg.content,
 						attachments: userMsg.attachmentNames ? { names: userMsg.attachmentNames } : undefined,
+						signal: controller.signal,
 					});
 				} else {
 					const response = await api.post("/knowledge/query-general", {
 						prompt: userMsg.content,
 						history: messages.map((m) => ({ role: m.role, content: m.content })),
-					});
+					}, { signal: controller.signal });
 					const data = response.data;
 					setUserChatMessages((prev) => [
 						...prev,
@@ -524,12 +564,12 @@ export function ChatPreview({
 					formData.append("history", JSON.stringify([...messages, userMsg]));
 					formData.append("file", filesToSend[0]);
 
-					response = await api.post(endpoint, formData);
+					response = await api.post(endpoint, formData, { signal: controller.signal });
 				} else {
 					response = await api.post(endpoint, {
 						prompt: userMsg.content,
 						history: [...messages, userMsg],
-					});
+					}, { signal: controller.signal });
 				}
 				const chatResponse = response.data.summary
 					? `Here is the updated summary:\n\n${response.data.summary}`
@@ -549,7 +589,7 @@ export function ChatPreview({
 					query: userMsg.content,
 					knowledge_id: knowledgeId,
 					history: messages,
-				});
+				}, { signal: controller.signal });
 
 				setUserChatMessages((prev) => [
 					...prev,
@@ -557,9 +597,13 @@ export function ChatPreview({
 				]);
 			}
 		} catch (err: unknown) {
-			const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-			toast.error(detail || "Failed to send message to AI.");
+			const isCanceled = (err as { name?: string; code?: string })?.name === "CanceledError" || (err as { name?: string; code?: string })?.code === "ERR_CANCELED";
+			if (!isCanceled) {
+				const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+				toast.error(detail || "Failed to send message to AI.");
+			}
 		} finally {
+			abortControllerRef.current = null;
 			sendGeneralMsg.reset();
 			setIsLoading(false);
 			setOptimisticUserMsg(null);
@@ -596,7 +640,31 @@ export function ChatPreview({
 								</MessageScrollerItem>
 							)}
 
-							{!isDetailLoading && messages.length === 0 && knowledgeStatus !== "PROCESSING" && (
+							{isFailedState && (
+								<MessageScrollerItem>
+									<div className="flex flex-col w-full min-w-0 max-w-full gap-3">
+										{headerNode}
+										<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
+											<div className="bg-red-50 rounded-lg text-red-600 flex items-center justify-center p-2 mt-0.5 shrink-0 border border-red-200">
+												<RiAlertLine className="size-5 text-red-600" />
+											</div>
+											<div className="bg-red-50/70 text-zinc-950 p-4 rounded-lg text-sm w-full min-w-0 max-w-full border border-red-200 flex flex-col gap-2">
+												<div className="flex items-center justify-between">
+													<span className="font-semibold text-red-700 text-sm">Dokumen Gagal Diekstrak / Diproses</span>
+												</div>
+												<p className="text-xs text-zinc-700 leading-relaxed font-mono bg-white p-2.5 rounded border border-red-200">
+													{failureErrorMsg}
+												</p>
+												<p className="text-[11px] text-zinc-500">
+													Silakan periksa apakah file memiliki proteksi kata sandi, rusak, atau coba upload kembali dokumen dalam format standar (PDF, DOCX, XLSX, TXT, Gambar).
+												</p>
+											</div>
+										</div>
+									</div>
+								</MessageScrollerItem>
+							)}
+
+							{!isDetailLoading && !isFailedState && messages.length === 0 && knowledgeStatus !== "PROCESSING" && (
 								<MessageScrollerItem>
 									{mode === "general" ? (
 										<div className="flex flex-col items-center justify-center text-center py-16 px-4 max-w-lg mx-auto space-y-3">
@@ -1029,19 +1097,27 @@ export function ChatPreview({
 								<RiAttachment2 className="size-4" />
 							</Button>
 						)}
-						<Button
-							onClick={handleSend}
-							disabled={isProcessing || (!input.trim() && attachedFiles.length === 0)}
-							size="icon"
-							title="Send (Enter) • New line (Shift+Enter)"
-							className="bg-blue-600 text-white hover:bg-blue-700 shrink-0 rounded-lg shadow-none cursor-pointer"
-						>
-							{isProcessing ? (
-								<RiLoader4Line className="w-4 h-4 animate-spin" />
-							) : (
+						{isProcessing ? (
+							<Button
+								type="button"
+								onClick={handleStop}
+								size="icon"
+								title="Stop AI Generation"
+								className="bg-red-600 text-white hover:bg-red-700 shrink-0 rounded-lg shadow-none cursor-pointer"
+							>
+								<RiStopCircleLine className="w-4 h-4" />
+							</Button>
+						) : (
+							<Button
+								onClick={handleSend}
+								disabled={!input.trim() && attachedFiles.length === 0}
+								size="icon"
+								title="Send (Enter) • New line (Shift+Enter)"
+								className="bg-blue-600 text-white hover:bg-blue-700 shrink-0 rounded-lg shadow-none cursor-pointer"
+							>
 								<RiCornerDownLeftLine className="w-4 h-4" />
-							)}
-						</Button>
+							</Button>
+						)}
 					</div>
 				</div>
 			</div>

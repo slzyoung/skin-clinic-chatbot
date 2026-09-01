@@ -95,6 +95,11 @@ export function BatchDocumentTabs({
 											Approved
 										</Badge>
 									)}
+									{doc.status === "REJECTED" && (
+										<Badge className="bg-red-50 text-red-700 border-red-200 text-[10px] px-1.5 py-0 rounded-lg shadow-none">
+											Failed
+										</Badge>
+									)}
 								</div>
 							</DropdownMenuItem>
 						))}
@@ -139,6 +144,12 @@ export function BatchDocumentTabs({
 									<span
 										className="size-2 rounded-full bg-emerald-500 shrink-0 ml-1.5"
 										title="Approved"
+									/>
+								)}
+								{tabDoc.status === "REJECTED" && (
+									<span
+										className="size-2 rounded-full bg-red-500 shrink-0 ml-1.5"
+										title="Failed / Rejected"
 									/>
 								)}
 							</TabsTrigger>
