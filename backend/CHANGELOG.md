@@ -2,6 +2,17 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.4] - 2026-09-01
+
+### Remote AI Subsystem Merge & Storage Consolidation
+- **Dual-Bucket MinIO Architecture & Canonical JSON Synchronization (`app/services/storage.py`, `app/rag/router.py`)**:
+  - Integrated dual-bucket configuration (`images` as public-read, `knowledge-documents` as private) with `_format_browser_url` proxy fallback.
+  - Added MinIO synchronization via `upload_canonical_json` on document approval and refinement.
+  - Harmonized parallel image uploads (`upload_images_parallel`) with document normalization (`normalize_document_text`) in `app/rag/utils/parser.py`.
+  - Preserved active ingestion cancellation guards (`is_ingestion_cancelled`) alongside verbatim parser canonical text handling.
+
+---
+
 ## [1.2.3] - 2026-09-01
 
 ### Ingestion Failure Resilience, Prompt Processing & Active Cancellation

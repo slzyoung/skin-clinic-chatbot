@@ -77,6 +77,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize RAG lifespan: {e}")
 
+    # Initialize MinIO dual-bucket storage (images + knowledge-documents)
+    try:
+        from app.services.storage import ensure_all_buckets
+        ensure_all_buckets()
+    except Exception as e:
+        logger.warning(f"MinIO bucket initialization failed (non-fatal): {e}")
+
     yield
 
 from fastapi.middleware.cors import CORSMiddleware

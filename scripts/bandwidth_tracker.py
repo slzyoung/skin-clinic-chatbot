@@ -37,6 +37,7 @@ CSV_COLUMNS = [
 def run_speedtest(environment: str, label: str = "") -> Dict[str, Any]:
     """Runs a single speedtest benchmark and returns formatted metrics."""
     try:
+        # pyrefly: ignore [missing-import]
         import speedtest
     except ImportError:
         print(
