@@ -229,6 +229,9 @@ export function KnowledgeTable({
 					return new Date(d.created_at) > new Date(latest) ? d.created_at : latest;
 				}, docs[0].created_at);
 
+				// Determine batch projectId: if any doc in batch has projectId
+				const batchProjectId = docs.find((d) => Boolean(d.project_id))?.project_id || null;
+
 				rows.push({
 					id: docs[0].id,
 					isBatch: true,
@@ -241,7 +244,7 @@ export function KnowledgeTable({
 					rawItem: docs[0],
 					allFileNames: allNames,
 					categories: combinedCategories,
-					projectId: docs[0].project_id,
+					projectId: batchProjectId,
 					allDocIds: docs.map((d) => d.id),
 				});
 			}
@@ -277,7 +280,7 @@ export function KnowledgeTable({
 	};
 
 	const filteredList = displayRows
-		?.filter((item) => (selectedProjectId ? item.projectId === selectedProjectId : true))
+		?.filter((item) => (selectedProjectId ? item.projectId === selectedProjectId : !item.projectId))
 		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
 		?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
 		?.filter(
