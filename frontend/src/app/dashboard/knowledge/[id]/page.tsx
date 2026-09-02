@@ -162,6 +162,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					knowledgeStatus={data?.status}
 					aiSummary={data?.ai_summary}
 					fileName={data?.file_name}
+					initialPrompt={(data?.metadata?.initial_prompt as string) || undefined}
 					files={(data?.metadata?.files as { file_name: string; summary: string }[]) || []}
 					isDetailLoading={isLoading}
 					isEditMode={isEditMode}

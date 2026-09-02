@@ -87,6 +87,99 @@ interface Message {
 	total_found?: number;
 }
 
+function getInitialMessages(
+	knowledge: KnowledgeResponse | undefined,
+	knowledgeStatus: string | undefined,
+	isEditMode: boolean,
+	aiSummary: string | null | undefined,
+	fileName: string | null | undefined,
+	initialPrompt: string | undefined,
+): Message[] {
+	const currentSummary = aiSummary || knowledge?.ai_summary;
+
+	// When document is APPROVED and not in edit mode, display only the latest updated knowledge
+	if (knowledgeStatus === "APPROVED" && !isEditMode) {
+		if (currentSummary) {
+			return [{ role: "assistant", content: currentSummary }];
+		}
+		return [];
+	}
+
+	const meta = knowledge?.metadata as Record<string, unknown> | undefined;
+	const history = (meta?.history || meta?.chat_history) as
+		| Array<{ role: "user" | "assistant"; content: string; attachmentName?: string; attachmentNames?: string[] }>
+		| undefined;
+
+	// For approved document starting edit mode, start with the current approved summary
+	if (knowledgeStatus === "APPROVED" && isEditMode) {
+		if (currentSummary) {
+			return [{ role: "assistant", content: currentSummary }];
+		}
+		return [];
+	}
+
+	const effectivePrompt =
+		(initialPrompt && initialPrompt.trim()) ||
+		(typeof meta?.initial_prompt === "string" && meta.initial_prompt.trim()) ||
+		undefined;
+	const initialSummary =
+		(meta?.initial_summary as string) || currentSummary || undefined;
+	const docFile = fileName || knowledge?.file_name || undefined;
+
+	// Build Turn 0
+	const turn0: Message[] = [];
+	if (effectivePrompt) {
+		turn0.push({
+			role: "user",
+			content: effectivePrompt,
+			attachmentName: docFile,
+		});
+	}
+	if (initialSummary && knowledgeStatus !== "PROCESSING") {
+		turn0.push({
+			role: "assistant",
+			content: initialSummary,
+		});
+	}
+
+	if (Array.isArray(history) && history.length > 0) {
+		const startsWithTurn0 =
+			(effectivePrompt && history[0]?.role === "user" && history[0]?.content === effectivePrompt) ||
+			(!effectivePrompt && history[0]?.role === "assistant");
+
+		if (startsWithTurn0) {
+			return history.map((m) => ({
+				role: m.role,
+				content: m.content,
+				attachmentName: m.attachmentName,
+				attachmentNames: m.attachmentNames,
+			}));
+		}
+
+		return [
+			...turn0,
+			...history.map((m) => ({
+				role: m.role,
+				content: m.content,
+				attachmentName: m.attachmentName,
+				attachmentNames: m.attachmentNames,
+			})),
+		];
+	}
+
+	if (currentSummary && knowledgeStatus !== "PROCESSING") {
+		if (effectivePrompt) {
+			return [
+				{ role: "user", content: effectivePrompt, attachmentName: docFile },
+				{ role: "assistant", content: currentSummary },
+			];
+		}
+		return [{ role: "assistant", content: currentSummary }];
+	}
+
+	return [];
+}
+
 export function ChatPreview({
 	mode = "knowledge",
 	sessionId,
@@ -114,46 +207,66 @@ export function ChatPreview({
 	const sendGeneralMsg = useSendGeneralChatMessage(mode === "general" ? sessionId : null);
 
 	const [userChatMessages, setUserChatMessages] = useState<Message[]>(() => {
-		if (knowledgeStatus === "APPROVED" && !isEditMode) {
-			return [];
-		}
-		// If Knowledge document has saved chat history in DB metadata, load it
-		const meta = knowledge?.metadata as Record<string, unknown> | undefined;
-		const savedHistory = (meta?.history || meta?.chat_history) as
-			| Array<{ role: "user" | "assistant"; content: string }>
-			| undefined;
-		if (Array.isArray(savedHistory) && savedHistory.length > 0) {
-			return savedHistory.map((m) => ({
-				role: m.role,
-				content: m.content,
-			}));
-		}
-		return [];
+		return getInitialMessages(
+			knowledge,
+			knowledgeStatus,
+			isEditMode,
+			aiSummary,
+			fileName,
+			initialPrompt,
+		);
 	});
 
 	useEffect(() => {
 		if (mode === "knowledge") {
-			const meta = knowledge?.metadata as Record<string, unknown> | undefined;
-			const savedHistory = (meta?.history || meta?.chat_history) as
-				| Array<{ role: "user" | "assistant"; content: string }>
-				| undefined;
 			const timer = setTimeout(() => {
-				if (knowledgeStatus === "APPROVED" && !isEditMode) {
-					setUserChatMessages([]);
-				} else if (Array.isArray(savedHistory) && savedHistory.length > 0) {
-					setUserChatMessages(
-						savedHistory.map((m) => ({
-							role: m.role,
-							content: m.content,
-						})),
+				setUserChatMessages((prev) => {
+					const next = getInitialMessages(
+						knowledge,
+						knowledgeStatus,
+						isEditMode,
+						aiSummary,
+						fileName,
+						initialPrompt,
 					);
-				} else {
-					setUserChatMessages([]);
-				}
+					if (next.length === 0 && prev.length > 0) {
+						return prev;
+					}
+					// If approved and not in edit mode, enforce clean single summary
+					if (knowledgeStatus === "APPROVED" && !isEditMode) {
+						return next;
+					}
+					const prevLast = prev[prev.length - 1];
+					const nextLast = next[next.length - 1];
+					if (
+						prevLast &&
+						nextLast &&
+						prevLast.role === "assistant" &&
+						nextLast.role === "assistant" &&
+						prevLast.content !== nextLast.content
+					) {
+						return next;
+					}
+					if (prev.length > next.length) {
+						return prev;
+					}
+					return next;
+				});
 			}, 0);
 			return () => clearTimeout(timer);
 		}
-	}, [mode, knowledgeId, knowledge?.id, knowledge?.metadata, knowledgeStatus, isEditMode]);
+	}, [
+		mode,
+		knowledgeId,
+		knowledge,
+		knowledge?.id,
+		knowledge?.metadata,
+		knowledgeStatus,
+		isEditMode,
+		aiSummary,
+		fileName,
+		initialPrompt,
+	]);
 
 	const sessionMessages = generalSession?.messages;
 	const dbMessages: Message[] = useMemo(() => {
@@ -365,19 +478,7 @@ export function ChatPreview({
 		}
 	};
 
-	const initialSummaryMessage: Message | null =
-		aiSummary && knowledgeStatus !== "PROCESSING"
-			? { role: "assistant", content: aiSummary }
-			: null;
-
 	const messages: Message[] = [];
-	const hasInitialInHistory = userChatMessages.some(
-		(m, idx) => idx <= 1 && m.role === "assistant" && m.content === aiSummary,
-	);
-
-	if (initialSummaryMessage && !hasInitialInHistory && (!sessionId || mode !== "general")) {
-		messages.push(initialSummaryMessage);
-	}
 	if (mode === "general" && sessionId) {
 		messages.push(...dbMessages);
 	} else {
@@ -673,7 +774,7 @@ export function ChatPreview({
 					}, { signal: controller.signal });
 				}
 				const chatResponse = response.data.summary
-					? `Here is the updated summary:\n\n${response.data.summary}`
+					? response.data.summary
 					: response.data.feedback
 						? response.data.feedback
 						: "I've updated the document summary based on your instructions.";
@@ -796,11 +897,11 @@ export function ChatPreview({
 								</MessageScrollerItem>
 							)}
 
-							{!isDetailLoading && knowledgeStatus === "PROCESSING" && messages.length === 0 && (
+							{!isDetailLoading && knowledgeStatus === "PROCESSING" && (
 								<MessageScrollerItem>
 									<div className="flex flex-col w-full min-w-0 max-w-full items-start">
-										{/* Attached Document Badge OUTSIDE & ABOVE bubble */}
-										{fileName &&
+										{/* Attached Document Badge OUTSIDE & ABOVE bubble if no user message shown */}
+										{fileName && messages.length === 0 &&
 											(() => {
 												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
 												return (
@@ -885,7 +986,7 @@ export function ChatPreview({
 												</div>
 											</div>
 										)}
-										{fileName &&
+										{fileName && messages[0].role !== "user" &&
 											(() => {
 												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
 												return (
@@ -953,7 +1054,7 @@ export function ChatPreview({
 												)}
 											</div>
 											<div
-												className={`${messages[0].role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden`}
+												className={`${messages[0].role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap max-w-[85%] sm:max-w-[75%] rounded-md" : "bg-transparent border border-zinc-200 text-zinc-950 w-full rounded-md"} p-3.5 text-sm min-w-0 overflow-hidden`}
 											>
 												{messages[0].role === "assistant" ? (
 													<>
@@ -1029,7 +1130,7 @@ export function ChatPreview({
 													)}
 												</div>
 												<div
-													className={`${msg.role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap" : "bg-transparent border border-zinc-200 text-zinc-950"} p-3.5 rounded-md text-sm w-full min-w-0 overflow-hidden`}
+													className={`${msg.role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap max-w-[85%] sm:max-w-[75%] rounded-md" : "bg-transparent border border-zinc-200 text-zinc-950 w-full rounded-md"} p-3.5 text-sm min-w-0 overflow-hidden`}
 												>
 													{msg.role === "assistant" ? (
 														<>
