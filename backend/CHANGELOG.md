@@ -2,6 +2,14 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.5] - 2026-09-02
+
+### Approved Knowledge Refinement Fix
+- **Module-Level Datetime Import in RAG Router (`app/rag/router.py`)**:
+  - Added module-level `from datetime import datetime, timezone` to resolve `NameError: name 'datetime' is not defined` triggered in `refine_approved_document` during timestamp generation for `edit_history`.
+
+---
+
 ## [1.2.4] - 2026-09-01
 
 ### Remote AI Subsystem Merge & Storage Consolidation

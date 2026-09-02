@@ -416,10 +416,15 @@ async def get_knowledge(
                         file_stage_hist = data.get("staging_history") if isinstance(data, dict) else []
                         merged_meta["staging_history"] = db_stage_hist if len(db_stage_hist or []) >= len(file_stage_hist or []) else file_stage_hist
                     else:
-                        if "history" not in data and "history" in merged_meta:
-                            merged_meta["history"] = merged_meta["history"]
-                        if "chat_history" not in data and "chat_history" in merged_meta:
-                            merged_meta["chat_history"] = merged_meta["chat_history"]
+                        db_hist = knowledge.metadata_.get("history") if isinstance(knowledge.metadata_, dict) else []
+                        file_hist = data.get("history") if isinstance(data, dict) else []
+                        merged_meta["history"] = db_hist if len(db_hist or []) >= len(file_hist or []) else file_hist
+                        merged_meta["chat_history"] = merged_meta["history"]
+                        if isinstance(knowledge.metadata_, dict):
+                            if "initial_summary" not in merged_meta and "initial_summary" in knowledge.metadata_:
+                                merged_meta["initial_summary"] = knowledge.metadata_["initial_summary"]
+                            if "initial_prompt" not in merged_meta and "initial_prompt" in knowledge.metadata_:
+                                merged_meta["initial_prompt"] = knowledge.metadata_["initial_prompt"]
                     knowledge.metadata_ = merged_meta
         except Exception as e:
             logger.warning(f"Error loading RAG JSON: {e}")
@@ -811,7 +816,7 @@ async def upload_knowledge_file(
         llm=llm
     )
 
-    if project_id and isinstance(ingest_res, dict):
+    if isinstance(ingest_res, dict):
         docs = ingest_res.get("documents", [])
         for doc in docs:
             k_id = doc.get("knowledge_id")
@@ -822,10 +827,21 @@ async def upload_knowledge_file(
                     res = await db.execute(stmt)
                     k_obj = res.scalar_one_or_none()
                     if k_obj:
-                        k_obj.project_id = project_id
-                        await db.commit()
-                except Exception:
-                    pass
+                        modified = False
+                        if project_id:
+                            k_obj.project_id = project_id
+                            modified = True
+                        if prompt and str(prompt).strip():
+                            if k_obj.metadata_ is None:
+                                k_obj.metadata_ = {}
+                            k_obj.metadata_["initial_prompt"] = str(prompt).strip()
+                            from sqlalchemy.orm.attributes import flag_modified
+                            flag_modified(k_obj, "metadata_")
+                            modified = True
+                        if modified:
+                            await db.commit()
+                except Exception as up_err:
+                    logger.warning(f"Error updating knowledge record after upload: {up_err}")
 
     return ingest_res
 
@@ -1304,10 +1320,17 @@ async def refine_knowledge(
         if k_entry and isinstance(res, dict):
             if res.get("title"):
                 k_entry.title = res.get("title")
-            if res.get("summary"):
-                k_entry.ai_summary = res.get("summary")
+
             if k_entry.metadata_ is None:
                 k_entry.metadata_ = {}
+
+            # Preserve initial summary before updating ai_summary
+            if "initial_summary" not in k_entry.metadata_ and k_entry.ai_summary:
+                k_entry.metadata_["initial_summary"] = k_entry.ai_summary
+
+            if res.get("summary"):
+                k_entry.ai_summary = res.get("summary")
+
             if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
                 k_entry.metadata_["batch_id"] = res.get("batch_id")
             if res.get("categories") is not None:
@@ -1319,66 +1342,111 @@ async def refine_knowledge(
             if res.get("chunks") is not None:
                 k_entry.metadata_["chunks"] = res.get("chunks")
 
+            prompt_str = prompt or getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
+            initial_prompt = k_entry.metadata_.get("initial_prompt")
+            initial_summary = k_entry.metadata_.get("initial_summary") or k_entry.ai_summary
+
             # Persist chat turns in metadata
             if k_entry.status == KnowledgeStatus.APPROVED:
                 existing_edit_hist = k_entry.metadata_.get("edit_history") or []
                 if not isinstance(existing_edit_hist, list):
                     existing_edit_hist = []
-                
-                prompt_str = prompt or getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
 
-                if res.get("edit_history") and len(res.get("edit_history")) >= 2:
-                    k_entry.metadata_["edit_history"] = res.get("edit_history")
-                else:
-                    new_edit_hist = list(existing_edit_hist)
-                    if prompt_str:
-                        new_edit_hist.append({
+                full_edit_hist = list(existing_edit_hist)
+                if not full_edit_hist:
+                    if initial_prompt:
+                        full_edit_hist.append({
                             "role": "user",
-                            "content": prompt_str,
-                            "created_at": datetime.now(timezone.utc).isoformat()
+                            "content": initial_prompt,
+                            "attachmentName": k_entry.file_name,
+                            "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
                         })
-                    if res.get("summary"):
-                        new_edit_hist.append({
+                    if initial_summary:
+                        full_edit_hist.append({
                             "role": "assistant",
-                            "content": res.get("summary"),
-                            "created_at": datetime.now(timezone.utc).isoformat()
+                            "content": initial_summary,
+                            "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
                         })
-                    k_entry.metadata_["edit_history"] = new_edit_hist
-                    res["edit_history"] = new_edit_hist
-                    if a_file and os.path.exists(a_file):
-                        try:
-                            with open(a_file, "r", encoding="utf-8") as af_r:
-                                cur_af = json.load(af_r)
-                            if isinstance(cur_af, dict):
-                                cur_af["edit_history"] = new_edit_hist
-                                with open(a_file, "w", encoding="utf-8") as af_w:
-                                    json.dump(cur_af, af_w, indent=4, ensure_ascii=False)
-                        except Exception:
-                            pass
+
+                if prompt_str:
+                    full_edit_hist.append({
+                        "role": "user",
+                        "content": prompt_str,
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+                if res.get("summary"):
+                    full_edit_hist.append({
+                        "role": "assistant",
+                        "content": res.get("summary"),
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+
+                k_entry.metadata_["edit_history"] = full_edit_hist
+                res["edit_history"] = full_edit_hist
+                if a_file and os.path.exists(a_file):
+                    try:
+                        with open(a_file, "r", encoding="utf-8") as af_r:
+                            cur_af = json.load(af_r)
+                        if isinstance(cur_af, dict):
+                            cur_af["edit_history"] = full_edit_hist
+                            cur_af["initial_summary"] = initial_summary
+                            with open(a_file, "w", encoding="utf-8") as af_w:
+                                json.dump(cur_af, af_w, indent=4, ensure_ascii=False)
+                    except Exception:
+                        pass
             else:
-                if res.get("history"):
-                    k_entry.metadata_["history"] = res.get("history")
-                    k_entry.metadata_["chat_history"] = res.get("history")
-                else:
-                    existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
-                    if not isinstance(existing_history, list):
-                        existing_history = []
-                    new_history = list(existing_history)
-                    prompt_str = getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
-                    if prompt_str:
-                        new_history.append({
+                existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
+                if not isinstance(existing_history, list):
+                    existing_history = []
+
+                full_history = list(existing_history)
+
+                # Initialize with Turn 0 if history doesn't already contain it
+                if not full_history:
+                    if initial_prompt:
+                        full_history.append({
                             "role": "user",
-                            "content": prompt_str,
-                            "created_at": datetime.now(timezone.utc).isoformat()
+                            "content": initial_prompt,
+                            "attachmentName": k_entry.file_name,
+                            "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
                         })
-                    if res.get("summary"):
-                        new_history.append({
+                    if initial_summary:
+                        full_history.append({
                             "role": "assistant",
-                            "content": res.get("summary"),
-                            "created_at": datetime.now(timezone.utc).isoformat()
+                            "content": initial_summary,
+                            "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
                         })
-                    k_entry.metadata_["history"] = new_history
-                    k_entry.metadata_["chat_history"] = new_history
+
+                if prompt_str:
+                    full_history.append({
+                        "role": "user",
+                        "content": prompt_str,
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+                if res.get("summary"):
+                    full_history.append({
+                        "role": "assistant",
+                        "content": res.get("summary"),
+                        "created_at": datetime.now(timezone.utc).isoformat()
+                    })
+
+                k_entry.metadata_["history"] = full_history
+                k_entry.metadata_["chat_history"] = full_history
+                res["history"] = full_history
+                res["initial_summary"] = initial_summary
+
+                # Also sync back to pending staging json file
+                if p_file and os.path.exists(p_file):
+                    try:
+                        with open(p_file, "r", encoding="utf-8") as pf_r:
+                            cur_pf = json.load(pf_r)
+                        if isinstance(cur_pf, dict):
+                            cur_pf["history"] = full_history
+                            cur_pf["initial_summary"] = initial_summary
+                            with open(p_file, "w", encoding="utf-8") as pf_w:
+                                json.dump(cur_pf, pf_w, indent=4, ensure_ascii=False)
+                    except Exception as pf_err:
+                        logger.warning(f"Failed to update p_file with full history: {pf_err}")
 
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(k_entry, "metadata_")

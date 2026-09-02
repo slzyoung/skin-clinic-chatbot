@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Q
 from pydantic import BaseModel, Field, model_validator
 
 import uuid
+from datetime import datetime, timezone
 
 from app.rag.schemas import (
     ChatRequest, 
