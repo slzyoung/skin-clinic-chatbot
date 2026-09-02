@@ -502,6 +502,23 @@ async def update_chat_session(
     setattr(session, "allow_file_attachments", await _is_file_attachments_allowed(db))
     return session
 
+@router.get("/{session_id}", response_model=ChatHistoryResponse)
+async def get_chat_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_flexible)
+):
+    stmt = select(ChatSession).where(ChatSession.id == session_id)
+    if not await has_chats_read_access(current_user, db):
+        stmt = stmt.where(ChatSession.user_id == current_user.id)
+    
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+        
+    return await _hydrate_chat_session(session, db)
+
 @router.get("/{session_id}/messages", response_model=List[ChatMessageResponse])
 async def list_chat_messages(
     session_id: uuid.UUID,

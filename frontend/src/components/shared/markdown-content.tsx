@@ -776,6 +776,20 @@ export const defaultMarkdownComponents: Components = {
 	td: ({ children }) => <td className="px-2.5 py-1.5 text-zinc-800 font-normal">{children}</td>,
 };
 
+export function stripInternalMetadata(text?: string | null): string {
+	if (!text) return "";
+	// 1. Strip ```json ... ``` code blocks that contain action metadata
+	let cleaned = text.replace(/```(?:json)?\s*\{[\s\S]*?"action"\s*:[\s\S]*?\}\s*```/gi, "");
+
+	// 2. Strip bullet lines or standalone text with internal Action, Target Knowledge, Total Documents / Total Found metadata
+	cleaned = cleaned.replace(
+		/^[ \t]*[-*]?\s*\*\*?(?:Action|Target Knowledge(?:\s*ID)?|Total Document(?:s)?|Total Found)\*\*?\s*[:–-][^\n]*(?:\n|$)/gim,
+		"",
+	);
+
+	return cleaned.trim();
+}
+
 export function MarkdownContent({
 	content,
 	components,
@@ -783,13 +797,14 @@ export function MarkdownContent({
 	content: string;
 	components?: Components;
 }) {
+	const sanitizedContent = stripInternalMetadata(content);
 	const mergedComponents = { ...defaultMarkdownComponents, ...components };
-	const segments = parseMarkdownSegments(content);
+	const segments = parseMarkdownSegments(sanitizedContent);
 
 	if (segments.length === 1 && segments[0].type === "markdown") {
 		return (
 			<ReactMarkdown remarkPlugins={[remarkGfm]} components={mergedComponents}>
-				{content}
+				{sanitizedContent}
 			</ReactMarkdown>
 		);
 	}

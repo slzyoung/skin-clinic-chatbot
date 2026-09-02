@@ -24,3 +24,15 @@ export function useChatStats(doctor_id?: string) {
     },
   });
 }
+
+export function useChatHistoryDetail(sessionId?: string | null) {
+  return useQuery<ChatHistoryResponse>({
+    queryKey: sessionId ? chatHistoryKeys.detail(sessionId) : ["chat-history", "detail", "empty"],
+    queryFn: async () => {
+      const response = await api.get(`/chats/${sessionId}`);
+      return response.data;
+    },
+    enabled: !!sessionId,
+  });
+}
+
