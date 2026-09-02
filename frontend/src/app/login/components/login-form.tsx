@@ -86,6 +86,12 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"form">)
 				? "Your session has expired. Please log in again."
 				: null;
 
+	useEffect(() => {
+		if (reasonMessage) {
+			toast.warning(reasonMessage);
+		}
+	}, [reasonMessage]);
+
 	return (
 		<form
 			onSubmit={(e) => {
