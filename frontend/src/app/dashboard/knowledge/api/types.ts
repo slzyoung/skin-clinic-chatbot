@@ -12,6 +12,23 @@ export interface KnowledgeCreate {
 	project_id?: string | null;
 }
 
+export interface KnowledgeTextIngestRequest {
+	text_content: string;
+	title?: string | null;
+	prompt?: string | null;
+	project_id?: string | null;
+	replace_existing?: boolean;
+}
+
+export interface KnowledgeTextIngestResponse {
+	status: string;
+	knowledge_id: string;
+	file_name: string;
+	title: string;
+	original_s3_key?: string | null;
+	message: string;
+}
+
 export interface VisibilitySettings {
 	clinics: string[];
 	doctor_types: string[];

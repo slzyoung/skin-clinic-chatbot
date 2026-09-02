@@ -13,7 +13,12 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect, useMemo, Suspense } from "react";
-import { useUploadKnowledge, useIngestionQuota, useCreateGeneralChatSession } from "../knowledge/hooks/use-knowledge";
+import {
+	useUploadKnowledge,
+	useIngestTextKnowledge,
+	useIngestionQuota,
+	useCreateGeneralChatSession,
+} from "../knowledge/hooks/use-knowledge";
 import { useProjects } from "../knowledge/hooks/use-projects";
 
 function IngestContent() {
@@ -23,7 +28,10 @@ function IngestContent() {
 
 	const { data: projects = [] } = useProjects();
 	const uploadMutation = useUploadKnowledge();
+	const textIngestMutation = useIngestTextKnowledge();
 	const { data: quota } = useIngestionQuota();
+
+	const isProcessing = uploadMutation.isPending || textIngestMutation.isPending;
 
 	const [mode, setMode] = useState<"ingest" | "general">("ingest");
 	const [selectedProjectId, setSelectedProjectId] = useState<string>(projectId || "none");
@@ -72,41 +80,64 @@ function IngestContent() {
 			return;
 		}
 
-		// Normal Ingestion Flow
-		if (files.length === 0) {
-			setErrorMsg("Please attach at least one file to ingest.");
+		const isValidProject = selectedProjectId !== "none" && projects.some((p) => p.id === selectedProjectId);
+		const targetProject = isValidProject ? selectedProjectId : null;
+
+		// 1. Files attached -> Standard Multipart Ingestion Flow
+		if (files.length > 0) {
+			const formData = new FormData();
+			if (value && value.trim()) {
+				formData.append("prompt", value.trim());
+			}
+
+			if (targetProject) {
+				formData.append("project_id", targetProject);
+			}
+
+			files.forEach((file) => {
+				formData.append("file", file);
+			});
+
+			uploadMutation.mutate(formData, {
+				onSuccess: (data: { batch_id?: string; upload_batch_id?: string; documents?: { knowledge_id: string }[] }) => {
+					const batchId = data.batch_id || data.upload_batch_id;
+					if (batchId) {
+						router.push(`/dashboard/knowledge/batch/${batchId}`);
+					} else if (data.documents && data.documents.length > 0) {
+						router.push(`/dashboard/knowledge/${data.documents[0].knowledge_id}`);
+					} else if (targetProject) {
+						router.push(`/dashboard/knowledge/project/${targetProject}`);
+					} else {
+						router.push("/dashboard/knowledge");
+					}
+				},
+			});
+			return;
+		}
+
+		// 2. No files attached -> Text-Only Ingestion Flow
+		if (!value || !value.trim()) {
+			setErrorMsg("Please provide knowledge text or attach files to ingest.");
 			return false;
 		}
 
-		const formData = new FormData();
-		if (value && value.trim()) {
-			formData.append("prompt", value.trim());
-		}
-
-		const isValidProject = selectedProjectId !== "none" && projects.some((p) => p.id === selectedProjectId);
-		const targetProject = isValidProject ? selectedProjectId : null;
-		if (targetProject) {
-			formData.append("project_id", targetProject);
-		}
-
-		files.forEach((file) => {
-			formData.append("file", file);
-		});
-
-		uploadMutation.mutate(formData, {
-			onSuccess: (data: { batch_id?: string; upload_batch_id?: string; documents?: { knowledge_id: string }[] }) => {
-				const batchId = data.batch_id || data.upload_batch_id;
-				if (batchId) {
-					router.push(`/dashboard/knowledge/batch/${batchId}`);
-				} else if (data.documents && data.documents.length > 0) {
-					router.push(`/dashboard/knowledge/${data.documents[0].knowledge_id}`);
-				} else if (targetProject) {
-					router.push(`/dashboard/knowledge/project/${targetProject}`);
-				} else {
-					router.push("/dashboard/knowledge");
-				}
+		textIngestMutation.mutate(
+			{
+				text_content: value.trim(),
+				project_id: targetProject,
 			},
-		});
+			{
+				onSuccess: (data) => {
+					if (data.knowledge_id) {
+						router.push(`/dashboard/knowledge/${data.knowledge_id}`);
+					} else if (targetProject) {
+						router.push(`/dashboard/knowledge/project/${targetProject}`);
+					} else {
+						router.push("/dashboard/knowledge");
+					}
+				},
+			}
+		);
 	};
 
 	return (
@@ -209,8 +240,8 @@ function IngestContent() {
 								? "Ask about the knowledge..."
 								: undefined
 						}
-						disabled={uploadMutation.isPending}
-						isLoading={uploadMutation.isPending}
+						disabled={isProcessing}
+						isLoading={isProcessing}
 					/>
 				</div>
 
@@ -228,7 +259,7 @@ function IngestContent() {
 						<button
 							type="button"
 							onClick={() => {
-								if (!uploadMutation.isPending) {
+								if (!isProcessing) {
 									setMode("ingest");
 									setErrorMsg(null);
 								}
@@ -247,13 +278,13 @@ function IngestContent() {
 								setMode(checked ? "general" : "ingest");
 								setErrorMsg(null);
 							}}
-							disabled={uploadMutation.isPending}
+							disabled={isProcessing}
 							className="data-checked:bg-blue-500 data-[state=checked]:bg-blue-500 cursor-pointer"
 						/>
 						<button
 							type="button"
 							onClick={() => {
-								if (!uploadMutation.isPending) {
+								if (!isProcessing) {
 									setMode("general");
 									setErrorMsg(null);
 								}
@@ -274,7 +305,7 @@ function IngestContent() {
 							<Select
 								value={selectedProjectId}
 								onValueChange={(val) => setSelectedProjectId(val ?? "none")}
-								disabled={uploadMutation.isPending}
+								disabled={isProcessing}
 							>
 								<SelectTrigger className="h-7.5 text-xs border border-zinc-200 bg-white text-zinc-700 rounded-md px-2.5 min-w-36 max-w-56 sm:max-w-72 shadow-none hover:border-zinc-300 transition-colors">
 									<SelectValue placeholder="Select Project" className="truncate">
@@ -301,16 +332,18 @@ function IngestContent() {
 				</div>
 
 				{/* Loading Overlays */}
-				{uploadMutation.isPending && (
+				{isProcessing && (
 					<div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-xl z-10 backdrop-blur-sm">
-						<span className="text-sm font-medium text-blue-600">Uploading documents...</span>
+						<span className="text-sm font-medium text-blue-600">
+							{textIngestMutation.isPending ? "Ingesting knowledge text..." : "Uploading documents..."}
+						</span>
 					</div>
 				)}
 
 				{!isGeneralMode && (
 					<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-600 bg-zinc-50/50">
 						<RiFileTextLine className="size-3 mr-1.5 text-zinc-600" />
-						Supports PDF, DOCX, XLSX, TXT, JPG, and PNG
+						Supports Text or PDF, DOCX, XLSX, TXT, JPG, PNG files
 					</div>
 				)}
 			</div>

@@ -3,7 +3,13 @@ import { getErrorMessage } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { knowledgeKeys, projectKeys } from "../api/keys";
-import type { KnowledgeResponse, KnowledgeStatus, VisibilitySettings } from "../api/types";
+import type {
+	KnowledgeResponse,
+	KnowledgeStatus,
+	VisibilitySettings,
+	KnowledgeTextIngestRequest,
+	KnowledgeTextIngestResponse,
+} from "../api/types";
 
 export const useKnowledgeBaseList = () => {
 	return useQuery({
@@ -75,6 +81,27 @@ export const useUploadKnowledge = () => {
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to upload knowledge files."));
+		},
+	});
+};
+
+export const useIngestTextKnowledge = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async (payload: KnowledgeTextIngestRequest): Promise<KnowledgeTextIngestResponse> => {
+			const response = await api.post("/knowledge/text", payload);
+			return response.data;
+		},
+		onSuccess: () => {
+			toast.success("Knowledge text ingestion initiated!");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to ingest knowledge text."));
 		},
 	});
 };
