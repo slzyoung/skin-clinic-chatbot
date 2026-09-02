@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.chat import ChatSession, ChatMessage as DBChatMessage, ChatRole, ChatStatus
 from app.schemas.knowledge import (
     KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse, KnowledgeProjectUpdate,
+    KnowledgeTextIngestRequest, KnowledgeTextIngestResponse,
     GeneralChatSessionResponse, GeneralChatMessageItem, GeneralChatMessageSendRequest
 )
 from app.services.token_service import check_ingestion_quota, record_ingestion_token_usage
@@ -26,6 +27,7 @@ from app.rag.deps import get_ingestion_pipeline, get_llm, get_bm25_index, get_ve
 from app.rag.services.interfaces import BaseLLMAdapter
 from app.rag.router import (
     ingest_document, 
+    ingest_text_only,
     approve_document, 
     edit_approved_document,
     edit_pending_document,
@@ -40,7 +42,15 @@ from app.rag.router import (
     QueryGeneralRequest,
     QueryGeneralResponse
 )
-from app.rag.schemas import EditApprovedDocumentRequest, RefineRequest, ChatMessage, ChatRequest, ChatResponse, UserContext
+from app.rag.schemas import (
+    EditApprovedDocumentRequest, 
+    RefineRequest, 
+    ChatMessage, 
+    ChatRequest, 
+    ChatResponse, 
+    UserContext,
+    TextIngestRequest
+)
 
 router = APIRouter(tags=["Knowledge"])
 
@@ -818,6 +828,92 @@ async def upload_knowledge_file(
                     pass
 
     return ingest_res
+
+@router.post("/text", response_model=KnowledgeTextIngestResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/text/", response_model=KnowledgeTextIngestResponse, status_code=status.HTTP_202_ACCEPTED)
+async def ingest_knowledge_text_endpoint(
+    request: Request,
+    payload: KnowledgeTextIngestRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write")),
+    llm: BaseLLMAdapter = Depends(get_llm)
+):
+    """
+    Ingest raw knowledge text material directly without requiring a file attachment.
+    Converts raw text into structured markdown, checks duplicates, uploads to MinIO,
+    and initializes background staging for approval review.
+    """
+    if not payload.text_content or not payload.text_content.strip():
+        raise HTTPException(status_code=400, detail="Text content cannot be empty.")
+
+    # 1. Check monthly ingestion quota
+    allowed, quota_info = await check_ingestion_quota(db)
+    if quota_info.get("exceeded"):
+        logger.warning(f"Monthly knowledge ingestion threshold exceeded ({quota_info['tokens_used']:,} / {quota_info['token_limit']:,} tokens). Ingestion proceeding with soft warning.")
+    elif quota_info.get("warning"):
+        logger.info(f"Monthly knowledge ingestion threshold near limit ({quota_info['percentage']}% used).")
+
+    # 2. Record estimated ingestion token usage
+    estimated_tokens = max(100, len(payload.text_content.split()) * 2)
+    await record_ingestion_token_usage(
+        db=db,
+        input_tokens=estimated_tokens,
+        output_tokens=150,
+        documents_count=1
+    )
+
+    pipeline = get_ingestion_pipeline(request)
+    rag_req = TextIngestRequest(
+        text_content=payload.text_content,
+        title=payload.title,
+        prompt=payload.prompt,
+        replace_existing=payload.replace_existing
+    )
+
+    ingest_res = await ingest_text_only(
+        req=rag_req,
+        pipeline=pipeline,
+        llm=llm
+    )
+
+    # 3. Associate project_id & uploaded_by if provided
+    k_id = ingest_res.get("knowledge_id")
+    if k_id:
+        try:
+            k_uuid = uuid.UUID(str(k_id))
+            stmt = select(Knowledge).where(Knowledge.id == k_uuid)
+            res = await db.execute(stmt)
+            k_obj = res.scalar_one_or_none()
+            if k_obj:
+                k_obj.uploaded_by = current_user.id
+                if payload.project_id:
+                    k_obj.project_id = payload.project_id
+                await db.commit()
+
+            # Keep project_id in pending JSON file in sync
+            if payload.project_id:
+                p_file = resolve_pending_file(str(k_id))
+                if p_file and os.path.exists(p_file):
+                    try:
+                        with open(p_file, "r", encoding="utf-8") as pf:
+                            pj_data = json.load(pf)
+                        if isinstance(pj_data, dict):
+                            pj_data["project_id"] = str(payload.project_id)
+                            with open(p_file, "w", encoding="utf-8") as pf:
+                                json.dump(pj_data, pf, indent=4, ensure_ascii=False)
+                    except Exception:
+                        pass
+        except Exception as err:
+            logger.warning(f"Could not link user or project to text ingestion: {err}")
+
+    return KnowledgeTextIngestResponse(
+        status=ingest_res.get("status", "success"),
+        knowledge_id=str(k_id),
+        file_name=ingest_res.get("file_name", ""),
+        title=ingest_res.get("title", ""),
+        original_s3_key=ingest_res.get("original_s3_key"),
+        message=ingest_res.get("message", "Document text ingestion initiated.")
+    )
 
 @router.put("/{knowledge_id}/status", response_model=KnowledgeResponse)
 @router.patch("/{knowledge_id}/status", response_model=KnowledgeResponse)
