@@ -3555,16 +3555,16 @@ def _apply_kb_edit(
     bm25_index
 ) -> Dict[str, Any]:
     """
-    Applies an edit for ANY topic/field to an approved KB document and re-indexes.
+    Applies an edit for ANY topic/field to a KB document (approved or pending) and re-indexes.
     Preserves all other fields, metadata, and document summaries 100% intact.
     Automatically synchronizes chunk text content for vector & BM25 search.
     """
-    approved_file = resolve_approved_file(knowledge_id)
-    if not approved_file:
-        return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di approved KB."}
+    target_file = resolve_approved_file(knowledge_id) or resolve_pending_file(knowledge_id)
+    if not target_file:
+        return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di Knowledge Base."}
 
     try:
-        with open(approved_file, "r", encoding="utf-8") as f:
+        with open(target_file, "r", encoding="utf-8") as f:
             existing_doc = json.load(f)
 
         doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
@@ -3692,7 +3692,7 @@ def _apply_kb_edit(
                 if existing_doc.get("categories"):
                     chunk["metadata"]["categories"] = existing_doc["categories"]
 
-        with open(approved_file, "w", encoding="utf-8") as f:
+        with open(target_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
 
         if vector_store:
@@ -3733,9 +3733,10 @@ def _apply_kb_delete(
     bm25_index
 ) -> Dict[str, Any]:
     """
-    Deletes an approved document, removes JSON files, and clears PGVector & BM25 indices.
-    Supports single document deletion by ID/name, or batch deletion of all expired promos.
+    Deletes a KB document (approved or pending), removes JSON files, clears PGVector & BM25 indices,
+    soft-deletes PostgreSQL DB record, and cleans MinIO files.
     """
+    pending_dir = "data/pending"
     approved_dir = "data/output"
     was_deleted = False
     deleted_title = None
@@ -3743,14 +3744,14 @@ def _apply_kb_delete(
 
     clean_target = (knowledge_id or "").strip().lower()
 
-    # 1. Batch Delete Expired Promos if requested (ONLY for Approved Knowledge Documents)
+    # 1. Batch Delete Expired Promos if requested
     if clean_target in ("expired", "expired_promos", "promo_expired", "promo expired", "promo bulan lalu", "semua promo expired", "promo yang sudah expired"):
         from datetime import datetime, timezone
         from app.rag.services.rag_retriever import parse_date_safely
         today = datetime.now(timezone.utc).date()
         deleted_items = []
 
-        for folder in [approved_dir]:
+        for folder in [pending_dir, approved_dir]:
             if os.path.exists(folder):
                 for f in os.listdir(folder):
                     if f.endswith(".json") and f != "bm25_index.pkl":
@@ -3764,7 +3765,7 @@ def _apply_kb_delete(
                                 parsed_vu = parse_date_safely(vu)
                                 if parsed_vu and parsed_vu < today:
                                     is_expired = True
-                            
+
                             if is_expired:
                                 doc_id = str(f_data.get("knowledge_id", f.replace(".json", "")))
                                 doc_title = str(f_data.get("title", f_data.get("file_name", doc_id)))
@@ -3775,7 +3776,7 @@ def _apply_kb_delete(
                                     bm25_index.remove_file_chunks(doc_id)
                                 deleted_items.append(f"{doc_title} (expired: {vu})")
                                 was_deleted = True
-                                logger.info(f"[QUERY-GENERAL] Deleted expired approved promo file: {doc_title} ({f_path})")
+                                logger.info(f"[QUERY-GENERAL] Deleted expired promo file: {doc_title} ({f_path})")
                         except Exception as err:
                             logger.warning(f"[QUERY-GENERAL] Error checking file {f} for expiry deletion: {err}")
 
@@ -3792,11 +3793,11 @@ def _apply_kb_delete(
             return {
                 "success": True,
                 "knowledge_id": "none",
-                "title": "Tidak ada dokumen promo expired yang ditemukan di basis pengetahuan terpublikasi (Approved)."
+                "title": "Tidak ada dokumen promo expired yang ditemukan di basis pengetahuan."
             }
 
-    # 2. Regular Single/Specific Approved Document Deletion
-    for folder in [approved_dir]:
+    # 2. Regular Single/Specific Document Deletion (Search pending and approved)
+    for folder in [pending_dir, approved_dir]:
         if os.path.exists(folder):
             for f in os.listdir(folder):
                 if f.endswith(".json") and f != "bm25_index.pkl":
