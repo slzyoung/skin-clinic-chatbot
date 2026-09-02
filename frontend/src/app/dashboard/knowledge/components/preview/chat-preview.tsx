@@ -901,7 +901,10 @@ export function ChatPreview({
 								<MessageScrollerItem>
 									<div className="flex flex-col w-full min-w-0 max-w-full items-start">
 										{/* Attached Document Badge OUTSIDE & ABOVE bubble if no user message shown */}
-										{fileName && messages.length === 0 &&
+										{preHeaderNode ? (
+											preHeaderNode
+										) : (
+											fileName && messages.length === 0 &&
 											(() => {
 												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
 												return (
@@ -923,7 +926,8 @@ export function ChatPreview({
 														</Attachment>
 													</div>
 												);
-											})()}
+											})()
+										)}
 
 										<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
 											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
@@ -986,7 +990,7 @@ export function ChatPreview({
 												</div>
 											</div>
 										)}
-										{fileName && messages[0].role !== "user" &&
+										{fileName && !preHeaderNode && messages[0].role !== "user" &&
 											(() => {
 												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
 												return (
@@ -1013,7 +1017,7 @@ export function ChatPreview({
 											const names =
 												messages[0].attachmentNames ||
 												(messages[0].attachmentName ? [messages[0].attachmentName] : []);
-											if (names.length === 0) return null;
+											if (names.length === 0 || preHeaderNode) return null;
 											return (
 												<div className="flex flex-wrap gap-2 mb-2">
 													{names.map((name, i) => {
