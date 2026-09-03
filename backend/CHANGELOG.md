@@ -2,6 +2,23 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.6] - 2026-09-02
+
+### CIS Master Data Batch Webhook Synchronization
+- **Polymorphic Ingestion & Key Aliases (`app/services/cis_sync.py`, `app/api/routers/webhooks.py`)**:
+  - `upsert_branch_payload` and `upsert_doctor_payload` now accept both single JSON objects and list arrays, allowing CIS to push entities in batches without `AttributeError`.
+  - Added key aliases in `bulk_sync_payload` for branches (`branches`, `branch`), doctors (`users`, `doctors`, `doctor`), and user branches (`user_branches`, `user_branchs`, `doctor_branches`).
+- **Defensive Safeguards & Collision Avoidance (`app/services/cis_sync.py`)**:
+  - Added duplicate email collision guard preventing PostgreSQL `users_email_key` unique constraint violations when doctors share placeholder or clinic emails.
+  - Added strict integer parsing for IDs and silent filtering for malformed/null entries.
+  - Implemented ecosystem-scoped pruning so full sync with `prune_omitted: true` only reconciles branches and doctors within the ecosystems present in the incoming payload.
+- **Race Condition Prevention in Webhooks (`app/api/routers/webhooks.py`)**:
+  - Moved `broadcaster.publish("sync_completed")` to execute strictly after `await db.commit()`, ensuring frontend listeners read fully committed data.
+- **Documentation (`docs/CIS_BATCH_SYNC.md`, `docs/cis-integration-guide.md`)**:
+  - Authored comprehensive integration guides and RSA signature examples in Node.js, Python, and PHP/Laravel.
+
+---
+
 ## [1.2.5] - 2026-09-02
 
 ### Approved Knowledge Refinement Fix
