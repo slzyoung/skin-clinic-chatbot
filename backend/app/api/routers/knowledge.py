@@ -1218,29 +1218,68 @@ async def refine_knowledge(
             parser = DocumentParser()
             parse_res = parser.parse_file(temp_file_path)
             extracted_text = ""
+            all_attached_images = []
+
             if parse_res:
                 if parse_res.pages:
                     extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
                     extracted_text = "\n\n".join(extracted_pages)
+                    # Collect all embedded / standalone image URLs across all pages/slides/sheets
+                    for p in parse_res.pages:
+                        if p.get("image_urls") and isinstance(p["image_urls"], list):
+                            for u in p["image_urls"]:
+                                if u and u not in all_attached_images:
+                                    all_attached_images.append(u)
+                        if p.get("image_url") and p["image_url"] not in all_attached_images:
+                            all_attached_images.append(p["image_url"])
                 elif parse_res.docling_doc:
                     try:
                         extracted_text = parse_res.docling_doc.export_to_markdown()
-                    except Exception:
+                    except Exception as exp_err:
+                        logger.warning(f"Docling export to markdown failed for attached file: {exp_err}")
                         extracted_text = ""
 
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
 
-            if extracted_text:
+            if extracted_text or all_attached_images:
+                # Cap extremely large spreadsheets/documents to 10,000 chars to avoid LLM context blowout
+                content_snippet = extracted_text
+                if len(content_snippet) > 10000:
+                    content_snippet = content_snippet[:10000] + "\n\n... [KONTEN FILE TERLAMPIR DIPOTONG KARENA PANJANG] ..."
+
+                media_note = ""
+                if all_attached_images:
+                    media_lines = [f"![Asset Gambar {i+1}]({url})" for i, url in enumerate(all_attached_images)]
+                    media_note = f"\n\n### Asset Media dari File Terlampir:\n" + "\n\n".join(media_lines) + "\n"
+
                 file_note = (
                     f"\n\n[SUPPLEMENTARY ATTACHED FILE CONTENT: '{attached_file_name}']\n"
-                    f"{extracted_text}\n"
+                    f"{content_snippet}{media_note}\n"
                     f"[END OF ATTACHED FILE CONTENT]"
                 )
                 payload.prompt = f"{payload.prompt}\n{file_note}" if payload.prompt else file_note
-                logger.info(f"📄 Successfully attached file '{attached_file_name}' ({len(extracted_text)} chars) to refine request for knowledge_id='{knowledge_id}'")
+                logger.info(f"📄 Successfully attached file '{attached_file_name}' ({len(extracted_text)} chars, {len(all_attached_images)} images) to refine request for knowledge_id='{knowledge_id}'")
 
-            await file_attachment.seek(0)
+            # If images were extracted/attached, update image_urls in existing pending/approved files
+            if all_attached_images:
+                for target_json_file in [resolve_pending_file(str(knowledge_id)), resolve_approved_file(str(knowledge_id))]:
+                    if target_json_file and os.path.exists(target_json_file):
+                        try:
+                            with open(target_json_file, "r", encoding="utf-8") as jf:
+                                jdata = json.load(jf)
+                            if "image_urls" not in jdata or not isinstance(jdata["image_urls"], list):
+                                jdata["image_urls"] = []
+                            for u in all_attached_images:
+                                if u not in jdata["image_urls"]:
+                                    jdata["image_urls"].append(u)
+                            if not jdata.get("image_url") and all_attached_images:
+                                jdata["image_url"] = all_attached_images[0]
+                            with open(target_json_file, "w", encoding="utf-8") as jf:
+                                json.dump(jdata, jf, indent=4, ensure_ascii=False)
+                        except Exception as update_err:
+                            logger.debug(f"Could not pre-update image_urls in {target_json_file}: {update_err}")
+
         except Exception as file_err:
             logger.warning(f"Failed to process attached file in refine_knowledge: {file_err}")
 

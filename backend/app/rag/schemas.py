@@ -40,6 +40,7 @@ class TextIngestRequest(BaseModel):
     text_content: str = Field(..., description="Raw text knowledge material to convert to structured .md document")
     title: Optional[str] = Field(None, description="Optional document title (auto-generated if not specified)")
     prompt: Optional[str] = Field(None, description="Optional custom AI processing instruction")
+    project_id: Optional[str] = Field(None, description="Optional target project ID to assign document to")
     replace_existing: bool = Field(False, description="Set to true to overwrite existing pending draft")
 
 

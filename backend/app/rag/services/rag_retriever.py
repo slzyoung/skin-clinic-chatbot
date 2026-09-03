@@ -134,7 +134,6 @@ class BM25Index:
             chunk_fname = str(meta.get("file_name", "")).strip().lower()
             if s_clean not in (chunk_source, chunk_kid, chunk_fname):
                 indices_to_keep.append(i)
-
         self.chunks = [self.chunks[i] for i in indices_to_keep]
         self.corpus = [self.corpus[i] for i in indices_to_keep]
         
@@ -186,9 +185,14 @@ class BM25Index:
                             match = False
                             break
                     elif isinstance(v, list):
-                        chunk_val = meta.get(k, [])
+                        chunk_val = meta.get(k)
+                        # If chunk has no restriction, or has 'all', or query filter allows 'all', it matches
+                        if chunk_val is None or chunk_val == [] or "all" in v:
+                            continue
                         if not isinstance(chunk_val, list):
-                            chunk_val = [chunk_val] if chunk_val else []
+                            chunk_val = [chunk_val]
+                        if "all" in chunk_val:
+                            continue
                         if not any(item in chunk_val for item in v if item):
                             match = False
                             break
@@ -243,17 +247,19 @@ class BM25Index:
             return results
 
     def save(self, file_path: str):
-        """Serializes and saves the index to disk using pickle."""
+        """Serializes and saves the index to disk using pickle atomically."""
         try:
             parent_dir = os.path.dirname(file_path)
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
-            with open(file_path, "wb") as f:
+            tmp_path = f"{file_path}.tmp"
+            with open(tmp_path, "wb") as f:
                 pickle.dump({
                     "chunks": self.chunks,
                     "corpus": self.corpus
                 }, f)
-            logger.info(f"Successfully saved BM25 index to {file_path}")
+            os.replace(tmp_path, file_path)
+            logger.info(f"Successfully saved BM25 index atomically to {file_path}")
         except Exception as e:
             logger.error(f"Failed to save BM25 index: {e}")
 
@@ -311,29 +317,21 @@ class Reranker:
             return hits[:top_n]
 
         try:
-            # Clip candidates to top 5 and truncate text to 350 chars for fast CPU inference (< 200ms)
-            target_hits = hits[:5]
+            # Evaluate top 15 candidates with generous text snippet (1200 chars) so pricing, SKU, and instructions are preserved
+            target_hits = hits[:15]
             pairs = []
             for hit in target_hits:
                 meta = hit.get("metadata", {})
-                product_name = meta.get("product_name")
+                product_name = meta.get("product_name") or meta.get("title")
                 if not product_name:
                     source_file = meta.get("source_file", "unknown")
                     product_name = source_file
                     for ext in [".pdf", ".docx", ".txt", "_parsed.json"]:
                         product_name = product_name.replace(ext, "")
-                    pn_lower = product_name.lower()
-                    for prefix in ["dummy_", "dumy_", "dummy-", "dumy-", "dummy ", "dumy "]:
-                        if pn_lower.startswith(prefix):
-                            product_name = product_name[len(prefix):]
-                            pn_lower = pn_lower[len(prefix):]
-                    if pn_lower.startswith("dummy") or pn_lower.startswith("dumy"):
-                        product_name = product_name[5:]
-                    product_name = product_name.replace("-", " ").replace("_", " ")
-                    product_name = product_name.strip()
+                    product_name = product_name.replace("-", " ").replace("_", " ").strip()
                 
                 section = meta.get("section", "General")
-                text = hit.get("text", "")[:350]
+                text = hit.get("text", "")[:1200]
                 
                 enriched_text = f"Product: {product_name} | Section: {section} | Content: {text}"
                 pairs.append([query, enriched_text])
@@ -372,28 +370,43 @@ class PromptContextBuilder:
             return "No relevant context found."
 
         context_parts = []
+        total_chars = 0
+        MAX_CONTEXT_CHARS = 20000  # ~5,000 tokens budget reserved for context (OpenAI GPT-5.4)
+
         for idx, hit in enumerate(hits, start=1):
             metadata = hit.get("metadata", {})
             source_file = metadata.get("source_file", "unknown")
-            product_name = metadata.get("product_name")
+            product_name = metadata.get("product_name") or metadata.get("title") or metadata.get("treatment_name")
             if not product_name:
-                product_name = source_file
-                for ext in [".pdf", ".docx", ".txt", "_parsed.json"]:
-                    product_name = product_name.replace(ext, "")
-                pn_lower = product_name.lower()
-                for prefix in ["dummy_", "dumy_", "dummy-", "dumy-", "dummy ", "dumy "]:
-                    if pn_lower.startswith(prefix):
-                        product_name = product_name[len(prefix):]
-                        pn_lower = pn_lower[len(prefix):]
-                if pn_lower.startswith("dummy") or pn_lower.startswith("dumy"):
-                    product_name = product_name[5:]
-                product_name = product_name.replace("-", " ").replace("_", " ")
-                product_name = product_name.strip()
-                
+                product_name = os.path.splitext(source_file)[0].replace("-", " ").replace("_", " ").strip()
+
+            doc_type = metadata.get("document_type", "GENERAL")
+            category = metadata.get("category") or (metadata.get("categories")[0] if metadata.get("categories") else "")
+            cat_header = f" | Category: {category}" if category else ""
+
+            rel_prods = metadata.get("related_products", [])
+            rel_prods_header = f" | Related Products: {', '.join(rel_prods[:4])}" if rel_prods else ""
+
+            rel_treats = metadata.get("related_treatments", [])
+            rel_treats_header = f" | Related Treatments: {', '.join(rel_treats[:4])}" if rel_treats else ""
+
+            indications = metadata.get("indications", [])
+            ind_header = f" | Indications: {', '.join(indications[:5])}" if indications else ""
+
             section = metadata.get("section", "General")
             page = metadata.get("page", 1)
             image_url = metadata.get("image_url") or metadata.get("image")
+            if not image_url and metadata.get("image_urls") and isinstance(metadata.get("image_urls"), list) and len(metadata["image_urls"]) > 0:
+                image_url = metadata["image_urls"][0]
             text = hit.get("text", "")
+            if not image_url:
+                img_matches = re.findall(r'!\[.*?\]\((https?://[^\)]+)\)', text)
+                if img_matches:
+                    image_url = img_matches[0]
+
+            # Smart chunk trimming: limit individual chunk text to 1,400 chars (~350 tokens) to ensure room for multiple documents
+            if len(text) > 1400:
+                text = text[:1400] + "\n... [bagian detail dipadatkan]"
 
             valid_from = metadata.get("valid_from")
             valid_until = metadata.get("valid_until")
@@ -401,13 +414,29 @@ class PromptContextBuilder:
             if valid_until or valid_from:
                 if valid_from and valid_until:
                     promo_header = f" | Periode Promo: {valid_from} s/d {valid_until}"
+                elif valid_until:
+                    promo_header = f" | Berlaku Hingga: {valid_until}"
+
+            sku = metadata.get("sku")
+            sku_header = f" | SKU: {sku}" if sku else ""
+            price = metadata.get("price")
+            price_header = f" | Price: {price}" if price else ""
+
             kid = metadata.get("knowledge_id") or source_file
+            id_header = f"ID: {kid} | " if kid else ""
             img_header = f" | Image: {image_url}" if image_url else ""
             part = (
-                f"[{idx}] ID: {kid} | Source: {source_file} | Title: {product_name}{promo_header}{img_header} | Section: {section} | Page: {page}\n"
+                f"[{idx}] {id_header}Type: {doc_type} | Title: {product_name}{cat_header}{sku_header}{price_header}{ind_header}{promo_header}{img_header}{rel_prods_header}{rel_treats_header} | Section: {section} | Source: {source_file}\n"
                 f"Content:\n{text.strip()}"
             )
+
+            # Token Budget Check: Stop adding chunks if total context exceeds token budget
+            if total_chars + len(part) > MAX_CONTEXT_CHARS and context_parts:
+                logger.info(f"Token Budget Reached: Context capped at {idx-1} chunks ({total_chars} chars, ~{total_chars//4} tokens).")
+                break
+
             context_parts.append(part)
+            total_chars += len(part)
 
         return "\n\n".join(context_parts)
 
@@ -421,10 +450,55 @@ def get_chunk_key(hit: Dict[str, Any]) -> str:
         return f"{source_file}_{chunk_index}"
     return str(hash(hit.get("text", "")))
 
+# --- Clinical Synonym & Slang Dictionary ---
+CLINICAL_SYNONYM_DICTIONARY = {
+    "bruntusan": ["comedonal acne", "closed comedones", "komedo tertutup", "sumbatan pori"],
+    "komedoan": ["comedones", "blackhead", "whitehead", "komedo terbuka tertutup"],
+    "bopeng": ["atrophic acne scar", "acne scar", "bopeng bekas jerawat", "microneedling"],
+    "scar": ["atrophic acne scar", "acne scar", "bekas jerawat"],
+    "flek": ["hyperpigmentation", "melasma", "PIH", "flek hitam"],
+    "flek hitam": ["melasma", "hyperpigmentation", "PIH", "lentigo"],
+    "kusam": ["dull skin", "brightening", "kulit kusam", "regenerasi kulit"],
+    "mendem": ["cystic acne", "nodular acne", "jerawat meradang kistik"],
+    "jerawat batu": ["cystic acne", "nodul kistik", "inflammatory acne berat"],
+    "kebal": ["acne resistant", "keratolytic", "peeling"],
+    "badak": ["acne resistant", "keratolytic", "peeling kuat"],
+    "merah": ["erythema", "post acne erythema", "PAE", "inflamasi kemerahan"],
+    "meradang": ["inflammatory acne", "papule", "pustule", "lesi inflamasi"],
+    "pori gede": ["enlarged pores", "pori pori besar", "seborrhea"],
+    "pori besar": ["enlarged pores", "pori pori besar", "sebum oily"],
+    "minyakan": ["sebum oily", "kulit berminyak", "excess sebum", "oil control"],
+    "sabun": ["facial wash", "cleanser", "pembersih wajah"],
+    "sabun muka": ["gentle acne facial wash", "cleanser", "pembersih wajah"],
+    "totol": ["acne spot gel", "spot treatment", "totol jerawat"],
+    "krim malam": ["night cream", "retinol", "moisturizer malam"],
+    "krim siang": ["day cream", "sunscreen", "moisturizer pagi"],
+    "sunscreen": ["tabir surya", "SPF50", "sun protection", "sunblock"],
+}
+
+def expand_clinical_query(query: str) -> str:
+    """Expands doctor slang and informal bilingual terms with standard clinical vocabulary."""
+    if not query:
+        return query
+    q_lower = query.lower()
+    expanded_terms = []
+    for term, syns in CLINICAL_SYNONYM_DICTIONARY.items():
+        pattern = r'\b' + re.escape(term) + r'\b'
+        if re.search(pattern, q_lower):
+            expanded_terms.extend(syns[:2])
+
+    if expanded_terms:
+        unique_syns = list(dict.fromkeys(expanded_terms))
+        return f"{query} {' '.join(unique_syns[:8])}"
+    return query
+
+
 def reciprocal_rank_fusion(
     dense_hits: List[Dict[str, Any]], 
     sparse_hits: List[Dict[str, Any]], 
-    rrf_k: int = 60
+    rrf_k: int = 60,
+    dense_weight: float = 1.0,
+    sparse_weight: float = 1.0
 ) -> List[Dict[str, Any]]:
     rrf_scores = {}
 
@@ -432,13 +506,13 @@ def reciprocal_rank_fusion(
         key = get_chunk_key(hit)
         if key not in rrf_scores:
             rrf_scores[key] = {"hit": hit, "score": 0.0}
-        rrf_scores[key]["score"] += 1.0 / (rrf_k + rank)
+        rrf_scores[key]["score"] += dense_weight * (1.0 / (rrf_k + rank))
 
     for rank, hit in enumerate(sparse_hits, start=1):
         key = get_chunk_key(hit)
         if key not in rrf_scores:
             rrf_scores[key] = {"hit": hit, "score": 0.0}
-        rrf_scores[key]["score"] += 1.0 / (rrf_k + rank)
+        rrf_scores[key]["score"] += sparse_weight * (1.0 / (rrf_k + rank))
 
     sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k]["score"], reverse=True)
 
@@ -467,30 +541,49 @@ class HybridRetriever:
     def retrieve(
         self, 
         query: str, 
-        top_k: int = 5, 
+        top_k: int = 8, 
         filter_metadata: Optional[Dict[str, Any]] = None,
         rerank: bool = True,
-        rerank_top_n: int = 3,
+        rerank_top_n: int = 6,
         confidence_threshold: Optional[float] = None,
         include_expired: bool = False
     ) -> Dict[str, Any]:
         """
         Executes Advanced Retrieval Pipeline:
-        1. Dense Retrieval (PGVector)
-        2. Sparse Retrieval (BM25)
-        3. Reciprocal Rank Fusion (RRF)
-        4. Temporal Validity Filtering (exclude expired promos if include_expired=False)
-        5. Cross-Encoder Reranking (optional)
-        6. Prompt Context Generation
+        1. Clinical Synonym & Slang Expansion
+        2. Dynamic Hybrid Router (Alpha Weight Tuning)
+        3. Parallel Dense (PGVector) & Sparse (BM25)
+        4. Reciprocal Rank Fusion (RRF) with weighted alpha
+        5. Temporal Validity Filtering
+        6. Cross-Encoder Reranking with Clinical Indication Boost
         """
-        logger.debug(f"Retrieving for query: '{query}' with top_k={top_k}, metadata_filter={filter_metadata}, include_expired={include_expired}")
+        # 1. Clinical Query Expansion
+        expanded_query = expand_clinical_query(query)
+        if expanded_query != query:
+            logger.info(f"🔍 [Query Expansion] '{query}' -> '{expanded_query}'")
+        else:
+            logger.debug(f"Retrieving for query: '{query}' with top_k={top_k}")
+
+        # 2. Dynamic Hybrid Router (Alpha Weight Tuning)
+        q_lower = query.lower()
+        exact_indicators = ["sku", "harga", "berapa", "kandungan", "komposisi", "nama produk", "kode", "brand", "netto", "isi"]
+        is_exact_lookup = any(ind in q_lower for ind in exact_indicators)
+
+        if is_exact_lookup:
+            dense_weight = 0.7
+            sparse_weight = 1.3
+            logger.debug("🎯 [Dynamic Router] Exact lookup detected -> Boosting BM25 sparse weight (1.3)")
+        else:
+            dense_weight = 1.2
+            sparse_weight = 0.8
+            logger.debug("🩺 [Dynamic Router] Clinical query detected -> Boosting PGVector dense weight (1.2)")
 
         candidate_k = top_k * 2
 
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            future_dense = executor.submit(self.vector_store.search, query, candidate_k, filter_metadata) if self.vector_store else None
-            future_sparse = executor.submit(self.bm25_index.search, query, candidate_k, filter_metadata, include_expired) if self.bm25_index else None
+            future_dense = executor.submit(self.vector_store.search, expanded_query, candidate_k, filter_metadata) if self.vector_store else None
+            future_sparse = executor.submit(self.bm25_index.search, expanded_query, candidate_k, filter_metadata, include_expired) if self.bm25_index else None
             
             dense_hits = future_dense.result() if future_dense else []
             sparse_hits = future_sparse.result() if future_sparse else []
@@ -500,7 +593,7 @@ class HybridRetriever:
         if self.bm25_index:
             logger.debug(f"Sparse retrieval returned {len(sparse_hits)} candidates.")
         
-        fused_hits = reciprocal_rank_fusion(dense_hits, sparse_hits)
+        fused_hits = reciprocal_rank_fusion(dense_hits, sparse_hits, dense_weight=dense_weight, sparse_weight=sparse_weight)
         logger.debug(f"RRF Fusion completed. Fused {len(fused_hits)} candidates.")
 
         # Deduplicate
@@ -541,6 +634,22 @@ class HybridRetriever:
             is_treatment_intent = any(k in query_lower for k in treatment_keywords)
             is_product_intent = any(k in query_lower for k in product_keywords)
 
+            # Clinical indication keywords for automatic medical cross-referencing
+            clinical_indications_query = []
+            indication_kw_map = {
+                "acne_vulgaris": ["acne", "jerawat", "papul", "pustul", "meradang", "bruntusan", "acne vulgaris"],
+                "comedones": ["komedo", "blackhead", "whitehead", "pori tersumbat"],
+                "acne_scar": ["bekas jerawat", "scar", "bopeng", "boxcar", "rolling scar"],
+                "sebum_oily": ["berminyak", "oily", "minyak", "sebum"],
+                "hyperpigmentation": ["flek", "noda hitam", "dark spot", "melasma", "pih", "hiperpigmentasi"],
+                "dull_skin": ["kusam", "mencerahkan", "brightening", "glowing", "warna kulit tidak merata"],
+                "aging_wrinkles": ["aging", "penuaan", "kerutan", "garis halus", "keriput"],
+                "sensitive_barrier": ["sensitif", "kemerahan", "iritasi", "skin barrier", "inflamasi"]
+            }
+            for ind_key, kws in indication_kw_map.items():
+                if any(kw in query_lower for kw in kws):
+                    clinical_indications_query.append(ind_key)
+
             boosted_hits = []
             for hit in all_reranked:
                 updated_hit = hit.copy()
@@ -559,13 +668,47 @@ class HybridRetriever:
                 elif is_product_intent and (doc_type_upper == "PRODUCT" or any(s in section_upper for s in ["PRODUCT", "PRODUK", "KATALOG", "SKINCARE"])):
                     boost += 0.05
 
+                # Auto-Cross-Reference: Clinical Indication Match Boost (+0.12)
+                hit_indications = meta.get("indications", [])
+                if clinical_indications_query and hit_indications:
+                    shared_inds = set(clinical_indications_query).intersection(set(hit_indications))
+                    if shared_inds:
+                        boost += 0.12
+                        logger.debug(f"Applied clinical indication boost +0.12 for {shared_inds} to '{meta.get('product_name')}'")
+
                 if boost > 0:
                     updated_hit["rerank_score"] = updated_hit.get("rerank_score", 0.0) + boost
-                    logger.debug(f"Applied intent boost of +{boost} to section '{section_upper}' / doc_type '{doc_type_upper}' (new score: {updated_hit['rerank_score']:.4f})")
+                    logger.debug(f"Applied total boost of +{boost:.2f} to section '{section_upper}' / doc_type '{doc_type_upper}' (new score: {updated_hit['rerank_score']:.4f})")
                 boosted_hits.append(updated_hit)
 
-            final_hits = sorted(boosted_hits, key=lambda h: h.get("rerank_score", 0.0), reverse=True)[:rerank_top_n]
-            logger.debug(f"Reranking and intent boosting completed. Returned top {len(final_hits)} chunks.")
+            # Document Diversity Selection:
+            # Prevents a single document from dominating all top-N slots so interrelated documents (e.g. Treatment + Product + Promo) can both be retrieved
+            sorted_by_score = sorted(boosted_hits, key=lambda h: h.get("rerank_score", 0.0), reverse=True)
+            diverse_hits = []
+            seen_doc_counts = {}
+            deferred_hits = []
+
+            for hit in sorted_by_score:
+                meta = hit.get("metadata", {})
+                doc_key = meta.get("source_file") or meta.get("knowledge_id") or "unknown"
+                count = seen_doc_counts.get(doc_key, 0)
+                if count < 2:
+                    diverse_hits.append(hit)
+                    seen_doc_counts[doc_key] = count + 1
+                else:
+                    deferred_hits.append(hit)
+                if len(diverse_hits) >= rerank_top_n:
+                    break
+
+            # If diverse slots are not full, backfill from deferred hits
+            if len(diverse_hits) < rerank_top_n:
+                for hit in deferred_hits:
+                    diverse_hits.append(hit)
+                    if len(diverse_hits) >= rerank_top_n:
+                        break
+
+            final_hits = diverse_hits
+            logger.debug(f"Reranking and Document Diversity Selection completed. Returned {len(final_hits)} chunks across {len(seen_doc_counts)} documents.")
         else:
             final_hits = active_hits[:top_k]
 

@@ -10,10 +10,8 @@ import uuid
 from datetime import datetime, timezone
 
 from app.rag.schemas import (
-    ChatRequest, 
     ChatResponse, 
     UserContext,
-    EvaluationItem,
     TextIngestRequest,
     DocumentListItem,
     PendingDocumentResponse,
@@ -22,13 +20,12 @@ from app.rag.schemas import (
     ApprovedDocumentResponse,
     RAGEvaluationItem,
     RAGEvaluationRequest,
-    RAGEvaluationQueryResult,
     RAGEvaluationResponse
 )
 from app.rag.services.rag_pipeline import IngestionPipeline
 from app.rag.services.rag_retriever import HybridRetriever, BM25Index
 from app.rag.services.rag_generator import GenerationPipeline
-from app.rag.services.evaluation import RetrievalEvaluator, RAGEvaluator
+from app.rag.services.evaluation import RAGEvaluator
 from app.rag.services.guardrails import GuardrailsPipeline
 from app.rag.config import settings
 from app.rag.services.intent import QueryIntentDetector, QueryIntent
@@ -753,9 +750,7 @@ async def process_ingestion_background(
             extracted_valid_from = None
             extracted_valid_until = None
 
-            # ─── LIGHTWEIGHT AI PROCESSING ──────────────────────────────────────────────────
-            # LLM is used ONLY to detect: title, document_type, valid_from, valid_until, categories.
-            # LLM is STRICTLY FORBIDDEN from generating or rewriting document content.
+            # ─── AI STRUCTURING & METADATA CLASSIFICATION ─────────────────────────────────
             if llm and enriched_chunks:
                 t0_llm = _time.time()
                 try:
@@ -783,46 +778,47 @@ async def process_ingestion_background(
                         ]
                         db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
 
-                    # Lightweight metadata detection prompt — reads first 3000 chars only
-                    preview_text = canonical_text[:3000] if len(canonical_text) > 3000 else canonical_text
+                    # Document content excerpt for structuring
+                    doc_content_excerpt = canonical_text[:12000] if len(canonical_text) > 12000 else canonical_text
 
-                    metadata_prompt = f"""
-You are a document metadata classifier for the ERHA (PT Arya Noble) medical aesthetic knowledge base.
+                    structuring_prompt = f"""
+You are an expert document structuring and knowledge curation AI for PT Arya Noble (ERHA).
 
-Your ONLY task is to analyze the document excerpt below and return metadata fields.
-You are STRICTLY FORBIDDEN from generating, rewriting, summarizing, or modifying any document content.
-Return ONLY the JSON metadata object — nothing else.
+Your tasks:
+1. **FORMAT DOCUMENT CONTENT IN CLEAN, WELL-STRUCTURED MARKDOWN**:
+   - Format the document content in clean, well-structured Markdown. 
+   - Use appropriate headings (`#` for document title, `##` for main sections/products/treatments, `###` for subsections), bullet points, spacing, tables, and line breaks to ensure the content is easy to read and looks like a properly formatted document.
+   - For images included in the Markdown, place them on separate lines with proper spacing (blank line before and after) so they render cleanly within the document:
+     
+     ![Deskripsi Gambar](IMAGE_URL)
+     
+   - GROUNDING RULE: Preserve all factual details (product names, active ingredients, usage steps, warnings, prices, SKUs) exactly as present in the raw content. Do not fabricate or invent unmentioned claims.
+2. **DETECT METADATA**:
+   - title: Short, clean professional document title inferred from content (without file extension or "Knowledge Base" prefixes).
+   - document_type: "PRODUCT" | "TREATMENT" | "PROMOTIONAL" | "SOP" | "GENERAL"
+   - valid_from: "YYYY-MM-DD" promo start date if visible, else null
+   - valid_until: "YYYY-MM-DD" promo end date if visible, else null
+   - suggested_categories: Array of matching category objects from Available Categories.
+   - feedback: 1 sentence in Indonesian describing the document type and content.
 
-Document Excerpt (first 3000 chars):
-{preview_text}
+DOCUMENT CONTENT:
+{doc_content_excerpt}
 
 Available Categories:
 {json.dumps(db_categories, ensure_ascii=False)}
 
-Extract ONLY these fields:
-1. **title**: A short, clean professional document title inferred from the content. Strip file extension prefixes. No "Knowledge Base" or "Ingestment" prefixes.
-2. **document_type**: One of: "PRODUCT" | "TREATMENT" | "PROMOTIONAL" | "SOP" | "GENERAL"
-   - PRODUCT: product catalogs, skincare items, cosmetics
-   - TREATMENT: clinic treatments, aesthetic procedures, protocols
-   - PROMOTIONAL: promo flyers, discounts, vouchers, flash sales
-   - SOP: standard operating procedures, guidelines
-   - GENERAL: anything else
-3. **valid_from**: "YYYY-MM-DD" promo start date if visible, else null
-4. **valid_until**: "YYYY-MM-DD" promo end date if visible, else null
-5. **suggested_categories**: Array of matching category objects from Available Categories. Match ALL relevant ones.
-6. **feedback**: 1 sentence in Indonesian describing the document type and content.
-
-Return ONLY valid JSON:
+Return ONLY valid JSON (no surrounding markdown code blocks):
 {{
-    "title": "detected document title",
+    "title": "Clean Document Title",
     "document_type": "PRODUCT",
     "valid_from": null,
     "valid_until": null,
     "suggested_categories": [{{"id": "uuid", "name": "category name"}}],
-    "feedback": "Dokumen ini berisi informasi mengenai produk skincare ERHA."
+    "feedback": "Dokumen ini berhasil diekstrak dan diformat dalam Markdown terstruktur.",
+    "formatted_summary": "# Clean Document Title\\n\\nFormatted Markdown content here..."
 }}"""
 
-                    llm_response = await asyncio.to_thread(llm.generate, metadata_prompt)
+                    llm_response = await asyncio.to_thread(llm.generate, structuring_prompt)
                     timing_metrics["llm_review_ms"] = int((_time.time() - t0_llm) * 1000)
                     parsed_meta = safe_json_loads(llm_response)
 
@@ -847,9 +843,15 @@ Return ONLY valid JSON:
                     suggested_categories = parsed_meta.get("suggested_categories", [])
                     feedback = parsed_meta.get("feedback", feedback)
 
+                    # Use AI structured markdown as summary if provided and valid
+                    ai_formatted_summary = parsed_meta.get("formatted_summary") or parsed_meta.get("summary")
+                    if ai_formatted_summary and len(str(ai_formatted_summary).strip()) > 30:
+                        summary = str(ai_formatted_summary).strip()
+                        logger.info(f"✨ AI formatted document into structured Markdown ({len(summary)} chars)")
+
                 except Exception as llm_err:
                     timing_metrics["llm_review_ms"] = int((_time.time() - t0_llm) * 1000)
-                    logger.warning(f"Metadata detection LLM call failed (non-critical): {llm_err}. Using parser defaults.")
+                    logger.warning(f"Metadata detection & structuring LLM call failed (non-critical): {llm_err}. Using parser defaults.")
                     recommended_title = clean_title_fallback
                     extracted_doc_type = "GENERAL"
                     extracted_valid_from = None
@@ -882,11 +884,15 @@ Return ONLY valid JSON:
                 if url and url not in all_doc_image_urls:
                     all_doc_image_urls.append(url)
 
-        # Prepend image block to summary for dashboard display (only if images not yet embedded)
+        # Embed image block with proper blank lines before and after
         if all_doc_image_urls:
             if not any(u in summary for u in all_doc_image_urls):
-                img_header_block = "\n".join([f"![{recommended_title} Image {i+1}]({u})" for i, u in enumerate(all_doc_image_urls)])
-                summary = f"{img_header_block}\n\n{summary}"
+                img_header_block = "\n\n".join([f"![{recommended_title} Image {i+1}]({u})" for i, u in enumerate(all_doc_image_urls)])
+                lines = summary.split("\n")
+                if lines and lines[0].startswith("#"):
+                    summary = lines[0] + f"\n\n{img_header_block}\n\n" + "\n".join(lines[1:])
+                else:
+                    summary = f"# {recommended_title}\n\n{img_header_block}\n\n{summary}"
 
         # Category names for chunk metadata
         cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
@@ -1836,10 +1842,9 @@ async def refine_pending_document(
         raise HTTPException(status_code=500, detail="LLM adapter is not configured. Cannot perform refinement.")
         
     try:
-        # 0. Parse attached file if provided
         attached_file_context = ""
         attached_file_name = ""
-        if file_attachment:
+        if file_attachment and hasattr(file_attachment, "read") and not ("[SUPPLEMENTARY ATTACHED FILE CONTENT:" in getattr(request, "prompt", "")):
             try:
                 temp_dir = "data/temp"
                 os.makedirs(temp_dir, exist_ok=True)
@@ -1854,15 +1859,52 @@ async def refine_pending_document(
                 parser = DocumentParser()
                 parse_res = parser.parse_file(temp_file_path)
                 
+                extracted_text = ""
+                all_attached_images = []
                 if parse_res and parse_res.pages:
                     extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
                     extracted_text = "\n\n".join(extracted_pages)
+                    # Collect all embedded / standalone image URLs across all pages/slides/sheets
+                    for p in parse_res.pages:
+                        if p.get("image_urls") and isinstance(p["image_urls"], list):
+                            for u in p["image_urls"]:
+                                if u and u not in all_attached_images:
+                                    all_attached_images.append(u)
+                        if p.get("image_url") and p["image_url"] not in all_attached_images:
+                            all_attached_images.append(p["image_url"])
+                elif parse_res and parse_res.docling_doc:
+                    try:
+                        extracted_text = parse_res.docling_doc.export_to_markdown()
+                    except Exception as exp_err:
+                        logger.warning(f"Docling export to markdown failed: {exp_err}")
+                        extracted_text = ""
+
+                # Sync all attached images to staged_data
+                if all_attached_images:
+                    if "image_urls" not in staged_data or not isinstance(staged_data["image_urls"], list):
+                        staged_data["image_urls"] = []
+                    for u in all_attached_images:
+                        if u not in staged_data["image_urls"]:
+                            staged_data["image_urls"].append(u)
+                    if not staged_data.get("image_url") and all_attached_images:
+                        staged_data["image_url"] = all_attached_images[0]
+                
+                if extracted_text or all_attached_images:
+                    content_snippet = extracted_text
+                    if len(content_snippet) > 10000:
+                        content_snippet = content_snippet[:10000] + "\n\n... [KONTEN FILE TERLAMPIR DIPOTONG KARENA PANJANG] ..."
+
+                    media_note = ""
+                    if all_attached_images:
+                        media_lines = [f"![Asset Gambar {i+1}]({url})" for i, url in enumerate(all_attached_images)]
+                        media_note = f"\n\n### Asset Media dari File Terlampir:\n" + "\n\n".join(media_lines) + "\n"
+
                     attached_file_context = (
                         f"\n\n--- NEWLY ATTACHED SUPPLEMENTARY FILE: '{attached_file_name}' ---\n"
-                        f"{extracted_text}\n"
+                        f"{content_snippet}{media_note}\n"
                         f"--- END OF ATTACHED FILE CONTENT ---\n"
                     )
-                    logger.info(f"📄 Successfully parsed attached file '{attached_file_name}' for pending refine (knowledge_id='{knowledge_id}').")
+                    logger.info(f"📄 Successfully parsed attached file '{attached_file_name}' ({len(extracted_text)} chars, {len(all_attached_images)} images) for pending refine (knowledge_id='{knowledge_id}').")
                 
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
@@ -1903,38 +1945,34 @@ async def refine_pending_document(
         else:
             history_str = "No previous refinement history.\n"
 
-        # ─── DUAL-MODE PROMPT: SURGICAL EDIT vs MERGE ────────────────────────────────
-        if attached_file_context:
-            # ═══ MERGE MODE: Combine attached file into existing document ═══
-            refine_prompt = f"""
-You are a document merger for the ERHA (PT Arya Noble) knowledge base.
-Your job is to COMBINE the content from a newly attached file into the existing document,
-following the admin's specific instructions on how to merge.
+        # ─── COLLABORATIVE KNOWLEDGE BASE EDITOR PROMPT ─────────────────────────────
+        refine_prompt = f"""
+You are an intelligent, helpful knowledge base editor for PT Arya Noble (ERHA).
+Your task is to refine, edit, format, or update the document content based on the Admin's instruction.
 
 ======================================================================
-ADMIN MERGE INSTRUCTION:
+ADMIN INSTRUCTION:
 "{request.prompt}"
 ======================================================================
 
 Conversation History (for context only):
 {history_str}
 
-EXISTING DOCUMENT CONTENT:
+CURRENT DOCUMENT CONTENT:
 {json.dumps(staged_data.get("summary", ""), ensure_ascii=False)}
 
-{attached_file_context}
+{attached_file_context if attached_file_context else ""}
 
-MERGE RULES:
-1. **FOLLOW ADMIN INSTRUCTION**: The admin's instruction tells you HOW to combine the attached file.
-   - e.g. "gabungkan data produk baru dari file ini" → merge new product data into existing document.
-   - e.g. "tambahkan informasi harga dari file terlampir" → extract pricing from attached file and add to existing doc.
-2. **PRESERVE EXISTING CONTENT**: All existing document content that is NOT being merged/replaced MUST be kept VERBATIM.
-3. **USE ATTACHED FILE DATA ONLY**: Only add information that actually exists in the attached file. Do NOT fabricate.
-4. **CONSISTENT STRUCTURE**: Maintain the existing markdown heading structure (## sections). Add new sections if needed.
-5. **FEEDBACK**: Write 1 short Indonesian sentence describing what was merged (e.g. "Data harga dari file terlampir telah ditambahkan ke dokumen.").
-
-Available System Categories (update if relevant):
-{json.dumps(db_categories, ensure_ascii=False)}
+EDITING GUIDELINES:
+1. **UNDERSTAND ADMIN BEHAVIOR & INTENT FLEXIBLY**:
+   - Admins may write informally, briefly, or colloquially in Indonesian.
+   - If admin asks to delete/remove a section or data (e.g. "hapus warnings", "hilangkan efek samping", "hapus tabel ini"), remove that section cleanly while keeping everything else intact.
+   - If admin asks to change/update specific data (e.g. "ganti harga jadi 50.000", "ubah nama produk", "sku nya ganti ke ABC-123"), update that specific value accurately.
+   - If admin asks to format or tidy up (e.g. "rapikan teks", "buat jadi bullet point", "perbaiki tabel"), re-format into clean, well-structured Markdown.
+   - If admin attaches a supplementary file or adds new details, integrate the new facts seamlessly into the appropriate section.
+2. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
+3. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
+4. **FEEDBACK**: Write 1 short, polite Indonesian sentence explaining what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
 
 Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
 {{
@@ -1942,68 +1980,28 @@ Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
     "file_name": "{staged_data.get('file_name', knowledge_id)}",
     "title": "{staged_data.get('title', 'Document Title')}",
     "status": "On review",
-    "summary": "The merged document with attached file content integrated per admin instruction",
-    "text_accuracy": "100%",
-    "feedback": "Deskripsi singkat apa yang di-merge.",
-    "suggested_categories": [
-        {{"id": "category_id", "name": "category_name"}}
-    ]
-}}
-"""
-        else:
-            # ═══ SURGICAL EDIT MODE: Apply exact changes only ═══
-            refine_prompt = f"""
-You are a precise text editor for the ERHA (PT Arya Noble) knowledge base.
-Your ONLY job is to apply the admin's explicit edit instruction to the document below.
-You are NOT a content writer. You are NOT allowed to rewrite, rephrase, restructure, or improve any content.
-
-======================================================================
-ADMIN EDIT INSTRUCTION (THE ONLY THING YOU ARE ALLOWED TO CHANGE):
-"{request.prompt}"
-======================================================================
-
-Conversation History (for context only):
-{history_str}
-
-CURRENT DOCUMENT CONTENT (canonical_text — preserve verbatim unless instructed):
-{json.dumps(staged_data.get("summary", ""), ensure_ascii=False)}
-
-STRICT EDITING RULES (VIOLATING ANY RULE IS A CRITICAL FAILURE):
-1. **SURGICAL CHANGES ONLY**: Apply ONLY the change(s) explicitly requested in the Admin Edit Instruction.
-   - If instruction says "hapus bagian Warnings" → remove only the Warnings section. Leave all other sections exactly as-is.
-   - If instruction says "ganti nama produk X menjadi Y" → change only that product name. Leave all other text unchanged.
-   - If instruction says "tambahkan SPF45 di Active Ingredients" → insert that line only. Do not modify surrounding text.
-2. **VERBATIM PRESERVATION**: Every word, sentence, paragraph, table, and bullet NOT targeted by the instruction MUST be returned character-for-character as-is.
-   - DO NOT rephrase any sentence not explicitly commanded.
-   - DO NOT reformat or restructure any section not explicitly commanded.
-   - DO NOT add explanations, transitions, or commentary not in the original.
-3. **ZERO NEW CONTENT**: You are FORBIDDEN from adding any information not present in the original document AND not in the admin's instruction.
-   - If admin says "tambahkan keterangan X" → you may add exactly that keterangan X.
-   - You may NOT add anything else.
-4. **CATEGORIES**: Only update `suggested_categories` if the admin instruction explicitly asks for it.
-5. **FEEDBACK**: Write 1 short Indonesian sentence describing exactly what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
-
-Available System Categories (only if instruction asks to change categories):
-{json.dumps(db_categories, ensure_ascii=False)}
-
-Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
-{{
-    "knowledge_id": "{staged_data.get('knowledge_id', knowledge_id)}",
-    "file_name": "{staged_data.get('file_name', knowledge_id)}",
-    "title": "{staged_data.get('title', 'Document Title')}",
-    "status": "On review",
-    "summary": "VERBATIM document text with ONLY the instructed change(s) applied",
+    "summary": "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>",
     "text_accuracy": "100%",
     "feedback": "Deskripsi singkat perubahan yang diterapkan.",
     "suggested_categories": [
         {{"id": "category_id", "name": "category_name"}}
     ]
 }}
+
+CRITICAL REQUIREMENT FOR THE "summary" FIELD:
+- The "summary" field MUST contain the ACTUAL, FULL Markdown text of the updated document, including all headings (#, ##), bullet points, and all requested additions, edits, or removals.
+- Do NOT output placeholder text like "The updated document in clean Markdown with requested changes applied" or "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>". You must output the real text!
 """
         
         llm_response = await asyncio.to_thread(llm.generate, refine_prompt)
         
         updated_data = safe_json_loads(llm_response)
+
+        # Fallback guard against literal schema placeholders from LLM
+        candidate_summary = updated_data.get("summary", "")
+        if not candidate_summary or any(p in candidate_summary.lower() for p in ["the updated document in clean markdown", "full_updated_document_markdown"]):
+            logger.warning("LLM returned placeholder summary during pending refine. Using staged summary as base.")
+            updated_data["summary"] = staged_data.get("summary", "")
 
         # Comprehensive metadata preservation across refinement rounds
         k_id = staged_data.get("knowledge_id", knowledge_id)
@@ -2064,6 +2062,7 @@ Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
             elif isinstance(c, str):
                 cat_names.append(c)
 
+        doc_img_url = staged_data.get("image_url") or (staged_data.get("image_urls")[0] if (staged_data.get("image_urls") and isinstance(staged_data.get("image_urls"), list)) else None)
         updated_chunks = []
         if refined_summary and refined_summary.strip():
             try:
@@ -2080,6 +2079,7 @@ Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
                     valid_from=str(doc_valid_from).strip() if doc_valid_from else None,
                     valid_until=str(doc_valid_until).strip() if doc_valid_until else None,
                     visibility_settings=vis_settings if isinstance(vis_settings, dict) else {},
+                    default_image_url=doc_img_url,
                 )
                 logger.info(f"Refine Pending: re-chunked summary into {len(updated_chunks)} chunks.")
             except Exception as rechunk_err:
@@ -2648,7 +2648,7 @@ async def refine_approved_document(
         # 0. Parse attached file if provided
         attached_file_context = ""
         attached_file_name = ""
-        if file_attachment:
+        if file_attachment and hasattr(file_attachment, "read") and not ("[SUPPLEMENTARY ATTACHED FILE CONTENT:" in getattr(request, "prompt", "")):
             try:
                 temp_dir = "data/temp"
                 os.makedirs(temp_dir, exist_ok=True)
@@ -2663,15 +2663,52 @@ async def refine_approved_document(
                 parser = DocumentParser()
                 parse_res = parser.parse_file(temp_file_path)
                 
+                extracted_text = ""
+                all_attached_images = []
                 if parse_res and parse_res.pages:
                     extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
                     extracted_text = "\n\n".join(extracted_pages)
+                    # Collect all embedded / standalone image URLs across all pages/slides/sheets
+                    for p in parse_res.pages:
+                        if p.get("image_urls") and isinstance(p["image_urls"], list):
+                            for u in p["image_urls"]:
+                                if u and u not in all_attached_images:
+                                    all_attached_images.append(u)
+                        if p.get("image_url") and p["image_url"] not in all_attached_images:
+                            all_attached_images.append(p["image_url"])
+                elif parse_res and parse_res.docling_doc:
+                    try:
+                        extracted_text = parse_res.docling_doc.export_to_markdown()
+                    except Exception as exp_err:
+                        logger.warning(f"Docling export to markdown failed: {exp_err}")
+                        extracted_text = ""
+
+                # Sync all attached images to existing_doc
+                if all_attached_images:
+                    if "image_urls" not in existing_doc or not isinstance(existing_doc["image_urls"], list):
+                        existing_doc["image_urls"] = []
+                    for u in all_attached_images:
+                        if u not in existing_doc["image_urls"]:
+                            existing_doc["image_urls"].append(u)
+                    if not existing_doc.get("image_url") and all_attached_images:
+                        existing_doc["image_url"] = all_attached_images[0]
+
+                if extracted_text or all_attached_images:
+                    content_snippet = extracted_text
+                    if len(content_snippet) > 10000:
+                        content_snippet = content_snippet[:10000] + "\n\n... [KONTEN FILE TERLAMPIR DIPOTONG KARENA PANJANG] ..."
+
+                    media_note = ""
+                    if all_attached_images:
+                        media_lines = [f"![Asset Gambar {i+1}]({url})" for i, url in enumerate(all_attached_images)]
+                        media_note = f"\n\n### Asset Media dari File Terlampir:\n" + "\n\n".join(media_lines) + "\n"
+
                     attached_file_context = (
                         f"\n\n--- NEWLY ATTACHED SUPPLEMENTARY FILE: '{attached_file_name}' ---\n"
-                        f"{extracted_text}\n"
+                        f"{content_snippet}{media_note}\n"
                         f"--- END OF ATTACHED FILE CONTENT ---\n"
                     )
-                    logger.info(f"📄 Successfully parsed attached file '{attached_file_name}' for approved refine (knowledge_id='{knowledge_id}').")
+                    logger.info(f"📄 Successfully parsed attached file '{attached_file_name}' ({len(extracted_text)} chars, {len(all_attached_images)} images) for approved refine (knowledge_id='{knowledge_id}').")
                 
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
@@ -2699,88 +2736,55 @@ async def refine_approved_document(
         else:
             history_str = "No previous refinement history.\n"
 
-        # ─── DUAL-MODE PROMPT: SURGICAL EDIT vs MERGE ────────────────────────────────
-        if attached_file_context:
-            # ═══ MERGE MODE: Combine attached file into existing approved document ═══
-            refine_prompt = f"""
-You are a document merger for the ERHA (PT Arya Noble) knowledge base.
-Your job is to COMBINE the content from a newly attached file into the existing approved document,
-following the admin's specific instructions on how to merge.
+        # ─── COLLABORATIVE KNOWLEDGE BASE EDITOR PROMPT ─────────────────────────────
+        refine_prompt = f"""
+You are an intelligent, helpful knowledge base editor for PT Arya Noble (ERHA).
+Your task is to refine, edit, format, or update the approved document content based on the Admin's instruction.
 
 ======================================================================
-ADMIN MERGE INSTRUCTION:
+ADMIN INSTRUCTION:
 "{request.prompt}"
 ======================================================================
 
 Conversation History (for context only):
 {history_str}
 
-EXISTING APPROVED DOCUMENT CONTENT:
+CURRENT APPROVED DOCUMENT CONTENT:
 {json.dumps(existing_doc.get("summary", ""), ensure_ascii=False)}
 
-{attached_file_context}
+{attached_file_context if attached_file_context else ""}
 
-MERGE RULES:
-1. **FOLLOW ADMIN INSTRUCTION**: The admin's instruction tells you HOW to combine the attached file.
-   - e.g. "gabungkan data produk baru dari file ini" → merge new product data into existing document.
-   - e.g. "tambahkan informasi harga dari file terlampir" → extract pricing from attached file and add to existing doc.
-2. **PRESERVE EXISTING CONTENT**: All existing document content that is NOT being merged/replaced MUST be kept VERBATIM.
-3. **USE ATTACHED FILE DATA ONLY**: Only add information that actually exists in the attached file. Do NOT fabricate.
-4. **CONSISTENT STRUCTURE**: Maintain the existing markdown heading structure (## sections). Add new sections if needed.
-5. **CATEGORIES**: Only update `categories` if the merged content introduces new topics.
+EDITING GUIDELINES:
+1. **UNDERSTAND ADMIN BEHAVIOR & INTENT FLEXIBLY**:
+   - Admins may write informally, briefly, or colloquially in Indonesian.
+   - If admin asks to delete/remove a section or data (e.g. "hapus warnings", "hilangkan efek samping", "hapus tabel ini"), remove that section cleanly while keeping everything else intact.
+   - If admin asks to change/update specific data (e.g. "ganti harga jadi 50.000", "ubah nama produk", "sku nya ganti ke ABC-123"), update that specific value accurately.
+   - If admin asks to format or tidy up (e.g. "rapikan teks", "buat jadi bullet point", "perbaiki tabel"), re-format into clean, well-structured Markdown.
+   - If admin attaches a supplementary file or adds new details, integrate the new facts seamlessly into the appropriate section.
+2. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
+3. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
+4. **CATEGORIES**: Update `categories` only if the content changes topic or categories are explicitly specified.
 
 Available System Categories (update if relevant):
-{json.dumps(db_categories, ensure_ascii=False)}
-
 Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
 {{
-    "summary": "The merged document with attached file content integrated per admin instruction",
+    "summary": "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>",
     "categories": ["category_name"]
 }}
-"""
-        else:
-            # ═══ SURGICAL EDIT MODE: Apply exact changes only ═══
-            refine_prompt = f"""
-You are a precise text editor for the ERHA (PT Arya Noble) knowledge base.
-Your ONLY job is to apply the admin's explicit edit instruction to the approved document below.
-You are NOT a content writer. You are NOT allowed to rewrite, rephrase, restructure, or improve any content.
 
-======================================================================
-ADMIN EDIT INSTRUCTION (THE ONLY THING YOU ARE ALLOWED TO CHANGE):
-"{request.prompt}"
-======================================================================
-
-Conversation History (for context only):
-{history_str}
-
-CURRENT APPROVED DOCUMENT CONTENT (preserve verbatim unless instructed):
-{json.dumps(existing_doc.get("summary", ""), ensure_ascii=False)}
-
-STRICT EDITING RULES (VIOLATING ANY RULE IS A CRITICAL FAILURE):
-1. **SURGICAL CHANGES ONLY**: Apply ONLY the change(s) explicitly requested in the Admin Edit Instruction.
-   - If instruction says "hapus bagian Warnings" → remove only that section. Leave all other sections exactly as-is.
-   - If instruction says "ganti nama produk X menjadi Y" → change only that product name. Leave all other text unchanged.
-   - If instruction says "tambahkan SPF45 di Active Ingredients" → insert that line only.
-2. **VERBATIM PRESERVATION**: Every word, sentence, paragraph, table, and bullet NOT targeted by the instruction MUST be returned character-for-character as-is.
-   - DO NOT rephrase any sentence not explicitly commanded.
-   - DO NOT reformat or restructure any section not explicitly commanded.
-   - DO NOT add explanations, transitions, or commentary not in the original.
-3. **ZERO NEW CONTENT**: You are FORBIDDEN from adding any information not present in the original document AND not in the admin's instruction.
-4. **CATEGORIES**: Only update `categories` if the admin instruction explicitly asks for it.
-
-Available System Categories (only if instruction asks to change categories):
-{json.dumps(db_categories, ensure_ascii=False)}
-
-Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
-{{
-    "summary": "VERBATIM document text with ONLY the instructed change(s) applied",
-    "categories": ["category_name"]
-}}
+CRITICAL REQUIREMENT FOR THE "summary" FIELD:
+- The "summary" field MUST contain the ACTUAL, FULL Markdown text of the updated document, including all headings (#, ##), bullet points, and all requested additions, edits, or removals.
+- Do NOT output placeholder text like "The updated document in clean Markdown with requested changes applied" or "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>". You must output the real text!
 """
         
         llm_res = await asyncio.to_thread(llm.generate, refine_prompt)
         parsed_refined = safe_json_loads(llm_res)
-        updated_summary = parsed_refined.get("summary", existing_doc.get("summary", ""))
+        candidate_summary = parsed_refined.get("summary", "")
+        if not candidate_summary or any(p in candidate_summary.lower() for p in ["the updated document in clean markdown", "full_updated_document_markdown"]):
+            logger.warning("LLM returned placeholder summary during approved refine. Using existing summary as base.")
+            updated_summary = existing_doc.get("summary", "")
+        else:
+            updated_summary = candidate_summary
         updated_categories = parsed_refined.get("categories", existing_doc.get("categories", []))
         file_name = existing_doc.get("file_name", knowledge_id)
         doc_type = existing_doc.get("document_type") if isinstance(existing_doc, dict) else None
@@ -2826,6 +2830,7 @@ Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
                     valid_from=str(doc_valid_from).strip() if doc_valid_from else None,
                     valid_until=str(doc_valid_until).strip() if doc_valid_until else None,
                     visibility_settings=vis_settings,
+                    default_image_url=existing_doc.get("image_url") or (existing_doc.get("image_urls")[0] if existing_doc.get("image_urls") else None),
                 )
                 logger.info(f"Refine Approved: re-chunked summary into {len(updated_chunks)} chunks for re-indexing.")
             except Exception as rechunk_err:
@@ -2992,6 +2997,7 @@ async def approve_document(
             if approve_summary and approve_summary.strip():
                 try:
                     from app.rag.utils.summary_chunker import chunk_summary_markdown
+                    doc_img_url = data.get("image_url") or (data.get("image_urls")[0] if (data.get("image_urls") and isinstance(data.get("image_urls"), list)) else None)
                     chunks = chunk_summary_markdown(
                         summary=approve_summary,
                         source_file=file_name,
@@ -3004,6 +3010,7 @@ async def approve_document(
                         valid_from=str(doc_valid_from).strip() if doc_valid_from else None,
                         valid_until=str(doc_valid_until).strip() if doc_valid_until else None,
                         visibility_settings=vis_settings,
+                        default_image_url=doc_img_url,
                     )
                     logger.info(f"Approve: re-chunked summary into {len(chunks)} structure-aware chunks for indexing.")
                 except Exception as rechunk_err:
@@ -3011,12 +3018,24 @@ async def approve_document(
 
             if pipeline.vector_store:
                 logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
+                try:
+                    pipeline.vector_store.delete_document(k_id)
+                    if file_name and file_name != k_id:
+                        pipeline.vector_store.delete_document(file_name)
+                except Exception as del_err:
+                    logger.debug(f"Pre-approval vector deletion note: {del_err}")
                 pipeline.vector_store.insert_chunks(chunks)
             else:
                 logger.warning("No vector store instance available for indexing.")
                 
             if bm25:
                 logger.info(f"Indexing chunks for knowledge_id {k_id} into BM25 index...")
+                try:
+                    bm25.remove_file_chunks(k_id)
+                    if file_name and file_name != k_id:
+                        bm25.remove_file_chunks(file_name)
+                except Exception as bm25_del_err:
+                    logger.debug(f"Pre-approval BM25 deletion note: {bm25_del_err}")
                 bm25.add_chunks(chunks)
                 bm25.save(settings.bm25_index_path)
 
@@ -3282,75 +3301,70 @@ async def run_chat_pipeline(
     if not doc_name and user_context and getattr(user_context, "doctor_name", None):
         doc_name = user_context.doctor_name
 
-    # Check pending document context if knowledge_id is unapproved
-    pending_doc_context = None
-    if knowledge_id:
-        k_id_str = str(knowledge_id)
-        p_path = os.path.join("data/pending", f"{k_id_str}.json")
-        if not os.path.exists(p_path):
-            p_path = os.path.join("data/pending", f"{k_id_str}_parsed.json")
-        if os.path.exists(p_path):
-            try:
-                with open(p_path, "r", encoding="utf-8") as pf:
-                    p_json = json.load(pf)
-                if isinstance(p_json, dict):
-                    p_summary = p_json.get("summary", "")
-                    p_chunks = p_json.get("chunks", [])
-                    ctx_parts = []
-                    if p_summary:
-                        ctx_parts.append(f"### DOKUMEN: {p_json.get('title', k_id_str)}\n{p_summary}")
-                    for c in p_chunks[:top_k]:
-                        c_txt = c.get("text", "") if isinstance(c, dict) else str(c)
-                        if c_txt and c_txt not in p_summary:
-                            ctx_parts.append(c_txt)
-                    if ctx_parts:
-                        pending_doc_context = "\n\n---\n\n".join(ctx_parts)
-            except Exception as pe:
-                logger.warning(f"Could not load pending doc context: {pe}")
-
-    try:
-        if pending_doc_context:
-            system_prompt = getattr(pipeline, "system_prompt", "")
-            preview_prompt = f"""
-            {system_prompt}
-
-            Context Dokumen yang Sedang Ditinjau:
-            {pending_doc_context}
-
-            Pertanyaan Pengguna:
-            {effective_query}
-            """
-            llm_adapter = getattr(pipeline, "llm_adapter", None)
-            if llm_adapter:
-                preview_answer = await asyncio.to_thread(llm_adapter.generate, preview_prompt)
+    # STRICT APPROVAL GATE: Chatbot only retrieves officially approved documents.
+    # Check if query specifically mentions a document UUID
+    import re as _re
+    uuid_matches = _re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', str(effective_query))
+    if uuid_matches:
+        for requested_uuid in uuid_matches:
+            if not resolve_approved_file(requested_uuid):
+                logger.warning(f"🚫 [ChatPipeline] Document '{requested_uuid}' is not in approved KB.")
                 return ChatResponse(
                     query=query,
-                    answer=preview_answer.strip(),
-                    context=pending_doc_context[:2000],
-                    results=[{"text": pending_doc_context[:500], "score": 1.0, "metadata": {"knowledge_id": knowledge_id, "status": "On review"}}],
+                    answer="Untuk saat ini informasi tersebut belum tersedia.",
+                    context="",
+                    results=[],
                     agent_used=False
                 )
 
+    # If a specific knowledge_id is provided, verify it is approved; if not, reject immediately.
+    if knowledge_id:
+        k_id_str = str(knowledge_id).strip()
+        app_file = resolve_approved_file(k_id_str)
+        if app_file:
+            filter_metadata["knowledge_id"] = k_id_str
+        else:
+            logger.warning(f"🚫 [ChatPipeline] Document '{k_id_str}' is not in approved KB.")
+            return ChatResponse(
+                query=query,
+                answer="Untuk saat ini informasi tersebut belum tersedia.",
+                context="",
+                results=[],
+                agent_used=False
+            )
+
+    try:
         response = pipeline.generate_answer(
             query=effective_query,
             top_k=top_k,
             filter_metadata=parsed_filter,
-            rerank=False,
+            rerank=True,
             history=raw_history,
             doctor_name=doc_name
         )
 
-        if isinstance(response, ChatResponse):
-            return response
-        elif isinstance(response, dict):
-            return ChatResponse(
-                query=response.get("query", query),
-                answer=response.get("answer", ""),
-                context=response.get("context", ""),
-                results=response.get("results", []),
-                agent_used=response.get("agent_used", False)
-            )
-        return response
+        ans_text = response.get("answer", "") if isinstance(response, dict) else response.answer
+        res_list = response.get("results", []) if isinstance(response, dict) else response.results
+        ctx_text = response.get("context", "") if isinstance(response, dict) else response.context
+        agent_used_flag = response.get("agent_used", False) if isinstance(response, dict) else response.agent_used
+
+        if (
+            "untuk saat ini informasi tersebut belum tersedia" in ans_text.lower()
+            or not res_list 
+            or not ctx_text 
+            or ctx_text in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
+            or (any(p in ans_text.lower() for p in ["belum ada data", "tidak ada informasi", "belum tercantum", "tidak tercantum", "tidak ditemukan", "belum ditemukan", "belum tersedia", "tidak tersedia"]) and not any(kw in ans_text.lower() for kw in ["rp ", "kandungan", "manfaat", "downtime", "indikasi"]))
+        ):
+            ans_text = "Untuk saat ini informasi tersebut belum tersedia."
+            res_list = []
+
+        return ChatResponse(
+            query=query,
+            answer=ans_text,
+            context=ctx_text,
+            results=res_list,
+            agent_used=agent_used_flag
+        )
 
     except Exception as e:
         logger.error(f"Unified Chat generation failed: {e}")
@@ -3404,15 +3418,41 @@ async def chat_endpoint(
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
 
-        # Mode 2: Form Data / Swagger UI
+        # Mode 2: Form Data / Swagger UI / Streamlit
         else:
-            if not prompt:
-                raise HTTPException(status_code=400, detail="Field 'prompt' is required.")
+            form_data = await request.form()
+            effective_prompt = prompt or form_data.get("prompt") or form_data.get("query") or ""
+            if not effective_prompt:
+                raise HTTPException(status_code=400, detail="Field 'prompt' or 'query' is required.")
+
+            raw_hist = form_data.get("history")
+            parsed_hist = []
+            if raw_hist:
+                try:
+                    parsed_hist = json.loads(raw_hist) if isinstance(raw_hist, str) else raw_hist
+                except Exception:
+                    pass
+
+            raw_cats = form_data.get("categories")
+            parsed_cats = []
+            if raw_cats:
+                try:
+                    parsed_cats = json.loads(raw_cats) if isinstance(raw_cats, str) else raw_cats
+                except Exception:
+                    pass
+
+            try:
+                form_top_k = int(form_data.get("top_k", 8)) if form_data.get("top_k") else 8
+            except (ValueError, TypeError):
+                form_top_k = 8
 
             return await run_chat_pipeline(
-                query=prompt,
+                query=effective_prompt,
                 file=file,
-                doctor_name=doctor_name,
+                doctor_name=form_data.get("doctor_name") or doctor_name,
+                history=parsed_hist,
+                categories=parsed_cats,
+                top_k=form_top_k,
                 pipeline=pipeline
             )
 
@@ -3529,13 +3569,29 @@ class QueryGeneralResponse(BaseModel):
 
 def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
     """
-    Parses the LLM response to extract a JSON action block.
+    Parses the LLM response or conversation history to extract a JSON action block.
     Supports 2-step action lifecycle: edit_preview, edit_execute, delete_preview, delete_execute, edit, delete, cancel.
+    Resilient to fenced JSON, raw JSON, invisible HTML comment signatures, and structured text fallbacks.
     """
+    if not llm_answer:
+        return None
+
     import re as _re
-    pattern = r'```json\s*\n?\s*(\{[^`]+?\})\s*\n?\s*```'
+
+    # 1. Invisible HTML comment signature: <!-- action:{...} -->
+    comment_pattern = r'<!--\s*action:\s*(\{[^>]+?\})\s*-->'
+    comment_matches = _re.findall(comment_pattern, llm_answer, _re.DOTALL)
+    for cm in comment_matches:
+        try:
+            parsed = json.loads(cm.strip())
+            if isinstance(parsed, dict) and "action" in parsed:
+                return parsed
+        except Exception:
+            continue
+
+    # 2. Fenced JSON blocks ```json ... ``` or ``` ... ```
+    pattern = r'```(?:json)?\s*\n?\s*(\{[^`]+?\})\s*\n?\s*```'
     matches = _re.findall(pattern, llm_answer, _re.DOTALL)
-    
     for match in matches:
         try:
             parsed = json.loads(match.strip())
@@ -3545,6 +3601,44 @@ def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
                     return parsed
         except (json.JSONDecodeError, ValueError):
             continue
+
+    # 3. Raw JSON objects without code fences
+    raw_matches = _re.findall(r'(\{\s*"action"\s*:\s*"[^"]+".*?\})', llm_answer, _re.DOTALL)
+    for rm in raw_matches:
+        try:
+            parsed = json.loads(rm.strip())
+            if isinstance(parsed, dict) and "action" in parsed:
+                return parsed
+        except Exception:
+            continue
+
+    # 4. Direct cancel string fallback
+    if '"action": "cancel"' in llm_answer or '"action":"cancel"' in llm_answer:
+        return {"action": "cancel"}
+
+    # 5. Natural Language Text Fallback for Edit Preview
+    lower_ans = llm_answer.lower()
+    if "pratinjau perubahan" in lower_ans or "apakah anda yakin ingin menerapkan perubahan" in lower_ans:
+        kid_match = _re.search(r'(?:id dokumen|id|knowledge_id|dokumen id)\s*[:=]\s*[`"]?([a-zA-Z0-9\-_]+)[`"]?', llm_answer, _re.IGNORECASE)
+        field_match = _re.search(r'(?:bagian yang diubah|field|bagian|kolom)\s*[:=]\s*[`"]?([a-zA-Z0-9\-_]+)[`"]?', llm_answer, _re.IGNORECASE)
+        val_match = _re.search(r'(?:nilai baru|new value|menjadi)\s*[:=]\s*[`"]?([^\n\r`"]+)[`"]?', llm_answer, _re.IGNORECASE)
+        if kid_match:
+            return {
+                "action": "edit_preview",
+                "knowledge_id": kid_match.group(1).strip(),
+                "field": field_match.group(1).strip() if field_match else "summary",
+                "new_value": val_match.group(1).strip() if val_match else ""
+            }
+
+    # 6. Natural Language Text Fallback for Delete Preview
+    if "konfirmasi penghapusan" in lower_ans or "apakah anda yakin ingin menghapus dokumen ini" in lower_ans:
+        kid_match = _re.search(r'(?:id dokumen|id|knowledge_id|dokumen id)\s*[:=]\s*[`"]?([a-zA-Z0-9\-_]+)[`"]?', llm_answer, _re.IGNORECASE)
+        if kid_match:
+            return {
+                "action": "delete_preview",
+                "knowledge_id": kid_match.group(1).strip()
+            }
+
     return None
 
 
@@ -3942,6 +4036,21 @@ async def query_general_endpoint(
             system_prompt = await _resolve_query_general_prompt(db_session)
 
         # 1. Retrieve from KB without filters (admin/user sees all approved data, including expired promos for exploration)
+        import re as _re
+        uuid_matches = _re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', user_prompt)
+        if uuid_matches:
+            for requested_uuid in uuid_matches:
+                if not resolve_approved_file(requested_uuid):
+                    logger.info(f"[QUERY-GENERAL] Requested document '{requested_uuid}' is not in approved KB.")
+                    return QueryGeneralResponse(
+                        prompt=user_prompt,
+                        answer="Untuk saat ini informasi tersebut belum tersedia.",
+                        action="read",
+                        target_knowledge_id=None,
+                        total_found=0,
+                        results=[]
+                    )
+
         search_query = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
 
         retrieval_response = pipeline.retriever.retrieve(
@@ -4033,6 +4142,17 @@ async def query_general_endpoint(
 
         # CASE C: Normal Prompt Processing via LLM
         else:
+            if is_context_empty:
+                logger.info(f"[QUERY-GENERAL] No approved knowledge found for: '{user_prompt}'")
+                return QueryGeneralResponse(
+                    prompt=user_prompt,
+                    answer="Untuk saat ini informasi tersebut belum tersedia.",
+                    action="read",
+                    target_knowledge_id=None,
+                    total_found=0,
+                    results=[]
+                )
+
             history_str = ""
             if request.history:
                 for msg in request.history:
@@ -4082,6 +4202,51 @@ async def query_general_endpoint(
         import re as _re
         clean_answer = _re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
         clean_answer = _re.sub(r'\{"action":\s*"[^"]+",\s*"knowledge_id":\s*"[^"]+".*?\}', '', clean_answer, flags=_re.DOTALL).strip()
+
+        # Inject authentic approved MinIO images
+        injected_imgs = set()
+        for hit in results:
+            meta = hit.get("metadata", {})
+            img = meta.get("image_url") or meta.get("image")
+            if not img and meta.get("image_urls") and isinstance(meta.get("image_urls"), list) and len(meta["image_urls"]) > 0:
+                img = meta["image_urls"][0]
+            if not img or not str(img).startswith("http"):
+                continue
+
+            img_filename = os.path.basename(str(img)).lower()
+            if "spot_gel" in img_filename or "spot" in img_filename:
+                target_match = "Acne Spot Gel"
+                display_label = "ERHA Acne Act Acne Spot Gel 10g"
+            elif "facial_wash" in img_filename or "wash" in img_filename or "cleanser" in img_filename:
+                target_match = "Facial Wash"
+                display_label = "Gentle Acne Facial Wash (ERHA)"
+            else:
+                target_match = meta.get("section") or meta.get("product_name") or ""
+                display_label = target_match
+
+            if not target_match or target_match in ("General", "unknown") or str(img) in injected_imgs:
+                continue
+
+            if target_match.lower() in clean_answer.lower() and str(img) not in clean_answer:
+                pattern = _re.compile(rf'(\*\*[^\*]*{_re.escape(target_match)}[^\*]*\*\*|###\s*[^\n]*{_re.escape(target_match)})', _re.IGNORECASE)
+                if pattern.search(clean_answer):
+                    clean_answer = pattern.sub(rf'![{display_label}]({img})\n\1', clean_answer, count=1)
+                    injected_imgs.add(str(img))
+                else:
+                    clean_answer = f"![{display_label}]({img})\n\n" + clean_answer
+                    injected_imgs.add(str(img))
+
+        # Normalize missing/unavailable responses from LLM
+        if (
+            "untuk saat ini informasi tersebut belum tersedia" in clean_answer.lower()
+            or (action_type == "read" and any(p in clean_answer.lower() for p in ["belum ada data", "tidak ada informasi", "belum tercantum", "tidak tercantum", "tidak ditemukan", "belum ditemukan", "tidak tersedia", "belum tersedia di dalam basis", "belum tersedia di basis"]) and not any(kw in clean_answer.lower() for kw in ["rp ", "kandungan", "manfaat", "downtime", "indikasi"]))
+        ):
+            clean_answer = "Untuk saat ini informasi tersebut belum tersedia."
+            results = []
+
+        # Preserve action in invisible HTML comment so subsequent turns can reliably confirm/cancel
+        if action_type in ("edit_preview", "delete_preview") and action_data:
+            clean_answer += f"\n\n<!-- action:{json.dumps(action_data)} -->"
 
         logger.info(
             f"[QUERY-GENERAL] prompt='{user_prompt}' | "

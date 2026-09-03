@@ -569,26 +569,31 @@ class DocumentParser:
 
                     client = OpenAI(**client_kwargs)
                     prompt_text = (
-                        "You are an expert medical aesthetic AI knowledge engineer for PT Arya Noble (ERHA) Knowledge Base.\n\n"
-                        "Your task is to analyze the provided image (which could be a Product Photo or a Clinical Before-After Face Condition Photo) and extract accurate, fluent, and cohesive knowledge.\n\n"
-                        "## Guidelines:\n"
-                        "1. **Natural & Cohesive Language**: Write natural, professional, fluent Indonesian prose suitable for clinical doctors and aesthetic specialists. Avoid stiff key-value forms or empty template blocks.\n"
-                        "2. **Product Photos (Foto Produk)**:\n"
-                        "   - Describe the product name, intended skin types, key benefits, and usage naturally.\n"
-                        "   - Include active ingredients in standard markdown bullet points.\n"
-                        "3. **Before-After Face Condition Photos (Foto Wajah Before-After)**:\n"
-                        "   - State the treatment/product name.\n"
-                        "   - Analyze the clinical skin condition changes (Before vs After) naturally (e.g. reduction of inflammatory acne lesions, fading of post-acne erythema, smoothing of skin texture).\n"
-                        "4. **No Visual Fluff**: Do NOT describe background color, packaging graphics, lighting, or photography angles.\n\n"
+                        "You are an expert OCR and factual data extraction system for PT Arya Noble (ERHA) Knowledge Base.\n\n"
+                        "Your task is to analyze the provided image and extract ONLY factual information that is DIRECTLY VISIBLE on the image or product packaging.\n\n"
+                        "## STRICT RULES (MANDATORY):\n"
+                        "1. **ZERO FABRICATION**: Do NOT generate, invent, assume, or extrapolate any text, functions, benefits, or marketing claims that are NOT explicitly visible on the image.\n"
+                        "2. **DO NOT TRANSLATE**: Preserve the exact original language, terms, and spelling as printed on the packaging/image. Do not translate between Indonesian and English.\n"
+                        "3. **Product Photos (Foto Produk)**: Extract only visible fields:\n"
+                        "   - Product Name (exactly as printed)\n"
+                        "   - Brand (e.g. ERHA)\n"
+                        "   - SKU, Barcode, or Product Code (ONLY if visibly printed on the image, otherwise null)\n"
+                        "   - Net Weight / Volume (e.g. 10g, 30ml - only if visible)\n"
+                        "   - Active Ingredients / Bahan Aktif (ONLY those visibly listed on the packaging)\n"
+                        "   - Instructions / Warnings (ONLY if visibly printed on packaging)\n"
+                        "4. **Clinical / Before-After Photos (Foto Klinis Wajah)**: State only the treatment name and visible factual annotations/labels without inventing clinical percentages or diagnosis.\n"
+                        "5. **Formatting**: Format into clean, well-structured Markdown. Place the product photo on its own line with a blank line before and after.\n\n"
                         "## Output Format (Valid JSON ONLY):\n"
                         "{\n"
-                        '  "title": "ERHA Acneact Gentle Acne Moisturizer",\n'
-                        '  "product_name": "ERHA Acneact Gentle Acne Moisturizer",\n'
+                        '  "title": "Exact Visible Product Name",\n'
+                        '  "product_name": "Exact Visible Product Name",\n'
                         '  "document_type": "PRODUCT",\n'
                         '  "brand": "ERHA",\n'
                         '  "sku": null,\n'
-                        '  "active_ingredients": ["Granactive Acne Peptide", "Salicylic Acid (BHA)"],\n'
-                        '  "summary_markdown": "# ERHA Acneact Gentle Acne Moisturizer\\n\\nERHA Acneact Gentle Acne Moisturizer adalah pelembap wajah ringan yang diformulasikan khusus untuk kulit berminyak, berjerawat, dan sensitif. Memiliki tekstur gel-krim yang cepat meresap dan tidak menyumbat pori-pori.\\n\\n## Manfaat & Penggunaan\\n- Melembapkan kulit berjerawat sekaligus menenangkan kemerahan.\\n- Membantu mengontrol produksi sebum berlebih.\\n- Digunakan secara merata pada wajah setelah pembersih dan serum.\\n\\n## Active Ingredients\\n- **Granactive Acne Peptide**: Membantu meredakan peradangan jerawat.\\n- **Salicylic Acid (BHA)**: Merawat pori-pori dan mencegah timbulnya jerawat baru."\n'
+                        '  "net_weight": null,\n'
+                        '  "active_ingredients": ["Visibly printed ingredient 1"],\n'
+                        '  "visible_packaging_text": "Exact text visible on the bottle/box/packaging",\n'
+                        '  "summary_markdown": "# Exact Visible Product Name\\n\\n![Exact Visible Product Name](IMAGE_URL_PLACEHOLDER)\\n\\n- **Brand**: ERHA\\n- **SKU**: [Only if visible]\\n- **Net Weight / Isi**: [Only if visible]\\n\\n## Informasi Tertera pada Kemasan\\n[Exact visible text from packaging without translation or fabrication]"\n'
                         "}"
                     )
 
@@ -647,26 +652,34 @@ class DocumentParser:
                                 "active_ingredients": active_ing
                             })
 
-                            # If Vision LLM provided a beautiful fluent summary_markdown directly, use it!
                             raw_summary_md = data.get("summary_markdown")
                             if raw_summary_md and raw_summary_md.strip():
                                 summary_text = raw_summary_md.strip()
-                                # Ensure image URL is embedded right below the first H1 title
-                                if image_url and image_url not in summary_text:
+                                if "IMAGE_URL_PLACEHOLDER" in summary_text:
+                                    summary_text = summary_text.replace("IMAGE_URL_PLACEHOLDER", image_url)
+                                elif image_url and image_url not in summary_text:
                                     lines = summary_text.split("\n")
                                     if lines and lines[0].startswith("#"):
-                                        summary_text = lines[0] + f"\n\n![{img_title}]({image_url})\n" + "\n".join(lines[1:])
+                                        summary_text = lines[0] + f"\n\n![{img_title}]({image_url})\n\n" + "\n".join(lines[1:])
                                     else:
                                         summary_text = f"# {img_title}\n\n![{img_title}]({image_url})\n\n" + summary_text
                                 extracted_text = summary_text
                             else:
-                                # Fallback natural markdown
-                                md_blocks = [f"# {img_title}\n\n![{img_title}]({image_url})"]
-                                deskripsi = data.get("deskripsi_fungsi") or data.get("searchable_knowledge") or ""
-                                if deskripsi:
-                                    md_blocks.append(f"## Deskripsi & Fungsi Produk\n{deskripsi}")
+                                # Factual structured markdown with clear line spacing for image
+                                md_blocks = [f"# {img_title}\n\n![{img_title}]({image_url})\n"]
+                                info_lines = [f"- **Brand**: {brand}"]
+                                if clean_sku:
+                                    info_lines.append(f"- **SKU**: {clean_sku}")
+                                net_wt = data.get("net_weight")
+                                if net_wt and str(net_wt).lower() not in ["none", "null"]:
+                                    info_lines.append(f"- **Net Weight / Isi**: {net_wt}")
+                                md_blocks.append("\n".join(info_lines))
+
+                                visible_text = data.get("visible_packaging_text") or data.get("deskripsi_fungsi") or ""
+                                if visible_text:
+                                    md_blocks.append(f"## Informasi Tertera pada Kemasan\n{visible_text}")
                                 if active_ing:
-                                    ing_lines = ["## Active Ingredients"]
+                                    ing_lines = ["## Active Ingredients (Tercetak di Kemasan)"]
                                     if isinstance(active_ing, list):
                                         for ing in active_ing:
                                             if ing and str(ing).strip():
@@ -706,7 +719,15 @@ class DocumentParser:
                 "image_url": image_url,
                 "s3_key": s3_key,
                 "storage_key": s3_key,
-                "image_reference": image_url
+                "image_reference": image_url,
+                "clinics": ["all"],
+                "doctor_types": ["all"],
+                "doctors": ["all"],
+                "visibility_settings": {
+                    "clinics": ["all"],
+                    "doctor_types": ["all"],
+                    "doctors": ["all"]
+                }
             }
             page_data.update(extracted_meta)
 
