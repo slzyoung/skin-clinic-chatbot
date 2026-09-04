@@ -226,9 +226,17 @@ async def knowledge_query_general(
         bm25=bm25
     )
 
-@router.get("/", response_model=List[KnowledgeResponse])
+from app.schemas.pagination import PaginatedResponse
+from typing import List, Optional, Union
+import math
+
+@router.get("/", response_model=Union[PaginatedResponse[KnowledgeResponse], List[KnowledgeResponse]])
 async def list_knowledge(
     project_id: Optional[uuid.UUID] = Query(None, description="Optional project filter"),
+    search: Optional[str] = Query(None, description="Optional text search query"),
+    status: Optional[str] = Query(None, description="Optional status filter"),
+    page: Optional[int] = Query(None, ge=1, description="Page number"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(RequireAccess("knowledge:read"))
 ):
@@ -365,7 +373,37 @@ async def list_knowledge(
                     except Exception as err:
                         pass
 
-    return db_responses + staged_responses
+    all_items = db_responses + staged_responses
+
+    if status and status != "ALL":
+        all_items = [item for item in all_items if item.status == status]
+
+    if search:
+        s_clean = search.lower().strip()
+        all_items = [
+            item for item in all_items
+            if s_clean in (item.title or "").lower()
+            or s_clean in (item.file_name or "").lower()
+            or s_clean in (item.ai_summary or "").lower()
+            or s_clean in (item.content or "").lower()
+        ]
+
+    if page is not None:
+        p_size = page_size or 10
+        total = len(all_items)
+        total_pages = max(1, math.ceil(total / p_size))
+        start_idx = (page - 1) * p_size
+        items = all_items[start_idx : start_idx + p_size]
+
+        return PaginatedResponse[KnowledgeResponse](
+            items=items,
+            total=total,
+            page=page,
+            page_size=p_size,
+            total_pages=total_pages
+        )
+
+    return all_items
 
 @router.get("/{knowledge_id}", response_model=KnowledgeResponse)
 async def get_knowledge(

@@ -133,16 +133,53 @@ async def read_users_me(
 ):
     return await _hydrate_user(current_user, db)
 
-@router.get("/", response_model=List[UserResponse])
+from app.schemas.pagination import PaginatedResponse
+from typing import List, Optional, Union
+from fastapi import Query
+import math
+
+@router.get("/", response_model=Union[PaginatedResponse[UserResponse], List[UserResponse]])
 async def list_users(
     type: Optional[UserType] = None,
+    search: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1, description="Page number"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(RequireAccess("users:read"))
 ):
     stmt = select(User).where(User.deleted_at.is_(None))
     if type:
         stmt = stmt.where(User.type == type)
+    if search:
+        s_clean = f"%{search.strip()}%"
+        stmt = stmt.where(
+            (User.name.ilike(s_clean)) |
+            (User.email.ilike(s_clean)) |
+            (User.employee_id.ilike(s_clean))
+        )
     stmt = stmt.order_by(User.created_at.desc())
+
+    if page is not None:
+        p_size = page_size or 10
+        # Calculate total
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        count_res = await db.execute(count_stmt)
+        total = count_res.scalar() or 0
+        total_pages = max(1, math.ceil(total / p_size))
+
+        paginated_stmt = stmt.offset((page - 1) * p_size).limit(p_size)
+        result = await db.execute(paginated_stmt)
+        users = result.scalars().all()
+        hydrated_items = [await _hydrate_user(u, db) for u in users]
+
+        return PaginatedResponse[UserResponse](
+            items=hydrated_items,
+            total=total,
+            page=page,
+            page_size=p_size,
+            total_pages=total_pages
+        )
+
     result = await db.execute(stmt)
     users = result.scalars().all()
     return [await _hydrate_user(u, db) for u in users]

@@ -244,8 +244,15 @@ async def _hydrate_chat_session(session: ChatSession, db: AsyncSession) -> dict:
     
     return session_dict
 
-@router.get("/feedback", response_model=List[ChatHistoryResponse])
+from app.schemas.pagination import PaginatedResponse
+from typing import List, Optional, Union
+from fastapi import Query
+import math
+
+@router.get("/feedback", response_model=Union[PaginatedResponse[ChatHistoryResponse], List[ChatHistoryResponse]])
 async def list_chat_feedbacks(
+    page: Optional[int] = Query(None, ge=1, description="Page number"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_flexible)
 ):
@@ -258,6 +265,26 @@ async def list_chat_feedbacks(
         .where(ChatSession.has_data_issue == True, ChatSession.session_type == "DOCTOR")
         .order_by(ChatSession.updated_at.desc())
     )
+
+    if page is not None:
+        p_size = page_size or 10
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        count_res = await db.execute(count_stmt)
+        total = count_res.scalar() or 0
+        total_pages = max(1, math.ceil(total / p_size))
+
+        paginated_stmt = stmt.offset((page - 1) * p_size).limit(p_size)
+        result = await db.execute(paginated_stmt)
+        sessions = result.scalars().all()
+        hydrated = [await _hydrate_chat_session(s, db) for s in sessions]
+
+        return PaginatedResponse[ChatHistoryResponse](
+            items=hydrated,
+            total=total,
+            page=page,
+            page_size=p_size,
+            total_pages=total_pages
+        )
     
     result = await db.execute(stmt)
     sessions = result.scalars().all()
@@ -326,11 +353,13 @@ async def get_chat_stats(
         missing_knowledge=result.missing_knowledge or 0,
     )
 
-@router.get("/", response_model=List[ChatHistoryResponse])
+@router.get("/", response_model=Union[PaginatedResponse[ChatHistoryResponse], List[ChatHistoryResponse]])
 async def list_chat_sessions(
     search: Optional[str] = None,
     doctor_id: Optional[uuid.UUID] = None,
     session_type: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1, description="Page number"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_flexible)
 ):
@@ -363,6 +392,21 @@ async def list_chat_sessions(
             or s_clean in (h.get("branch") or "").lower()
             or s_clean in (h.get("session_type") or "").lower()
         ]
+
+    if page is not None:
+        p_size = page_size or 10
+        total = len(hydrated)
+        total_pages = max(1, math.ceil(total / p_size))
+        start_idx = (page - 1) * p_size
+        items = hydrated[start_idx : start_idx + p_size]
+
+        return PaginatedResponse[ChatHistoryResponse](
+            items=items,
+            total=total,
+            page=page,
+            page_size=p_size,
+            total_pages=total_pages
+        )
 
     return hydrated
 

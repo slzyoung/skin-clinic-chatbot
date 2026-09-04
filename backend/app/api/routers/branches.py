@@ -129,12 +129,49 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
         
     return branch_dict
 
-@router.get("/", response_model=List[BranchResponse])
+from app.schemas.pagination import PaginatedResponse
+from typing import List, Optional, Union
+from fastapi import Query
+import math
+
+@router.get("/", response_model=Union[PaginatedResponse[BranchResponse], List[BranchResponse]])
 async def list_branches(
+    search: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1, description="Page number"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(RequireAccess("branches:read"))
 ):
     stmt = select(Branch).where(Branch.deleted_at.is_(None))
+    if search:
+        s_clean = f"%{search.strip()}%"
+        stmt = stmt.where(
+            (Branch.name.ilike(s_clean)) |
+            (Branch.code.ilike(s_clean)) |
+            (Branch.ecosystem.ilike(s_clean))
+        )
+    stmt = stmt.order_by(Branch.name.asc())
+
+    if page is not None:
+        p_size = page_size or 10
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        count_res = await db.execute(count_stmt)
+        total = count_res.scalar() or 0
+        total_pages = max(1, math.ceil(total / p_size))
+
+        paginated_stmt = stmt.offset((page - 1) * p_size).limit(p_size)
+        result = await db.execute(paginated_stmt)
+        branches = result.scalars().all()
+        hydrated = [await _hydrate_branch(b, db) for b in branches]
+
+        return PaginatedResponse[BranchResponse](
+            items=hydrated,
+            total=total,
+            page=page,
+            page_size=p_size,
+            total_pages=total_pages
+        )
+
     result = await db.execute(stmt)
     branches = result.scalars().all()
     return [await _hydrate_branch(b, db) for b in branches]
