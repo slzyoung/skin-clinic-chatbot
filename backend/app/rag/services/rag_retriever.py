@@ -474,6 +474,9 @@ CLINICAL_SYNONYM_DICTIONARY = {
     "krim malam": ["night cream", "retinol", "moisturizer malam"],
     "krim siang": ["day cream", "sunscreen", "moisturizer pagi"],
     "sunscreen": ["tabir surya", "SPF50", "sun protection", "sunblock"],
+    "tahapan": ["tahapan treatment", "prosedur tindakan", "protokol perawatan", "langkah treatment"],
+    "tahapan treatment": ["prosedur tindakan", "tahapan perawatan", "langkah treatment", "protokol klinis"],
+    "prosedur": ["tahapan tindakan", "protokol perawatan", "prosedur medis", "clinical procedure"],
 }
 
 def expand_clinical_query(query: str) -> str:
@@ -625,11 +628,13 @@ class HybridRetriever:
             
             query_lower = query.lower()
             usage_keywords = ["how to use", "directions", "cara pakai", "cara penggunaan", "aturan pakai", "dosis", "instruksi"]
+            procedure_keywords = ["tahapan", "tahap", "prosedur", "protokol", "langkah", "step", "alur", "cara tindakan"]
             ingredients_keywords = ["kandungan", "ingredients", "bahan aktif", "komposisi", "active ingredients"]
             treatment_keywords = ["treatment", "tindakan", "prosedur", "perawatan", "peeling", "ekstraksi", "facial", "terapi", "laser"]
             product_keywords = ["produk", "skincare", "serum", "krim", "cream", "facial wash", "cleanser", "sunscreen", "moisturizer", "sku"]
 
             is_usage_intent = any(k in query_lower for k in usage_keywords)
+            is_procedure_intent = any(k in query_lower for k in procedure_keywords)
             is_ingredients_intent = any(k in query_lower for k in ingredients_keywords)
             is_treatment_intent = any(k in query_lower for k in treatment_keywords)
             is_product_intent = any(k in query_lower for k in product_keywords)
@@ -658,10 +663,13 @@ class HybridRetriever:
                 doc_type_upper = str(meta.get("document_type", "")).upper()
                 boost = 0.0
                 
-                if is_usage_intent and any(s in section_upper for s in ["HOW TO USE", "DIRECTIONS"]):
+                if is_usage_intent and any(s in section_upper for s in ["HOW TO USE", "DIRECTIONS", "CARA PAKAI"]):
                     boost += 0.05
                 elif is_ingredients_intent and any(s in section_upper for s in ["INGREDIENT", "KANDUNGAN", "KOMPOSISI"]):
                     boost += 0.05
+
+                if is_procedure_intent and any(s in section_upper for s in ["TAHAPAN", "PROSEDUR", "PROTOKOL", "LANGKAH", "INFORMASI PROSEDUR", "CARA TINDAKAN"]):
+                    boost += 0.15
                     
                 if is_treatment_intent and (doc_type_upper == "TREATMENT" or any(s in section_upper for s in ["TREATMENT", "PERAWATAN", "TINDAKAN", "PROSEDUR", "PROTOKOL"])):
                     boost += 0.10
@@ -687,12 +695,13 @@ class HybridRetriever:
             diverse_hits = []
             seen_doc_counts = {}
             deferred_hits = []
+            max_per_doc = 3 if is_procedure_intent else 2
 
             for hit in sorted_by_score:
                 meta = hit.get("metadata", {})
                 doc_key = meta.get("source_file") or meta.get("knowledge_id") or "unknown"
                 count = seen_doc_counts.get(doc_key, 0)
-                if count < 2:
+                if count < max_per_doc:
                     diverse_hits.append(hit)
                     seen_doc_counts[doc_key] = count + 1
                 else:

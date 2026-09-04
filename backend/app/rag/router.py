@@ -42,7 +42,7 @@ from app.rag.services.interfaces import BaseLLMAdapter, BaseVectorStoreAdapter
 
 
 def safe_json_loads(json_str: str) -> dict:
-    """Parses JSON safely, handling unescaped control characters and markdown code blocks."""
+    """Parses JSON safely, handling conversational wrapping, unescaped control characters, and markdown code blocks."""
     clean = (json_str or "").strip()
     if clean.startswith("```"):
         lines = clean.split("\n")
@@ -52,13 +52,232 @@ def safe_json_loads(json_str: str) -> dict:
             lines = lines[:-1]
         clean = "\n".join(lines).strip()
 
+    # Extract outermost { ... } block if surrounded by conversational text
+    import re
+    first_brace = clean.find("{")
+    last_brace = clean.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        clean = clean[first_brace:last_brace+1]
+
     try:
         return json.loads(clean, strict=False)
     except Exception:
         # Sanitize unescaped control characters like raw newlines inside JSON strings
-        import re
-        sanitized = re.sub(r'[\r\n\t]', ' ', clean)
-        return json.loads(sanitized, strict=False)
+        try:
+            sanitized = re.sub(r'[\r\n\t]', ' ', clean)
+            return json.loads(sanitized, strict=False)
+        except Exception:
+            return {}
+
+
+def create_image_asset(
+    url: str,
+    s3_key: Optional[str] = None,
+    role: str = "GENERAL",
+    product_name: Optional[str] = None,
+    caption: Optional[str] = None,
+    img_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Creates a structured MediaAsset object for an image with a unique ID and role.
+    Roles: 'PRODUCT_PACKAGING', 'CLINICAL_BEFORE', 'CLINICAL_AFTER', 'TREATMENT_PROCEDURE', 'GENERAL'
+    """
+    clean_url = str(url or "").strip()
+    if not clean_url:
+        return {}
+    
+    unique_id = img_id or f"img_{uuid.uuid4().hex[:8]}"
+    return {
+        "id": unique_id,
+        "url": clean_url,
+        "s3_key": s3_key or "",
+        "role": role,
+        "product_name": product_name,
+        "caption": caption or product_name or "Image Asset"
+    }
+
+
+def normalize_image_assets(
+    existing_images: Optional[List[Any]] = None,
+    image_urls: Optional[List[str]] = None,
+    default_product_name: Optional[str] = None,
+    default_role: str = "GENERAL"
+) -> List[Dict[str, Any]]:
+    """
+    Ensures images are structured as a list of dicts with unique id, url, role, caption.
+    """
+    assets = []
+    seen_urls = set()
+    
+    if existing_images and isinstance(existing_images, list):
+        for item in existing_images:
+            if isinstance(item, dict) and item.get("url"):
+                u = str(item["url"]).strip()
+                if u and u not in seen_urls:
+                    seen_urls.add(u)
+                    item_copy = dict(item)
+                    if not item_copy.get("id"):
+                        item_copy["id"] = f"img_{uuid.uuid4().hex[:8]}"
+                    if not item_copy.get("role"):
+                        item_copy["role"] = default_role
+                    assets.append(item_copy)
+            elif isinstance(item, str) and item.strip():
+                u = item.strip()
+                if u not in seen_urls:
+                    seen_urls.add(u)
+                    assets.append(create_image_asset(u, role=default_role, product_name=default_product_name))
+                    
+    if image_urls and isinstance(image_urls, list):
+        for u in image_urls:
+            if u and isinstance(u, str) and u.strip():
+                clean_u = u.strip()
+                if clean_u not in seen_urls:
+                    seen_urls.add(clean_u)
+                    assets.append(create_image_asset(clean_u, role=default_role, product_name=default_product_name))
+                
+    return assets
+
+
+def auto_embed_images_in_summary(
+    summary: str,
+    images_or_urls: Union[List[str], List[Dict[str, Any]]],
+    title: str = "Knowledge Image"
+) -> str:
+    """
+    Intelligently embeds image assets into the Markdown summary based on their topic, product, or section role.
+    Rather than hardcoding images below the main document title, this function:
+    1. Detects product name from image metadata and places the image under that specific product's heading.
+    2. Detects clinical Before/After images and places them under Clinical Results/Efficacy/Sebelum-Sesudah sections.
+    3. Detects procedure/usage images and places them under Cara Pakai/Prosedur sections.
+    4. Detects product packaging images and places them in the relevant Product Information section.
+    5. Falls back cleanly to the first major topical subsection (##) if no specific heading matches.
+    """
+    if not summary or not images_or_urls:
+        return summary or ""
+
+    import re
+
+    # Normalize inputs into standard asset dictionary representations
+    normalized_assets = []
+    for item in images_or_urls:
+        if isinstance(item, dict):
+            url = item.get("url") or item.get("image_url")
+            if url and isinstance(url, str) and url.strip():
+                normalized_assets.append({
+                    "id": item.get("id", ""),
+                    "url": url.strip(),
+                    "role": item.get("role", "PRODUCT_PACKAGING"),
+                    "product_name": item.get("product_name", ""),
+                    "caption": item.get("caption") or title
+                })
+        elif isinstance(item, str) and item.strip():
+            clean_u = item.strip()
+            # Infer basic role from URL path keywords if only string URL is provided
+            u_lower = clean_u.lower()
+            role = "PRODUCT_PACKAGING"
+            if any(k in u_lower for k in ["before", "after", "klinis", "clinical"]):
+                role = "CLINICAL_AFTER" if "after" in u_lower else "CLINICAL_BEFORE"
+            elif any(k in u_lower for k in ["step", "prosedur", "cara", "treatment", "procedure"]):
+                role = "TREATMENT_PROCEDURE"
+            
+            normalized_assets.append({
+                "id": "",
+                "url": clean_u,
+                "role": role,
+                "product_name": "",
+                "caption": title
+            })
+
+    updated = summary
+    for asset in normalized_assets:
+        clean_u = asset["url"]
+        # If the image URL is already embedded anywhere in the Markdown summary, respect LLM's placement!
+        if clean_u in updated:
+            continue
+
+        role = str(asset.get("role", "PRODUCT_PACKAGING")).upper()
+        prod_name = str(asset.get("product_name", "")).strip()
+        caption = str(asset.get("caption", "")).strip() or title
+        
+        # Build descriptive Markdown tag
+        alt_label = caption if caption and caption != "Knowledge Image" else (prod_name or title)
+        img_md = f"\n\n![{alt_label}]({clean_u})\n\n"
+
+        placed = False
+
+        # --- HEURISTIC 1: Match by Clinical Role (Before / After) ---
+        if not placed and role in ("CLINICAL_BEFORE", "CLINICAL_AFTER"):
+            clinical_regex = re.compile(
+                r'(?mi)^(#{2,6}\s*.*?(hasil\s*(uji|klinis|studi|pemakaian)?|sebelum|sesudah|before|after|efikasi|efektivitas|studi\s*klinis).*?)$'
+            )
+            match = clinical_regex.search(updated)
+            if match:
+                pos = match.end()
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                placed = True
+
+        # --- HEURISTIC 2: Match by Treatment Procedure / Usage ---
+        if not placed and role == "TREATMENT_PROCEDURE":
+            proc_regex = re.compile(
+                r'(?mi)^(#{2,6}\s*.*?(cara\s*(pakai|pemakaian|penggunaan)|petunjuk|prosedur|aturan\s*pakai|langkah|aplikasi|sop).*?)$'
+            )
+            match = proc_regex.search(updated)
+            if match:
+                pos = match.end()
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                placed = True
+
+        # --- HEURISTIC 3: Match by Specific Sub-Product Heading (## or ###) ---
+        if not placed and prod_name and len(prod_name) > 2:
+            prod_regex = re.compile(
+                r'(?mi)^(#{2,6}\s*.*?' + re.escape(prod_name) + r'.*?)$'
+            )
+            match = prod_regex.search(updated)
+            if match:
+                pos = match.end()
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                placed = True
+            else:
+                words = [w for w in re.split(r'[\s\-_/]+', prod_name) if len(w) > 3 and w.lower() not in ["erha", "produk", "product"]]
+                if len(words) >= 2:
+                    fuzzy_prod_regex = re.compile(
+                        r'(?mi)^(#{2,6}\s*.*?' + r'.*?'.join(re.escape(w) for w in words[:3]) + r'.*?)$'
+                    )
+                    fuzzy_match = fuzzy_prod_regex.search(updated)
+                    if fuzzy_match:
+                        pos = fuzzy_match.end()
+                        updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                        placed = True
+
+        # --- HEURISTIC 4: Match by Product Information / Packaging Section ---
+        if not placed and role == "PRODUCT_PACKAGING":
+            info_regex = re.compile(
+                r'(?mi)^(#{2,6}\s*.*?(informasi\s*produk|detail\s*produk|spesifikasi|kemasan|overview|deskripsi\s*produk|produk).*?)$'
+            )
+            match = info_regex.search(updated)
+            if match:
+                pos = match.end()
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                placed = True
+
+        # --- HEURISTIC 5: Match First Major Subsection (## Heading) ---
+        if not placed:
+            sub_match = re.search(r'(?m)^(##\s*[^\n]+)', updated)
+            if sub_match:
+                pos = sub_match.end()
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                placed = True
+
+        # --- FALLBACK: If document has only single header # Title ---
+        if not placed:
+            header_match = re.search(r'^(#+\s*[^\n]+)', updated, flags=re.MULTILINE)
+            if header_match:
+                pos = header_match.end()
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+            else:
+                updated = img_md.strip() + "\n\n" + updated
+
+    return updated
 
 
 router = APIRouter()
@@ -692,10 +911,19 @@ async def process_ingestion_background(
 
             # Write initial pending state IMMEDIATELY (0.5s) so GET /pending and GET /documents work instantly
             init_image_url = None
+            all_doc_image_urls = []
+            doc_s3_key = None
             for c in enriched_chunks:
-                if isinstance(c, dict) and c.get("metadata", {}).get("image_url"):
-                    init_image_url = c["metadata"]["image_url"]
-                    break
+                if isinstance(c, dict) and c.get("metadata"):
+                    m = c["metadata"]
+                    if m.get("image_url") and m["image_url"] not in all_doc_image_urls:
+                        all_doc_image_urls.append(m["image_url"])
+                    if m.get("s3_key") and not doc_s3_key:
+                        doc_s3_key = m["s3_key"]
+                    elif m.get("storage_key") and not doc_s3_key:
+                        doc_s3_key = m["storage_key"]
+            if all_doc_image_urls:
+                init_image_url = all_doc_image_urls[0]
 
             os.makedirs("data/pending", exist_ok=True)
             pending_file_path = os.path.join("data/pending", f"{knowledge_id}.json")
@@ -779,26 +1007,51 @@ async def process_ingestion_background(
                         db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
 
                     # Document content excerpt for structuring
-                    doc_content_excerpt = canonical_text[:12000] if len(canonical_text) > 12000 else canonical_text
+                    doc_content_excerpt = canonical_text[:30000] if len(canonical_text) > 30000 else canonical_text
+
+                    admin_instruction_block = ""
+                    if user_prompt and str(user_prompt).strip():
+                        admin_instruction_block = f"""
+======================================================================
+ADMIN INGESTION INSTRUCTION:
+"{str(user_prompt).strip()}"
+======================================================================
+CRITICAL INSTRUCTION:
+- The Admin provided specific instructions above for processing this document (e.g. "hanya ambil produk A saja", "ubah harga jadi Rp ...", "tambahkan catatan ...", "abaikan bagian ...").
+- You MUST STRICTLY PRIORITIZE and FOLLOW the Admin's instruction!
+- Adapt the title and the formatted_summary specifically to what the Admin requested!
+"""
 
                     structuring_prompt = f"""
 You are an expert document structuring and knowledge curation AI for PT Arya Noble (ERHA).
+
+{admin_instruction_block}
 
 Your tasks:
 1. **FORMAT DOCUMENT CONTENT IN CLEAN, WELL-STRUCTURED MARKDOWN**:
    - Format the document content in clean, well-structured Markdown. 
    - Use appropriate headings (`#` for document title, `##` for main sections/products/treatments, `###` for subsections), bullet points, spacing, tables, and line breaks to ensure the content is easy to read and looks like a properly formatted document.
-   - For images included in the Markdown, place them on separate lines with proper spacing (blank line before and after) so they render cleanly within the document:
-     
-     ![Deskripsi Gambar](IMAGE_URL)
-     
-   - GROUNDING RULE: Preserve all factual details (product names, active ingredients, usage steps, warnings, prices, SKUs) exactly as present in the raw content. Do not fabricate or invent unmentioned claims.
+   - SMART TOPIC-BASED IMAGE PLACEMENT:
+     * NEVER dump all images together at the top under the main document title (# Title).
+     * Place each image intelligently inside its relevant section or topic:
+       - Product packaging / hero photos: Place directly inside the specific product section (under `## [Product Name]` or `## Informasi Produk`).
+       - Clinical Before & After photos: Place inside the clinical results or efficacy section (`## Hasil Uji Klinis` or `## Sebelum & Sesudah Pemakaian`).
+       - Treatment procedure / usage photos: Place inside the directions or application section (`## Cara Pemakaian` or `## Prosedur Tindakan`).
+     * Format images cleanly on separate lines with descriptive alt text and blank lines before and after:
+       
+       ![Deskripsi Gambar](IMAGE_URL)
+       
+   - GROUNDING RULE: Preserve all factual details (product names, active ingredients, usage steps, warnings, prices, SKUs) from the raw content, but adhere strictly to any modifications, exclusions, or additions requested in the ADMIN INGESTION INSTRUCTION.
 2. **DETECT METADATA**:
-   - title: Short, clean professional document title inferred from content (without file extension or "Knowledge Base" prefixes).
+   - title: Short, clean professional document title inferred from content and admin instruction (without file extension or "Knowledge Base" prefixes).
    - document_type: "PRODUCT" | "TREATMENT" | "PROMOTIONAL" | "SOP" | "GENERAL"
    - valid_from: "YYYY-MM-DD" promo start date if visible, else null
    - valid_until: "YYYY-MM-DD" promo end date if visible, else null
-   - suggested_categories: Array of matching category objects from Available Categories.
+   - suggested_categories: Array of matching category objects strictly from the "Available Categories" list below.
+     STRICT CATEGORY RULES:
+     * ONLY select categories that exist in "Available Categories".
+     * NEVER invent, fabricate, or hallucinate new categories or placeholder text.
+     * If NO category from "Available Categories" matches this document, you MUST return an empty array: []!
    - feedback: 1 sentence in Indonesian describing the document type and content.
 
 DOCUMENT CONTENT:
@@ -813,7 +1066,7 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
     "document_type": "PRODUCT",
     "valid_from": null,
     "valid_until": null,
-    "suggested_categories": [{{"id": "uuid", "name": "category name"}}],
+    "suggested_categories": [],
     "feedback": "Dokumen ini berhasil diekstrak dan diformat dalam Markdown terstruktur.",
     "formatted_summary": "# Clean Document Title\\n\\nFormatted Markdown content here..."
 }}"""
@@ -840,14 +1093,57 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
                     extracted_doc_type = parsed_meta.get("document_type") or "GENERAL"
                     extracted_valid_from = parsed_meta.get("valid_from")
                     extracted_valid_until = parsed_meta.get("valid_until")
-                    suggested_categories = parsed_meta.get("suggested_categories", [])
+                    
+                    # Strict validation against database categories
+                    raw_suggested = parsed_meta.get("suggested_categories", [])
+                    valid_cat_ids = {str(c.get("id")).lower() for c in db_categories if isinstance(c, dict) and c.get("id")}
+                    valid_cat_names = {str(c.get("name")).strip().lower(): c for c in db_categories if isinstance(c, dict) and c.get("name")}
+                    clean_suggested_cats = []
+                    for c in raw_suggested:
+                        if isinstance(c, dict):
+                            cid = str(c.get("id", "")).lower()
+                            cname = str(c.get("name", "")).strip().lower()
+                            if cname in ["category name", "category_name", "uuid", "null", "none", ""]:
+                                continue
+                            if cid in valid_cat_ids:
+                                clean_suggested_cats.append(c)
+                            elif cname in valid_cat_names:
+                                clean_suggested_cats.append(valid_cat_names[cname])
+                        elif isinstance(c, str):
+                            cname = c.strip().lower()
+                            if cname in ["category name", "category_name", "uuid", "null", "none", ""]:
+                                continue
+                            if cname in valid_cat_names:
+                                clean_suggested_cats.append(valid_cat_names[cname])
+                    suggested_categories = clean_suggested_cats
                     feedback = parsed_meta.get("feedback", feedback)
 
-                    # Use AI structured markdown as summary if provided and valid
-                    ai_formatted_summary = parsed_meta.get("formatted_summary") or parsed_meta.get("summary")
-                    if ai_formatted_summary and len(str(ai_formatted_summary).strip()) > 30:
-                        summary = str(ai_formatted_summary).strip()
-                        logger.info(f"✨ AI formatted document into structured Markdown ({len(summary)} chars)")
+                    # For image files: strictly preserve clean product name + image markdown (zero packaging detail/SKU hallucinations)
+                    is_image_file = file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
+                    if is_image_file:
+                        doc_img = all_doc_image_urls[0] if all_doc_image_urls else init_image_url
+                        img_md = f"![{recommended_title}]({doc_img})" if doc_img else ""
+                        summary = f"# {recommended_title}\n\n{img_md}\n\nDokumen visual produk resmi ERHA: {recommended_title}."
+                        extracted_doc_type = "PRODUCT"
+                        logger.info(f"🖼️ [BATCH: {batch_id or 'SINGLE'}] [FILE: {file_name}] Preserved clean product image summary: '{recommended_title}'")
+                    else:
+                        # Use AI structured markdown as summary if provided and valid
+                        ai_formatted_summary = parsed_meta.get("formatted_summary") or parsed_meta.get("summary")
+                        if ai_formatted_summary and len(str(ai_formatted_summary).strip()) > 30:
+                            summary = str(ai_formatted_summary).strip()
+                            logger.info(f"✨ AI formatted document into structured Markdown ({len(summary)} chars)")
+
+                    # Apply deterministic refinements if user specified price/SKU/title in user_prompt
+                    if user_prompt and str(user_prompt).strip() and summary:
+                        refined_summary, _, refined_title, refined_sku = apply_refinements_to_content(
+                            user_prompt=str(user_prompt).strip(),
+                            summary=summary,
+                            chunks=[],
+                            title=recommended_title
+                        )
+                        summary = refined_summary
+                        if refined_title:
+                            recommended_title = refined_title
 
                 except Exception as llm_err:
                     timing_metrics["llm_review_ms"] = int((_time.time() - t0_llm) * 1000)
@@ -865,8 +1161,6 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
         }
 
         # Collect ALL document-level image URLs from parser chunks AND from AI summary
-        all_doc_image_urls = []
-        doc_s3_key = None
         for c in enriched_chunks:
             if isinstance(c, dict) and c.get("metadata"):
                 m = c["metadata"]
@@ -884,22 +1178,22 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
                 if url and url not in all_doc_image_urls:
                     all_doc_image_urls.append(url)
 
-        # Embed image block with proper blank lines before and after
+        # Structured image assets
+        structured_images = normalize_image_assets(
+            existing_images=None,
+            image_urls=all_doc_image_urls,
+            default_product_name=recommended_title,
+            default_role="PRODUCT_PACKAGING" if extracted_doc_type == "PRODUCT" else "GENERAL"
+        )
+
+        # Smart contextual topic-based image embedding if omitted by LLM
         if all_doc_image_urls:
-            if not any(u in summary for u in all_doc_image_urls):
-                img_header_block = "\n\n".join([f"![{recommended_title} Image {i+1}]({u})" for i, u in enumerate(all_doc_image_urls)])
-                lines = summary.split("\n")
-                if lines and lines[0].startswith("#"):
-                    summary = lines[0] + f"\n\n{img_header_block}\n\n" + "\n".join(lines[1:])
-                else:
-                    summary = f"# {recommended_title}\n\n{img_header_block}\n\n{summary}"
+            summary = auto_embed_images_in_summary(summary, structured_images or all_doc_image_urls, recommended_title)
 
         # Category names for chunk metadata
         cat_names = [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else []
 
         # Structure-aware chunking from canonical text (raw parser output — never LLM-rewritten)
-        # chunk_summary_markdown splits by ## headings, extracts contextual image_url/sku/price per chunk
-        # NOTE: These chunks are STAGING chunks only — final chunks are regenerated at Approve time
         if summary and summary.strip():
             try:
                 from app.rag.utils.summary_chunker import chunk_summary_markdown
@@ -920,9 +1214,13 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
             except Exception as rechunk_err:
                 logger.warning(f"Canonical text chunking failed, keeping parser chunks: {rechunk_err}")
 
-        # History starts empty at ingestion — will be populated during admin Refine interactions
-        # user_prompt is preserved in initial_prompt field for reference only
+        # Populate Turn 0 in history so initial ingestion prompt and summary immediately render in Review Dashboard
         history_list = []
+        if user_prompt and str(user_prompt).strip():
+            history_list = [
+                {"role": "user", "content": str(user_prompt).strip(), "attachmentName": file_name},
+                {"role": "assistant", "content": summary}
+            ]
 
         timing_metrics["total_ingestion_ms"] = int((_time.time() - t0_total) * 1000)
 
@@ -936,13 +1234,16 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
             "status": "On review",
             "document_type": extracted_doc_type,
             "summary": summary,
+            "image_url": all_doc_image_urls[0] if all_doc_image_urls else None,
             "image_urls": all_doc_image_urls,
+            "images": structured_images,
             "text_accuracy": text_accuracy,
             "feedback": feedback,
             "batch_summary": None,
             "suggested_categories": suggested_categories,
             "visibility_settings": visibility_settings,
             "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+            "initial_summary": summary,
             "history": history_list,
             "chunks": enriched_chunks,
             "timing_metrics": timing_metrics
@@ -1001,11 +1302,15 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
                         "file_hash": file_hash,
                         "document_type": extracted_doc_type,
                         "initial_prompt": user_prompt if user_prompt and str(user_prompt).strip() else None,
+                        "initial_summary": summary,
                         "history": history_list,
                         "chat_history": history_list,
                         "suggested_categories": suggested_categories,
                         "categories": [c["name"] for c in suggested_categories if isinstance(c, dict) and "name" in c] if suggested_categories else [],
                         "visibility_settings": visibility_settings,
+                        "image_url": all_doc_image_urls[0] if all_doc_image_urls else None,
+                        "image_urls": all_doc_image_urls,
+                        "images": structured_images,
                         "feedback": feedback,
                         "timing_metrics": timing_metrics
                     })
@@ -1344,196 +1649,268 @@ async def ingest_document(
         import uuid as _uuid
         import hashlib
         
-        response_items = []
         os.makedirs("data/temp", exist_ok=True)
         batch_id = str(_uuid.uuid4()) if len(upload_list) > 1 else None
+        total_files = len(upload_list)
 
-        for target_file in upload_list:
-            if not target_file.filename:
-                continue
+        logger.info(
+            f"🚀 [BATCH: {batch_id or 'SINGLE'}] Starting bounded parallel ingestion for {total_files} file(s) "
+            f"(concurrency limit: {settings.max_ingestion_concurrency})."
+        )
 
-            k_type = KnowledgeType.GENERAL
+        upload_semaphore = asyncio.Semaphore(settings.max_ingestion_concurrency)
 
-            file_bytes = await target_file.read()
-            file_hash = hashlib.sha256(file_bytes).hexdigest()
-
-            # -------------------------------------------------------------
-            # 3-WAY DUPLICATE DETECTION LIFECYCLE
-            # -------------------------------------------------------------
-            dup_info = detect_duplicate_lifecycle(file_hash, target_file.filename)
-            dup_status = dup_info.get("status", "NEW")
-
-            # 1. STATE: PUBLISHED -> BLOCK
-            if dup_status == "PUBLISHED":
-                if len(upload_list) == 1:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Dokumen '{target_file.filename}' sudah terpublikasi (PUBLISHED / APPROVED) di knowledge base aktif ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). Upload dibatalkan untuk menjaga keakuratan sistem dokter. Silakan gunakan menu 'Edit Knowledge' di UI jika ingin memperbarui."
-                    )
-                else:
-                    response_items.append({
-                        "file_name": target_file.filename,
-                        "batch_id": batch_id,
-                        "duplicate_status": "PUBLISHED",
-                        "action": "BLOCKED",
-                        "detail": f"Dokumen sudah terpublikasi (APPROVED) ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). Upload dibatalkan."
-                    })
-                    continue
-
-            # 2. STATE: PENDING -> REQUIRE ADMIN CONFIRMATION (DO NOT SILENTLY OVERWRITE)
-            if dup_status == "PENDING" and not replace_existing:
-                existing_k_id = dup_info.get("knowledge_id")
-                if len(upload_list) == 1:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Draft peninjauan untuk '{target_file.filename}' (ID: {existing_k_id}) sudah ada di antrean On Review (Pending). Upload dibatalkan agar draft lama tidak tertimpa secara diam-diam. Silakan selesaikan review draft yang ada, atau kirim konfirmasi 'replace_existing=true' untuk mengganti draft lama."
-                    )
-                else:
-                    response_items.append({
-                        "file_name": target_file.filename,
-                        "existing_knowledge_id": existing_k_id,
-                        "batch_id": batch_id,
-                        "duplicate_status": "PENDING",
-                        "action": "REQUIRE_ADMIN_CONFIRMATION",
-                        "detail": f"Draft peninjauan sudah ada di daftar On Review ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). Kirim 'replace_existing=true' jika ingin menimpa draft ini."
-                    })
-                    continue
-
-            # 3. STATE: NEW or PENDING with replace_existing=True -> PROCEED
-            file_path = f"data/temp/{target_file.filename}"
-            with open(file_path, "wb") as f_out:
-                f_out.write(file_bytes)
-
-            file_size = os.path.getsize(file_path)
-
-            k_id = dup_info.get("knowledge_id") if (dup_status == "PENDING" and replace_existing) else None
+        async def _process_single_upload_file(target_file: UploadFile, idx: int, total: int) -> dict:
+            file_label = f"[BATCH: {batch_id or 'SINGLE'}] [FILE {idx}/{total}: {target_file.filename}]"
             try:
-                from app.core.database import AsyncSessionLocal
-                from app.models.knowledge import Knowledge, KnowledgeStatus
-                from app.models.user import User
-                from sqlalchemy import select
+                async with upload_semaphore:
+                    logger.info(f"📥 {file_label} Intake started...")
+                    k_type = KnowledgeType.GENERAL
 
-                async with AsyncSessionLocal() as session:
-                    user_result = await session.execute(select(User).limit(1))
-                    user = user_result.scalars().first()
-                    user_id = user.id if user else _uuid.uuid4()
+                    file_bytes = await target_file.read()
+                    file_hash = hashlib.sha256(file_bytes).hexdigest()
 
-                    custom_uuid = None
-                    if k_id:
-                        try:
-                            custom_uuid = _uuid.UUID(k_id)
-                        except ValueError:
-                            pass
+                    # -------------------------------------------------------------
+                    # 3-WAY DUPLICATE DETECTION LIFECYCLE
+                    # -------------------------------------------------------------
+                    dup_info = detect_duplicate_lifecycle(file_hash, target_file.filename)
+                    dup_status = dup_info.get("status", "NEW")
 
-                    existing_doc = None
-                    if custom_uuid:
-                        existing_doc = await session.get(Knowledge, custom_uuid)
-                    if not existing_doc:
-                        res = await session.execute(
-                            select(Knowledge).where(Knowledge.file_name == target_file.filename).order_by(Knowledge.created_at.desc())
+                    # 1. STATE: PUBLISHED -> BLOCK
+                    if dup_status == "PUBLISHED":
+                        block_msg = (
+                            f"Dokumen '{target_file.filename}' sudah terpublikasi (PUBLISHED / APPROVED) "
+                            f"di knowledge base aktif ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}'). "
+                            f"Upload dibatalkan untuk menjaga keakuratan sistem dokter."
                         )
-                        existing_doc = res.scalars().first()
-
-                    if existing_doc:
-                        knowledge = existing_doc
-                        knowledge.deleted_at = None
-                        knowledge.status = KnowledgeStatus.PROCESSING
-                        knowledge.ai_summary = "Processing..."
-                        knowledge.original_path = file_path
-                        knowledge.mime_type = target_file.content_type
-                        knowledge.file_size = file_size
-                        if knowledge.metadata_ is None:
-                            knowledge.metadata_ = {}
-                        knowledge.metadata_["batch_id"] = batch_id
-                        knowledge.metadata_["file_hash"] = file_hash
-                        if dup_status == "PENDING" and replace_existing:
-                            knowledge.metadata_["replaced_at"] = str(asyncio.get_event_loop().time())
-                        await session.commit()
-                        await session.refresh(knowledge)
-                        k_id = str(knowledge.id)
-                    else:
-                        metadata = {
+                        logger.warning(f"🚫 {file_label} {block_msg}")
+                        if total == 1:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=block_msg + " Silakan gunakan menu 'Edit Knowledge' di UI jika ingin memperbarui."
+                            )
+                        return {
+                            "file_name": target_file.filename,
                             "batch_id": batch_id,
-                            "file_hash": file_hash
+                            "status": "BLOCKED",
+                            "action": "BLOCKED",
+                            "duplicate_status": "PUBLISHED",
+                            "detail": block_msg
                         }
-                        knowledge = Knowledge(
-                            id=custom_uuid if custom_uuid else _uuid.uuid4(),
-                            type=k_type,
-                            title=target_file.filename,
-                            file_name=target_file.filename,
-                            original_path=file_path,
-                            mime_type=target_file.content_type,
-                            file_size=file_size,
-                            status=KnowledgeStatus.PROCESSING,
-                            uploaded_by=user_id,
-                            ai_summary="Processing...",
-                            ai_confidence=0.0,
-                            metadata_=metadata
+
+                    # 2. STATE: PENDING -> REQUIRE ADMIN CONFIRMATION (DO NOT SILENTLY OVERWRITE)
+                    if dup_status == "PENDING" and not replace_existing:
+                        existing_k_id = dup_info.get("knowledge_id")
+                        pending_msg = (
+                            f"Draft peninjauan untuk '{target_file.filename}' (ID: {existing_k_id}) "
+                            f"sudah ada di antrean On Review (Pending) ({dup_info.get('match_reason')}: '{dup_info.get('existing_file')}')."
                         )
-                        session.add(knowledge)
-                        await session.commit()
-                        await session.refresh(knowledge)
-                        k_id = str(knowledge.id)
-            except Exception as db_err:
-                logger.warning(f"Could not create or update Knowledge DB record for {target_file.filename}: {db_err}")
-                if not k_id:
-                    k_id = str(_uuid.uuid4())
+                        logger.warning(f"⚠️ {file_label} {pending_msg}")
+                        if total == 1:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=pending_msg + " Upload dibatalkan agar draft lama tidak tertimpa. Silakan selesaikan review atau kirim 'replace_existing=true'."
+                            )
+                        return {
+                            "file_name": target_file.filename,
+                            "existing_knowledge_id": existing_k_id,
+                            "batch_id": batch_id,
+                            "status": "REQUIRE_CONFIRMATION",
+                            "action": "REQUIRE_ADMIN_CONFIRMATION",
+                            "duplicate_status": "PENDING",
+                            "detail": pending_msg + " Kirim 'replace_existing=true' jika ingin menimpa draft ini."
+                        }
 
-            # Upload original document to knowledge-documents MinIO bucket
-            original_s3_key = None
-            try:
-                from app.services.storage import upload_document
-                doc_upload = upload_document(
-                    content=file_bytes,
-                    filename=target_file.filename,
-                    document_id=k_id,
-                    content_type=target_file.content_type or "application/octet-stream"
-                )
-                if doc_upload.get("status") == "success":
-                    original_s3_key = doc_upload["s3_key"]
-                    logger.info(f"📄 Original document uploaded to MinIO: {original_s3_key}")
-            except Exception as minio_err:
-                logger.warning(f"Could not upload original document to MinIO: {minio_err}")
+                    # 3. STATE: NEW or PENDING with replace_existing=True -> PROCEED
+                    file_path = f"data/temp/{target_file.filename}"
+                    with open(file_path, "wb") as f_out:
+                        f_out.write(file_bytes)
 
-            # Spawn concurrent background ingestion task
+                    file_size = os.path.getsize(file_path)
+                    k_id = dup_info.get("knowledge_id") if (dup_status == "PENDING" and replace_existing) else None
+
+                    try:
+                        from app.core.database import AsyncSessionLocal
+                        from app.models.knowledge import Knowledge, KnowledgeStatus
+                        from app.models.user import User
+                        from sqlalchemy import select
+
+                        async with AsyncSessionLocal() as session:
+                            user_result = await session.execute(select(User).limit(1))
+                            user = user_result.scalars().first()
+                            user_id = user.id if user else _uuid.uuid4()
+
+                            custom_uuid = None
+                            if k_id:
+                                try:
+                                    custom_uuid = _uuid.UUID(k_id)
+                                except ValueError:
+                                    pass
+
+                            existing_doc = None
+                            if custom_uuid:
+                                existing_doc = await session.get(Knowledge, custom_uuid)
+                            if not existing_doc:
+                                res = await session.execute(
+                                    select(Knowledge).where(Knowledge.file_name == target_file.filename).order_by(Knowledge.created_at.desc())
+                                )
+                                existing_doc = res.scalars().first()
+
+                            if existing_doc:
+                                knowledge = existing_doc
+                                knowledge.deleted_at = None
+                                knowledge.status = KnowledgeStatus.PROCESSING
+                                knowledge.ai_summary = "Processing..."
+                                knowledge.original_path = file_path
+                                knowledge.mime_type = target_file.content_type
+                                knowledge.file_size = file_size
+                                if knowledge.metadata_ is None:
+                                    knowledge.metadata_ = {}
+                                knowledge.metadata_["batch_id"] = batch_id
+                                knowledge.metadata_["file_hash"] = file_hash
+                                if dup_status == "PENDING" and replace_existing:
+                                    knowledge.metadata_["replaced_at"] = str(asyncio.get_event_loop().time())
+                                await session.commit()
+                                await session.refresh(knowledge)
+                                k_id = str(knowledge.id)
+                            else:
+                                metadata = {
+                                    "batch_id": batch_id,
+                                    "file_hash": file_hash
+                                }
+                                knowledge = Knowledge(
+                                    id=custom_uuid if custom_uuid else _uuid.uuid4(),
+                                    type=k_type,
+                                    title=target_file.filename,
+                                    file_name=target_file.filename,
+                                    original_path=file_path,
+                                    mime_type=target_file.content_type,
+                                    file_size=file_size,
+                                    status=KnowledgeStatus.PROCESSING,
+                                    uploaded_by=user_id,
+                                    ai_summary="Processing...",
+                                    ai_confidence=0.0,
+                                    metadata_=metadata
+                                )
+                                session.add(knowledge)
+                                await session.commit()
+                                await session.refresh(knowledge)
+                                k_id = str(knowledge.id)
+                    except Exception as db_err:
+                        logger.warning(f"{file_label} Could not create/update Knowledge DB record: {db_err}")
+                        if not k_id:
+                            k_id = str(_uuid.uuid4())
+
+                    # Upload original document to MinIO
+                    original_s3_key = None
+                    try:
+                        from app.services.storage import upload_document
+                        doc_upload = upload_document(
+                            content=file_bytes,
+                            filename=target_file.filename,
+                            document_id=k_id,
+                            content_type=target_file.content_type or "application/octet-stream"
+                        )
+                        if doc_upload.get("status") == "success":
+                            original_s3_key = doc_upload["s3_key"]
+                            logger.info(f"📄 {file_label} [ID: {k_id}] Original document uploaded to MinIO: {original_s3_key}")
+                    except Exception as minio_err:
+                        logger.warning(f"{file_label} MinIO upload note: {minio_err}")
+
+                    # Spawn concurrent background ingestion task (governed by _ingestion_semaphore)
+                    asyncio.create_task(
+                        process_ingestion_background(
+                            k_id,
+                            file_path,
+                            target_file.filename,
+                            pipeline,
+                            llm,
+                            prompt,
+                            file_hash,
+                            batch_id
+                        )
+                    )
+
+                    status_display = "On review (Replaced)" if (dup_status == "PENDING" and replace_existing) else "On review"
+                    logger.info(f"✅ {file_label} [ID: {k_id}] Staged successfully ({status_display}).")
+                    return {
+                        "knowledge_id": k_id,
+                        "batch_id": batch_id,
+                        "file_name": target_file.filename,
+                        "original_s3_key": original_s3_key,
+                        "duplicate_status": "PENDING_REPLACED" if (dup_status == "PENDING" and replace_existing) else "NEW",
+                        "status": status_display,
+                        "action": "QUEUED",
+                        "detail": f"Berhasil masuk antrean peninjauan ({status_display})."
+                    }
+
+            except HTTPException as http_exc:
+                if total == 1:
+                    raise http_exc
+                logger.warning(f"⚠️ {file_label} HTTP rejection: {http_exc.detail}")
+                return {
+                    "file_name": target_file.filename,
+                    "batch_id": batch_id,
+                    "status": "FAILED",
+                    "action": "FAILED",
+                    "detail": str(http_exc.detail)
+                }
+            except Exception as exc:
+                logger.error(f"❌ {file_label} Intake exception: {exc}")
+                if total == 1:
+                    raise HTTPException(status_code=500, detail=str(exc))
+                return {
+                    "file_name": target_file.filename,
+                    "batch_id": batch_id,
+                    "status": "FAILED",
+                    "action": "FAILED",
+                    "detail": f"Gagal memproses file: {str(exc)}"
+                }
+
+        # Process upload files concurrently with safe bounded concurrency
+        tasks = [_process_single_upload_file(f, idx + 1, total_files) for idx, f in enumerate(upload_list)]
+        response_items = await asyncio.gather(*tasks)
+
+        # Calculate batch statistics
+        queued_items = [r for r in response_items if r.get("action") == "QUEUED" or r.get("knowledge_id")]
+        failed_items = [r for r in response_items if r.get("action") == "FAILED" or r.get("status") == "FAILED"]
+        blocked_items = [r for r in response_items if r.get("action") in ("BLOCKED", "REQUIRE_ADMIN_CONFIRMATION")]
+
+        success_count = len(queued_items)
+        fail_count = len(failed_items)
+        blocked_count = len(blocked_items)
+
+        logger.info(
+            f"🏁 [BATCH: {batch_id or 'SINGLE'}] Batch intake complete: "
+            f"{success_count} queued, {fail_count} failed, {blocked_count} blocked (Total: {total_files})."
+        )
+
+        # Spawn batch coordinator task if multi-file batch upload and at least one queued
+        if batch_id and len(queued_items) > 1 and llm:
             asyncio.create_task(
-                process_ingestion_background(
-                    k_id,
-                    file_path,
-                    target_file.filename,
-                    pipeline,
-                    llm,
-                    prompt,
-                    file_hash,
-                    batch_id
-                )
+                trigger_batch_summary_after_all_done(batch_id, len(queued_items), llm, user_prompt=prompt)
             )
 
-            status_display = "On review (Replaced)" if (dup_status == "PENDING" and replace_existing) else "On review"
-            response_items.append({
-                "knowledge_id": k_id,
-                "batch_id": batch_id,
-                "file_name": target_file.filename,
-                "original_s3_key": original_s3_key,
-                "duplicate_status": "PENDING_REPLACED" if (dup_status == "PENDING" and replace_existing) else "NEW",
-                "status": status_display
-            })
-
-        # Spawn batch coordinator task if multi-file batch upload
-        if batch_id and len(response_items) > 1 and llm:
-            asyncio.create_task(
-                trigger_batch_summary_after_all_done(batch_id, len(response_items), llm, user_prompt=prompt)
-            )
+        overall_status = "success" if (success_count == total_files) else ("partial_success" if success_count > 0 else "failed")
 
         return {
-            "status": "success",
+            "status": overall_status,
             "batch_id": batch_id,
-            "total_files": len(upload_list),
-            "processed_files": len([r for r in response_items if r.get("knowledge_id")]),
-            "message": f"Successfully queued {len(response_items)} document(s) for ingestion." if not batch_id else f"Processed {len(response_items)} document(s) in Batch '{batch_id}'.",
+            "total_files": total_files,
+            "processed_files": success_count,
+            "failed_files": fail_count,
+            "blocked_files": blocked_count,
+            "message": (
+                f"Processed {total_files} document(s) in Batch '{batch_id}' "
+                f"({success_count} queued for review, {fail_count} failed, {blocked_count} blocked/pending confirmation)."
+                if batch_id else
+                f"Successfully queued {upload_list[0].filename} for ingestion."
+            ),
             "documents": response_items
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to ingest document(s): {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1963,6 +2340,9 @@ CURRENT DOCUMENT CONTENT:
 
 {attached_file_context if attached_file_context else ""}
 
+Available Categories from Database:
+{json.dumps(db_categories, ensure_ascii=False)}
+
 EDITING GUIDELINES:
 1. **UNDERSTAND ADMIN BEHAVIOR & INTENT FLEXIBLY**:
    - Admins may write informally, briefly, or colloquially in Indonesian.
@@ -1970,9 +2350,21 @@ EDITING GUIDELINES:
    - If admin asks to change/update specific data (e.g. "ganti harga jadi 50.000", "ubah nama produk", "sku nya ganti ke ABC-123"), update that specific value accurately.
    - If admin asks to format or tidy up (e.g. "rapikan teks", "buat jadi bullet point", "perbaiki tabel"), re-format into clean, well-structured Markdown.
    - If admin attaches a supplementary file or adds new details, integrate the new facts seamlessly into the appropriate section.
-2. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
-3. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
-4. **FEEDBACK**: Write 1 short, polite Indonesian sentence explaining what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
+2. **SMART TOPIC-BASED IMAGE PLACEMENT RULE**:
+   - Do NOT simply dump images under the main document heading (# Title).
+   - Intelligently embed each image into its most relevant section or topic:
+     * Product photo / packaging: Place inside that specific product's section (under `## [Product Name]` or `## Informasi Produk`).
+     * Clinical Before & After photos: Place inside the clinical results section (under `## Hasil Uji Klinis` or `## Sebelum & Sesudah`).
+     * Treatment procedure / application photos: Place inside the usage section (under `## Cara Pemakaian` or `## Prosedur Tindakan`).
+   - Format images cleanly on their own lines with descriptive alt text and blank lines before and after:
+     ![Deskripsi Gambar](URL_GAMBAR)
+3. **STRICT CATEGORIES RULE**:
+   - Select suggested_categories ONLY from the "Available Categories from Database" list above.
+   - NEVER invent or create new categories. NEVER output placeholder text like "category_name" or "category_id".
+   - If NO category from the list genuinely matches this document, you MUST return an empty array: []!
+4. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
+5. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
+6. **FEEDBACK**: Write 1 short, polite Indonesian sentence explaining what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
 
 Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
 {{
@@ -1983,9 +2375,7 @@ Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
     "summary": "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>",
     "text_accuracy": "100%",
     "feedback": "Deskripsi singkat perubahan yang diterapkan.",
-    "suggested_categories": [
-        {{"id": "category_id", "name": "category_name"}}
-    ]
+    "suggested_categories": []
 }}
 
 CRITICAL REQUIREMENT FOR THE "summary" FIELD:
@@ -1993,17 +2383,13 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
 - Do NOT output placeholder text like "The updated document in clean Markdown with requested changes applied" or "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>". You must output the real text!
 """
         
-        llm_response = await asyncio.to_thread(llm.generate, refine_prompt)
-        
-        updated_data = safe_json_loads(llm_response)
-
-        # Fallback guard against literal schema placeholders from LLM
+        llm_res = await asyncio.to_thread(llm.generate, refine_prompt)
+        updated_data = safe_json_loads(llm_res)
         candidate_summary = updated_data.get("summary", "")
         if not candidate_summary or any(p in candidate_summary.lower() for p in ["the updated document in clean markdown", "full_updated_document_markdown"]):
             logger.warning("LLM returned placeholder summary during pending refine. Using staged summary as base.")
             updated_data["summary"] = staged_data.get("summary", "")
 
-        # Comprehensive metadata preservation across refinement rounds
         k_id = staged_data.get("knowledge_id", knowledge_id)
         updated_data["knowledge_id"] = k_id
         
@@ -2033,6 +2419,57 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             updated_data["sku"] = refined_sku
             updated_data["feedback"] = f"Nomor SKU berhasil diperbarui menjadi {refined_sku}."
 
+        # Collect and embed all image URLs
+        all_imgs = []
+        if staged_data.get("image_urls") and isinstance(staged_data["image_urls"], list):
+            for u in staged_data["image_urls"]:
+                if u and u not in all_imgs:
+                    all_imgs.append(u)
+        if "all_attached_images" in locals() and all_attached_images:
+            for u in all_attached_images:
+                if u and u not in all_imgs:
+                    all_imgs.append(u)
+        if staged_data.get("image_url") and staged_data["image_url"] not in all_imgs:
+            all_imgs.append(staged_data["image_url"])
+
+        # Normalized Image Assets
+        structured_images = normalize_image_assets(
+            existing_images=staged_data.get("images"),
+            image_urls=all_imgs,
+            default_product_name=cur_title
+        )
+
+        # Smart contextual topic-based image embedding if omitted by LLM
+        if all_imgs:
+            updated_data["summary"] = auto_embed_images_in_summary(
+                updated_data.get("summary", ""),
+                structured_images or all_imgs,
+                title=cur_title or "Knowledge Image"
+            )
+
+        # Strict Category validation against database
+        raw_cats = updated_data.get("suggested_categories", staged_data.get("suggested_categories", []))
+        valid_cat_ids = {str(c.get("id")).lower() for c in db_categories if isinstance(c, dict) and c.get("id")}
+        valid_cat_names = {str(c.get("name")).strip().lower(): c for c in db_categories if isinstance(c, dict) and c.get("name")}
+        clean_cats = []
+        for c in raw_cats:
+            if isinstance(c, dict):
+                cid = str(c.get("id", "")).lower()
+                cname = str(c.get("name", "")).strip().lower()
+                if cname in ["category name", "category_name", "category_id", "uuid", "null", "none", ""]:
+                    continue
+                if cid in valid_cat_ids:
+                    clean_cats.append(c)
+                elif cname in valid_cat_names:
+                    clean_cats.append(valid_cat_names[cname])
+            elif isinstance(c, str):
+                cname = c.strip().lower()
+                if cname in ["category name", "category_name", "category_id", "uuid", "null", "none", ""]:
+                    continue
+                if cname in valid_cat_names:
+                    clean_cats.append(valid_cat_names[cname])
+        raw_cats = clean_cats
+
         # Build updated multi-turn conversation history
         existing_hist = staged_data.get("history", [])
         if not isinstance(existing_hist, list):
@@ -2043,7 +2480,7 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
         updated_data["history"] = new_hist
 
         vis_settings = updated_data.get("visibility_settings") or staged_data.get("visibility_settings", {})
-        doc_img_url = updated_data.get("image_url") or staged_data.get("image_url")
+        doc_img_url = all_imgs[0] if all_imgs else (staged_data.get("image_url") or updated_data.get("image_url"))
         doc_file_hash = updated_data.get("file_hash") or staged_data.get("file_hash")
         doc_batch_id = updated_data.get("batch_id") or staged_data.get("batch_id")
         doc_file_name = updated_data.get("file_name") or staged_data.get("file_name", k_id)
@@ -2053,22 +2490,20 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
         doc_valid_until = updated_data.get("valid_until") or staged_data.get("valid_until")
 
         # ─── RE-CHUNK from updated summary (same pipeline as Approve) ─────────────
-        # Do NOT use LLM-returned chunks. Always re-chunk from summary for consistency.
         cat_names = []
-        raw_cats = updated_data.get("suggested_categories", staged_data.get("suggested_categories", []))
         for c in raw_cats:
             if isinstance(c, dict) and "name" in c:
                 cat_names.append(c["name"])
             elif isinstance(c, str):
                 cat_names.append(c)
 
-        doc_img_url = staged_data.get("image_url") or (staged_data.get("image_urls")[0] if (staged_data.get("image_urls") and isinstance(staged_data.get("image_urls"), list)) else None)
+        final_summary = updated_data.get("summary", "")
         updated_chunks = []
-        if refined_summary and refined_summary.strip():
+        if final_summary and final_summary.strip():
             try:
                 from app.rag.utils.summary_chunker import chunk_summary_markdown
                 updated_chunks = chunk_summary_markdown(
-                    summary=refined_summary,
+                    summary=final_summary,
                     source_file=doc_file_name,
                     knowledge_id=k_id,
                     batch_id=doc_batch_id,
@@ -2085,7 +2520,6 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             except Exception as rechunk_err:
                 logger.warning(f"Refine Pending: re-chunking failed, using LLM chunks: {rechunk_err}")
                 updated_chunks = updated_data.get("chunks", staged_data.get("chunks", []))
-                # Patch metadata on fallback chunks
                 for chunk in updated_chunks:
                     if isinstance(chunk, dict):
                         if "metadata" not in chunk:
@@ -2103,15 +2537,17 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             "document_type": doc_type,
             "valid_from": doc_valid_from,
             "valid_until": doc_valid_until,
-            "summary": updated_data.get("summary", ""),
+            "summary": final_summary,
             "image_url": doc_img_url,
-            "image_urls": staged_data.get("image_urls", []),
+            "image_urls": all_imgs,
+            "images": structured_images,
             "text_accuracy": updated_data.get("text_accuracy") or staged_data.get("text_accuracy", "100%"),
             "feedback": updated_data.get("feedback") or staged_data.get("feedback", ""),
             "batch_summary": updated_data.get("batch_summary") or staged_data.get("batch_summary"),
             "suggested_categories": raw_cats,
             "visibility_settings": vis_settings,
             "initial_prompt": updated_data.get("initial_prompt") or staged_data.get("initial_prompt"),
+            "initial_summary": staged_data.get("initial_summary") or staged_data.get("summary"),
             "history": new_hist,
             "chunks": updated_chunks
         }
@@ -2761,15 +3197,28 @@ EDITING GUIDELINES:
    - If admin asks to change/update specific data (e.g. "ganti harga jadi 50.000", "ubah nama produk", "sku nya ganti ke ABC-123"), update that specific value accurately.
    - If admin asks to format or tidy up (e.g. "rapikan teks", "buat jadi bullet point", "perbaiki tabel"), re-format into clean, well-structured Markdown.
    - If admin attaches a supplementary file or adds new details, integrate the new facts seamlessly into the appropriate section.
-2. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
-3. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
-4. **CATEGORIES**: Update `categories` only if the content changes topic or categories are explicitly specified.
+2. **SMART TOPIC-BASED IMAGE PLACEMENT RULE**:
+   - Do NOT simply dump images under the main document heading (# Title).
+   - Intelligently embed each image into its most relevant section or topic:
+     * Product photo / packaging: Place inside that specific product's section (under `## [Product Name]` or `## Informasi Produk`).
+     * Clinical Before & After photos: Place inside the clinical results section (under `## Hasil Uji Klinis` or `## Sebelum & Sesudah`).
+     * Treatment procedure / application photos: Place inside the usage section (under `## Cara Pemakaian` or `## Prosedur Tindakan`).
+   - Format images cleanly on their own lines with descriptive alt text and blank lines before and after:
+     ![Deskripsi Gambar](URL_GAMBAR)
+3. **STRICT CATEGORIES RULE**:
+   - Update categories ONLY if the content changes topic and matches the "Available System Categories" list below.
+   - NEVER invent or create new categories. NEVER output placeholder text like "category_name".
+   - If NO category from the list genuinely matches this document, you MUST return an empty array: []!
+4. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
+5. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
 
-Available System Categories (update if relevant):
+Available System Categories from Database:
+{json.dumps(db_categories, ensure_ascii=False)}
+
 Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
 {{
     "summary": "<FULL_UPDATED_DOCUMENT_MARKDOWN_CONTENT_HERE>",
-    "categories": ["category_name"]
+    "categories": []
 }}
 
 CRITICAL REQUIREMENT FOR THE "summary" FIELD:
@@ -2785,7 +3234,20 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             updated_summary = existing_doc.get("summary", "")
         else:
             updated_summary = candidate_summary
-        updated_categories = parsed_refined.get("categories", existing_doc.get("categories", []))
+
+        # Strict validation of categories against database
+        raw_ret_categories = parsed_refined.get("categories", existing_doc.get("categories", []))
+        valid_cat_names = {str(c.get("name")).strip().lower(): str(c.get("name")).strip() for c in db_categories if isinstance(c, dict) and c.get("name")}
+        clean_approved_cats = []
+        if isinstance(raw_ret_categories, list):
+            for c in raw_ret_categories:
+                cname = str(c.get("name") if isinstance(c, dict) else c).strip().lower()
+                if cname in ["category name", "category_name", "category_id", "uuid", "null", "none", ""]:
+                    continue
+                if cname in valid_cat_names:
+                    clean_approved_cats.append(valid_cat_names[cname])
+        updated_categories = clean_approved_cats if clean_approved_cats else existing_doc.get("categories", [])
+
         file_name = existing_doc.get("file_name", knowledge_id)
         doc_type = existing_doc.get("document_type") if isinstance(existing_doc, dict) else None
         doc_title = existing_doc.get("title", file_name) if isinstance(existing_doc, dict) else file_name
@@ -2800,20 +3262,45 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             title=doc_title
         )
         updated_summary = refined_summary
+        if refined_title:
+            doc_title = refined_title
 
-        # ─── RE-CHUNK from updated summary (same as Approve flow) ────────────────────
-        # Do NOT use LLM-returned chunks directly — always re-chunk from summary
-        # to ensure consistent, well-structured chunks go into the vector DB.
-        vis_settings = existing_doc.get("visibility_settings") or {
-            "clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]
-        }
-        cat_names = []
-        for c in updated_categories:
-            if isinstance(c, dict) and "name" in c:
-                cat_names.append(c["name"])
-            elif isinstance(c, str):
-                cat_names.append(c)
+        # Collect and auto-embed attached image URLs
+        all_imgs = []
+        if existing_doc.get("image_urls") and isinstance(existing_doc["image_urls"], list):
+            for u in existing_doc["image_urls"]:
+                if u and u not in all_imgs:
+                    all_imgs.append(u)
+        if "all_attached_images" in locals() and all_attached_images:
+            for u in all_attached_images:
+                if u and u not in all_imgs:
+                    all_imgs.append(u)
+        if existing_doc.get("image_url") and existing_doc["image_url"] not in all_imgs:
+            all_imgs.append(existing_doc["image_url"])
 
+        structured_images = normalize_image_assets(
+            existing_images=existing_doc.get("images"),
+            image_urls=all_imgs,
+            default_product_name=doc_title
+        )
+
+        # Smart contextual topic-based image embedding if omitted by LLM
+        if all_imgs:
+            updated_summary = auto_embed_images_in_summary(
+                updated_summary,
+                structured_images or all_imgs,
+                title=doc_title or "Knowledge Image"
+            )
+
+        doc_img_url = all_imgs[0] if all_imgs else (existing_doc.get("image_url") or None)
+
+        # ─── RE-CHUNK from updated summary (same pipeline as Approve) ─────────────
+        cat_names = [c for c in updated_categories if isinstance(c, str)]
+        vis_settings = existing_doc.get("visibility_settings", {
+            "clinics": ["all"],
+            "doctor_types": ["all"],
+            "doctors": ["all"]
+        })
         updated_chunks = []
         if updated_summary and updated_summary.strip():
             try:
@@ -2822,31 +3309,25 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
                     summary=updated_summary,
                     source_file=file_name,
                     knowledge_id=knowledge_id,
-                    batch_id=existing_doc.get("batch_id") if isinstance(existing_doc, dict) else None,
-                    file_hash=existing_doc.get("file_hash", "") if isinstance(existing_doc, dict) else "",
+                    batch_id=existing_doc.get("batch_id"),
+                    file_hash=existing_doc.get("file_hash", ""),
                     title=doc_title,
                     doc_type=doc_type or "GENERAL",
                     categories=cat_names,
                     valid_from=str(doc_valid_from).strip() if doc_valid_from else None,
                     valid_until=str(doc_valid_until).strip() if doc_valid_until else None,
                     visibility_settings=vis_settings,
-                    default_image_url=existing_doc.get("image_url") or (existing_doc.get("image_urls")[0] if existing_doc.get("image_urls") else None),
+                    default_image_url=doc_img_url,
                 )
-                logger.info(f"Refine Approved: re-chunked summary into {len(updated_chunks)} chunks for re-indexing.")
+                logger.info(f"Refine Approved: re-chunked summary into {len(updated_chunks)} chunks.")
             except Exception as rechunk_err:
-                logger.warning(f"Refine Approved: re-chunking failed, falling back to LLM chunks: {rechunk_err}")
-                # Fallback: use LLM chunks with metadata patch
-                updated_chunks = parsed_refined.get("chunks", existing_doc.get("chunks", []))
+                logger.warning(f"Refine Approved: re-chunking failed, keeping existing chunks: {rechunk_err}")
+                updated_chunks = existing_doc.get("chunks", [])
                 for chunk in updated_chunks:
                     if isinstance(chunk, dict):
                         if "metadata" not in chunk:
                             chunk["metadata"] = {}
                         chunk["metadata"]["knowledge_id"] = knowledge_id
-                        if cat_names:
-                            chunk["metadata"]["category"] = cat_names[0]
-                            chunk["metadata"]["categories"] = cat_names
-                        if doc_type:
-                            chunk["metadata"]["document_type"] = doc_type
 
         existing_edit_hist = existing_doc.get("edit_history", []) if isinstance(existing_doc, dict) else []
         new_edit_hist = list(existing_edit_hist) if isinstance(existing_edit_hist, list) else []
@@ -2883,8 +3364,9 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             "valid_from": doc_valid_from,
             "valid_until": doc_valid_until,
             "summary": updated_summary,
-            "image_url": existing_doc.get("image_url") if isinstance(existing_doc, dict) else None,
-            "image_urls": existing_doc.get("image_urls", []) if isinstance(existing_doc, dict) else [],
+            "image_url": doc_img_url,
+            "image_urls": all_imgs,
+            "images": structured_images,
             "initial_prompt": existing_doc.get("initial_prompt") if isinstance(existing_doc, dict) else None,
             "staging_history": existing_doc.get("staging_history", []) if isinstance(existing_doc, dict) else [],
             "edit_history": new_edit_hist,
@@ -2958,6 +3440,7 @@ async def approve_document(
         raise HTTPException(status_code=400, detail="At least one valid knowledge_id must be provided.")
 
     approved_results = []
+    all_chunks_to_index = []
     for target_id in targets:
         pending_file = resolve_pending_file(target_id)
         if not pending_file:
@@ -3016,28 +3499,25 @@ async def approve_document(
                 except Exception as rechunk_err:
                     logger.warning(f"Approve: re-chunking failed, using existing chunks: {rechunk_err}")
 
+            # Pre-clear existing entries for this doc from vector store and BM25
             if pipeline.vector_store:
-                logger.info(f"Indexing chunks for knowledge_id {k_id} into vector store...")
                 try:
                     pipeline.vector_store.delete_document(k_id)
                     if file_name and file_name != k_id:
                         pipeline.vector_store.delete_document(file_name)
                 except Exception as del_err:
                     logger.debug(f"Pre-approval vector deletion note: {del_err}")
-                pipeline.vector_store.insert_chunks(chunks)
-            else:
-                logger.warning("No vector store instance available for indexing.")
-                
+
             if bm25:
-                logger.info(f"Indexing chunks for knowledge_id {k_id} into BM25 index...")
                 try:
                     bm25.remove_file_chunks(k_id)
                     if file_name and file_name != k_id:
                         bm25.remove_file_chunks(file_name)
                 except Exception as bm25_del_err:
                     logger.debug(f"Pre-approval BM25 deletion note: {bm25_del_err}")
-                bm25.add_chunks(chunks)
-                bm25.save(settings.bm25_index_path)
+
+            if chunks:
+                all_chunks_to_index.extend(chunks)
 
             os.makedirs("data/output", exist_ok=True)
             approved_file = os.path.join("data/output", f"{k_id}.json")
@@ -3113,6 +3593,19 @@ async def approve_document(
             approved_results.append(k_id)
         except Exception as e:
             logger.error(f"Approval failed for document '{target_id}': {e}")
+
+    # BATCH EMBEDDING & INDEXING: Index all chunks across approved documents in one single batch!
+    if all_chunks_to_index:
+        if pipeline.vector_store:
+            logger.info(f"⚡ [Batch Approval] Indexing {len(all_chunks_to_index)} chunks into vector store in batch...")
+            pipeline.vector_store.insert_chunks(all_chunks_to_index)
+        else:
+            logger.warning("No vector store instance available for batch indexing.")
+
+        if bm25:
+            logger.info(f"⚡ [Batch Approval] Indexing {len(all_chunks_to_index)} chunks into BM25 index...")
+            bm25.add_chunks(all_chunks_to_index)
+            bm25.save(settings.bm25_index_path)
 
     return {
         "status": "success", 
@@ -3676,6 +4169,18 @@ def _apply_kb_edit(
                 existing_doc["metadata"] = {}
             existing_doc["metadata"]["price"] = formatted_val
 
+            # Surgically update price inside summary so dashboard preview immediately reflects the change without losing other sections or images
+            curr_summary = existing_doc.get("summary", "")
+            if curr_summary:
+                import re as _re_inline
+                price_pattern = r'(\*{0,2}(?:Harga|Price|Biaya)\*{0,2}\s*:\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
+                if _re_inline.search(price_pattern, curr_summary, _re_inline.IGNORECASE):
+                    existing_doc["summary"] = _re_inline.sub(price_pattern, rf'\g<1>Rp {formatted_val}', curr_summary, flags=_re_inline.IGNORECASE)
+                elif "harga" in curr_summary.lower():
+                    existing_doc["summary"] = _re_inline.sub(r'(Rp\.?\s*)[\d\.\,\-]+', rf'Rp {formatted_val}', curr_summary, count=1)
+                else:
+                    existing_doc["summary"] = curr_summary.strip() + f"\n\n- **Harga**: Rp {formatted_val}"
+
         elif clean_field in ("summary", "deskripsi", "ringkasan"):
             # Protect summary: Do not overwrite summary with AI chatbot conversational confirmation text
             conv_phrases = ["berhasil diubah", "berhasil diperbarui", "telah diubah", "telah diperbarui", "berhasil diterapkan", "berhasil dihapus"]
@@ -3688,6 +4193,11 @@ def _apply_kb_edit(
         elif clean_field in ("title", "nama", "nama_produk"):
             old_value = existing_doc.get("title", existing_doc.get("file_name", ""))
             existing_doc["title"] = formatted_val
+            curr_summary = existing_doc.get("summary", "")
+            if curr_summary:
+                import re as _re_inline
+                if _re_inline.search(r'^(#+\s*)(.+)$', curr_summary, _re_inline.MULTILINE):
+                    existing_doc["summary"] = _re_inline.sub(r'^(#+\s*)(.+)$', rf'\g<1>{formatted_val}', curr_summary, count=1, flags=_re_inline.MULTILINE)
 
         elif clean_field in ("valid_until", "expiry_date", "end_date", "periode", "masa_berlaku"):
             old_value = existing_doc.get("valid_until")
@@ -3755,7 +4265,7 @@ def _apply_kb_edit(
                             logger.warning(f"[QUERY-GENERAL] LLM chunk edit error: {llm_edit_err}")
 
                     if clean_field in ("price", "harga", "biaya"):
-                        price_pattern = r'((?:Harga|Price|Biaya):\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
+                        price_pattern = r'(\*{0,2}(?:Harga|Price|Biaya)\*{0,2}\s*:\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
                         if _re.search(price_pattern, chunk.get("text", ""), _re.IGNORECASE):
                             chunk["text"] = _re.sub(price_pattern, rf'\g<1>Rp {formatted_val}', chunk["text"], flags=_re.IGNORECASE)
                         elif "Harga" not in chunk.get("text", ""):
@@ -4078,13 +4588,22 @@ async def query_general_endpoint(
 
         clean_user_prompt = user_prompt.strip().lower()
         last_preview_action = None
-        if request.history and len(request.history) >= 1:
-            last_msg = request.history[-1]
-            if last_msg.get("role") in ("assistant", "Assistant"):
-                last_preview_action = _extract_kb_action(last_msg.get("content", ""))
+        if request.history:
+            for msg in reversed(request.history):
+                content = msg.get("content", "")
+                act = _extract_kb_action(content)
+                if act and act.get("action") in ("edit_preview", "delete_preview", "edit", "delete"):
+                    last_preview_action = act
+                    break
 
-        is_affirmative = any(word in clean_user_prompt for word in ["ya", "setuju", "ok", "oke", "lanjut", "terapkan", "hapus", "ya hapus", "ya, hapus"])
-        is_negative = any(word in clean_user_prompt for word in ["batal", "tidak", "cancel", "jangan", "ngga", "gak"])
+        is_affirmative = bool(_re.search(
+            r"\b(ya|setuju|ok|oke|lanjut|lanjutkan|terapkan|eksekusi|hapus|ya hapus|ya, hapus|setuju hapus|konfirmasi)\b",
+            clean_user_prompt
+        ))
+        is_negative = bool(_re.search(
+            r"\b(batal|batalkan|tidak|cancel|jangan|ngga|gak|nggak)\b",
+            clean_user_prompt
+        ))
 
         action_type = "read"
         target_kid = None
@@ -4125,11 +4644,9 @@ async def query_general_endpoint(
                 if del_res.get("success"):
                     action_type = "delete_executed"
                     target_kid = kid
-                    doc_title = del_res.get("title", kid)
                     answer = (
                         f"🗑️ **Dokumen Berhasil Dihapus!**\n\n"
-                        f"Dokumen **'{doc_title}'** telah berhasil dihapus secara permanen dari **Basis Data Pengetahuan ERHA**.\n\n"
-                        f"- **Nama Dokumen**: `{doc_title}`\n"
+                        f"Dokumen dengan ID `{kid}` telah berhasil dihapus secara permanen dari **Basis Data Pengetahuan ERHA**.\n\n"
                         f"- **Dokumen ID**: `{kid}`\n"
                         f"- **Status**: Terhapus Bersih (Dokumen, Foto, dan Indikator Pencarian)"
                     )
@@ -4142,7 +4659,7 @@ async def query_general_endpoint(
 
         # CASE C: Normal Prompt Processing via LLM
         else:
-            if is_context_empty:
+            if is_context_empty and not request.history:
                 logger.info(f"[QUERY-GENERAL] No approved knowledge found for: '{user_prompt}'")
                 return QueryGeneralResponse(
                     prompt=user_prompt,
@@ -4177,6 +4694,7 @@ async def query_general_endpoint(
 
             from app.rag.services.guardrails import OutputGuard
             answer = OutputGuard.redact_pii(answer)
+            answer = OutputGuard.strip_patient_disclaimers(answer)
 
             action_data = _extract_kb_action(answer)
             if action_data:
@@ -4235,6 +4753,9 @@ async def query_general_endpoint(
                 else:
                     clean_answer = f"![{display_label}]({img})\n\n" + clean_answer
                     injected_imgs.add(str(img))
+
+        from app.rag.services.guardrails import OutputGuard
+        clean_answer = OutputGuard.strip_patient_disclaimers(clean_answer)
 
         # Normalize missing/unavailable responses from LLM
         if (

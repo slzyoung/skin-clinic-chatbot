@@ -569,31 +569,21 @@ class DocumentParser:
 
                     client = OpenAI(**client_kwargs)
                     prompt_text = (
-                        "You are an expert OCR and factual data extraction system for PT Arya Noble (ERHA) Knowledge Base.\n\n"
-                        "Your task is to analyze the provided image and extract ONLY factual information that is DIRECTLY VISIBLE on the image or product packaging.\n\n"
+                        "You are an expert product recognition system for PT Arya Noble (ERHA) Knowledge Base.\n\n"
+                        "Your task is to identify the EXACT PRODUCT NAME shown on the product packaging or image.\n\n"
                         "## STRICT RULES (MANDATORY):\n"
-                        "1. **ZERO FABRICATION**: Do NOT generate, invent, assume, or extrapolate any text, functions, benefits, or marketing claims that are NOT explicitly visible on the image.\n"
-                        "2. **DO NOT TRANSLATE**: Preserve the exact original language, terms, and spelling as printed on the packaging/image. Do not translate between Indonesian and English.\n"
-                        "3. **Product Photos (Foto Produk)**: Extract only visible fields:\n"
-                        "   - Product Name (exactly as printed)\n"
-                        "   - Brand (e.g. ERHA)\n"
-                        "   - SKU, Barcode, or Product Code (ONLY if visibly printed on the image, otherwise null)\n"
-                        "   - Net Weight / Volume (e.g. 10g, 30ml - only if visible)\n"
-                        "   - Active Ingredients / Bahan Aktif (ONLY those visibly listed on the packaging)\n"
-                        "   - Instructions / Warnings (ONLY if visibly printed on packaging)\n"
-                        "4. **Clinical / Before-After Photos (Foto Klinis Wajah)**: State only the treatment name and visible factual annotations/labels without inventing clinical percentages or diagnosis.\n"
-                        "5. **Formatting**: Format into clean, well-structured Markdown. Place the product photo on its own line with a blank line before and after.\n\n"
+                        "1. **IDENTIFY PRODUCT NAME ONLY**: Recognize and extract ONLY the official Product Name printed on the packaging (e.g., 'Exfoliating Cleansing Scrub', 'Acne Act Acne Spot Gel').\n"
+                        "2. **DO NOT EXTRACT PACKAGING DETAILS**: Do NOT generate, OCR, or invent packaging text such as Brand, SKU, Net Weight, instructions, benefits, or 'Informasi Tertera pada Kemasan'. Generating packaging text is strictly forbidden to prevent false detections.\n"
+                        "3. **PRESERVE RETRIEVAL CONTEXT**: Provide the clean product name and a clean 1-line Indonesian context so this image has full context and can be retrieved accurately in search and RAG answers.\n"
+                        "4. **Clinical / Before-After Photos**: If this is a clinical photo of skin/face (not product packaging), identify the treatment or clinical condition (e.g., 'Acne Vulgaris - Before Treatment') and state whether it is BEFORE or AFTER.\n\n"
                         "## Output Format (Valid JSON ONLY):\n"
                         "{\n"
                         '  "title": "Exact Visible Product Name",\n'
                         '  "product_name": "Exact Visible Product Name",\n'
+                        '  "image_role": "PRODUCT_PACKAGING",\n'
+                        '  "caption": "Foto produk Exact Visible Product Name",\n'
                         '  "document_type": "PRODUCT",\n'
-                        '  "brand": "ERHA",\n'
-                        '  "sku": null,\n'
-                        '  "net_weight": null,\n'
-                        '  "active_ingredients": ["Visibly printed ingredient 1"],\n'
-                        '  "visible_packaging_text": "Exact text visible on the bottle/box/packaging",\n'
-                        '  "summary_markdown": "# Exact Visible Product Name\\n\\n![Exact Visible Product Name](IMAGE_URL_PLACEHOLDER)\\n\\n- **Brand**: ERHA\\n- **SKU**: [Only if visible]\\n- **Net Weight / Isi**: [Only if visible]\\n\\n## Informasi Tertera pada Kemasan\\n[Exact visible text from packaging without translation or fabrication]"\n'
+                        '  "summary_markdown": "# Exact Visible Product Name\\n\\n![Exact Visible Product Name](IMAGE_URL_PLACEHOLDER)\\n\\nDokumen visual produk resmi ERHA: Exact Visible Product Name."\n'
                         "}"
                     )
 
@@ -639,55 +629,40 @@ class DocumentParser:
 
                             img_title = data.get("title") or data.get("product_name") or os.path.splitext(file_name)[0]
                             p_name = data.get("product_name") or img_title
-                            brand = data.get("brand") or "ERHA"
-                            active_ing = data.get("active_ingredients") or []
-                            sku_val = data.get("sku")
-                            clean_sku = str(sku_val).strip() if sku_val and str(sku_val).strip().lower() not in ["none", "null", "n/a", "-"] else None
+                            brand = "ERHA"
+                            active_ing = []
+                            clean_sku = None
+
+                            # Infer or extract image role
+                            img_role = data.get("image_role")
+                            valid_roles = ["PRODUCT_PACKAGING", "CLINICAL_BEFORE", "CLINICAL_AFTER", "TREATMENT_PROCEDURE", "GENERAL"]
+                            if not img_role or img_role not in valid_roles:
+                                lower_fname = file_name.lower()
+                                lower_text = (data.get("summary_markdown") or "").lower()
+                                if any(k in lower_fname or k in lower_text for k in ["before", "sebelum"]):
+                                    img_role = "CLINICAL_BEFORE"
+                                elif any(k in lower_fname or k in lower_text for k in ["after", "sesudah", "setelah"]):
+                                    img_role = "CLINICAL_AFTER"
+                                elif any(k in lower_fname or k in lower_text for k in ["kemasan", "packaging", "bottle", "box", "produk"]):
+                                    img_role = "PRODUCT_PACKAGING"
+                                else:
+                                    img_role = "PRODUCT_PACKAGING" if data.get("document_type") == "PRODUCT" else "GENERAL"
+
+                            caption = data.get("caption") or f"Foto produk {p_name}"
 
                             extracted_meta.update({
                                 "title": img_title,
                                 "product_name": p_name,
                                 "brand": brand,
-                                "sku": clean_sku,
-                                "active_ingredients": active_ing
+                                "sku": None,
+                                "active_ingredients": [],
+                                "image_role": img_role,
+                                "caption": caption
                             })
 
-                            raw_summary_md = data.get("summary_markdown")
-                            if raw_summary_md and raw_summary_md.strip():
-                                summary_text = raw_summary_md.strip()
-                                if "IMAGE_URL_PLACEHOLDER" in summary_text:
-                                    summary_text = summary_text.replace("IMAGE_URL_PLACEHOLDER", image_url)
-                                elif image_url and image_url not in summary_text:
-                                    lines = summary_text.split("\n")
-                                    if lines and lines[0].startswith("#"):
-                                        summary_text = lines[0] + f"\n\n![{img_title}]({image_url})\n\n" + "\n".join(lines[1:])
-                                    else:
-                                        summary_text = f"# {img_title}\n\n![{img_title}]({image_url})\n\n" + summary_text
-                                extracted_text = summary_text
-                            else:
-                                # Factual structured markdown with clear line spacing for image
-                                md_blocks = [f"# {img_title}\n\n![{img_title}]({image_url})\n"]
-                                info_lines = [f"- **Brand**: {brand}"]
-                                if clean_sku:
-                                    info_lines.append(f"- **SKU**: {clean_sku}")
-                                net_wt = data.get("net_weight")
-                                if net_wt and str(net_wt).lower() not in ["none", "null"]:
-                                    info_lines.append(f"- **Net Weight / Isi**: {net_wt}")
-                                md_blocks.append("\n".join(info_lines))
-
-                                visible_text = data.get("visible_packaging_text") or data.get("deskripsi_fungsi") or ""
-                                if visible_text:
-                                    md_blocks.append(f"## Informasi Tertera pada Kemasan\n{visible_text}")
-                                if active_ing:
-                                    ing_lines = ["## Active Ingredients (Tercetak di Kemasan)"]
-                                    if isinstance(active_ing, list):
-                                        for ing in active_ing:
-                                            if ing and str(ing).strip():
-                                                ing_lines.append(f"- {ing}")
-                                    else:
-                                        ing_lines.append(f"- {active_ing}")
-                                    md_blocks.append("\n".join(ing_lines))
-                                extracted_text = "\n\n".join(md_blocks)
+                            # Clean structured markdown with product name and image context only (zero packaging hallucination)
+                            clean_markdown = f"# {img_title}\n\n![{img_title}]({image_url})\n\nDokumen visual produk resmi ERHA: {p_name}."
+                            extracted_text = clean_markdown
 
                         except Exception as json_err:
                             logger.warning(f"Could not parse Vision LLM JSON response for '{file_name}': {json_err}. Using raw output.")
@@ -712,11 +687,29 @@ class DocumentParser:
                 clean_title = os.path.splitext(file_name)[0]
                 extracted_text = f"### Image Asset: {clean_title}\n\n![{clean_title}]({image_url})\n\nStorage Key: `{s3_key}`."
 
+            import uuid
+            img_id = f"img_{uuid.uuid4().hex[:8]}"
+            clean_title = os.path.splitext(file_name)[0]
+            current_role = img_role if 'img_role' in locals() and img_role else ("PRODUCT_PACKAGING" if any(k in file_name.lower() for k in ["produk", "bottle", "box"]) else "GENERAL")
+            current_caption = caption if 'caption' in locals() and caption else f"Foto {clean_title}"
+            current_pname = p_name if 'p_name' in locals() and p_name else clean_title
+
+            image_asset = {
+                "id": img_id,
+                "url": image_url,
+                "s3_key": s3_key,
+                "role": current_role,
+                "product_name": current_pname,
+                "caption": current_caption
+            }
+
             page_data = {
                 "page": 1,
                 "text": extracted_text,
+                "image_id": img_id,
                 "image_urls": [image_url] if image_url else [],
                 "image_url": image_url,
+                "images": [image_asset],
                 "s3_key": s3_key,
                 "storage_key": s3_key,
                 "image_reference": image_url,

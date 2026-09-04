@@ -1,7 +1,7 @@
 from loguru import logger
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func, text, or_
+from sqlalchemy import select, and_, func, text, or_, case
 from app.models.category import Category, UserCategoryExclusion
 from app.models.branch import UserBranch
 from typing import List, Optional, Dict, Any
@@ -21,7 +21,7 @@ from app.schemas.knowledge import (
     GeneralChatSessionResponse, GeneralChatMessageItem, GeneralChatMessageSendRequest
 )
 from app.services.token_service import check_ingestion_quota, record_ingestion_token_usage
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.rag.deps import get_ingestion_pipeline, get_llm, get_bm25_index, get_vector_store, get_generation_pipeline
 from app.rag.services.interfaces import BaseLLMAdapter
@@ -107,7 +107,10 @@ async def get_general_chat_session(
 
     msg_stmt = select(DBChatMessage).where(
         DBChatMessage.session_id == session_id
-    ).order_by(DBChatMessage.created_at.asc())
+    ).order_by(
+        DBChatMessage.created_at.asc(),
+        case((DBChatMessage.role == ChatRole.USER, 1), else_=2)
+    )
     msg_res = await db.execute(msg_stmt)
     db_msgs = msg_res.scalars().all()
 
@@ -156,10 +159,13 @@ async def send_general_chat_message(
     if not session:
         raise HTTPException(status_code=404, detail="General chat session not found")
 
-    # Fetch existing conversation history
+    # Fetch existing conversation history with deterministic user-first tie-breaker
     msg_stmt = select(DBChatMessage).where(
         DBChatMessage.session_id == session_id
-    ).order_by(DBChatMessage.created_at.asc())
+    ).order_by(
+        DBChatMessage.created_at.asc(),
+        case((DBChatMessage.role == ChatRole.USER, 1), else_=2)
+    )
     msg_res = await db.execute(msg_stmt)
     db_msgs = msg_res.scalars().all()
 
@@ -168,12 +174,15 @@ async def send_general_chat_message(
         for m in db_msgs
     ]
 
-    # 1. Save User Message in PostgreSQL
+    now_utc = datetime.now(timezone.utc)
+
+    # 1. Save User Message in PostgreSQL with explicit timestamp
     user_db_msg = DBChatMessage(
         session_id=session_id,
         role=ChatRole.USER,
         content=payload.prompt,
-        attachments=payload.attachments
+        attachments=payload.attachments,
+        created_at=now_utc
     )
     db.add(user_db_msg)
     await db.flush()
@@ -190,7 +199,7 @@ async def send_general_chat_message(
         bm25=bm25
     )
 
-    # 3. Save Assistant Message in PostgreSQL
+    # 3. Save Assistant Message in PostgreSQL with sequenced timestamp (+100ms) to ensure chronological consistency
     assistant_att = {
         "action": ai_res.action,
         "target_knowledge_id": ai_res.target_knowledge_id,
@@ -200,7 +209,8 @@ async def send_general_chat_message(
         session_id=session_id,
         role=ChatRole.ASSISTANT,
         content=ai_res.answer,
-        attachments=assistant_att
+        attachments=assistant_att,
+        created_at=now_utc + timedelta(milliseconds=100)
     )
     db.add(assistant_db_msg)
     await db.commit()
@@ -1211,6 +1221,10 @@ async def refine_knowledge(
             attached_file_name = getattr(file_attachment, "filename", "attached_doc")
             temp_file_path = os.path.join(temp_dir, f"refine_supp_{knowledge_id}_{attached_file_name}")
             content_bytes = await file_attachment.read()
+            try:
+                await file_attachment.seek(0)
+            except Exception:
+                pass
             with open(temp_file_path, "wb") as f:
                 f.write(content_bytes)
 
@@ -1380,6 +1394,12 @@ async def refine_knowledge(
                 k_entry.metadata_["visibility_settings"] = res.get("visibility_settings")
             if res.get("chunks") is not None:
                 k_entry.metadata_["chunks"] = res.get("chunks")
+            if res.get("image_url"):
+                k_entry.metadata_["image_url"] = res.get("image_url")
+            if res.get("image_urls"):
+                k_entry.metadata_["image_urls"] = res.get("image_urls")
+            if res.get("images"):
+                k_entry.metadata_["images"] = res.get("images")
 
             prompt_str = prompt or getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
             initial_prompt = k_entry.metadata_.get("initial_prompt")
@@ -1434,40 +1454,44 @@ async def refine_knowledge(
                     except Exception:
                         pass
             else:
-                existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
-                if not isinstance(existing_history, list):
-                    existing_history = []
+                # Prefer synchronized history returned by refine_pending_document to prevent double appending
+                if isinstance(res, dict) and res.get("history") and isinstance(res.get("history"), list):
+                    full_history = res.get("history")
+                else:
+                    existing_history = k_entry.metadata_.get("history") or k_entry.metadata_.get("chat_history") or []
+                    if not isinstance(existing_history, list):
+                        existing_history = []
 
-                full_history = list(existing_history)
+                    full_history = list(existing_history)
 
-                # Initialize with Turn 0 if history doesn't already contain it
-                if not full_history:
-                    if initial_prompt:
+                    # Initialize with Turn 0 if history doesn't already contain it
+                    if not full_history:
+                        if initial_prompt:
+                            full_history.append({
+                                "role": "user",
+                                "content": initial_prompt,
+                                "attachmentName": k_entry.file_name,
+                                "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
+                            })
+                        if initial_summary:
+                            full_history.append({
+                                "role": "assistant",
+                                "content": initial_summary,
+                                "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
+                            })
+
+                    if prompt_str:
                         full_history.append({
                             "role": "user",
-                            "content": initial_prompt,
-                            "attachmentName": k_entry.file_name,
-                            "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
+                            "content": prompt_str,
+                            "created_at": datetime.now(timezone.utc).isoformat()
                         })
-                    if initial_summary:
+                    if res.get("summary"):
                         full_history.append({
                             "role": "assistant",
-                            "content": initial_summary,
-                            "created_at": k_entry.created_at.isoformat() if k_entry.created_at else datetime.now(timezone.utc).isoformat()
+                            "content": res.get("summary"),
+                            "created_at": datetime.now(timezone.utc).isoformat()
                         })
-
-                if prompt_str:
-                    full_history.append({
-                        "role": "user",
-                        "content": prompt_str,
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    })
-                if res.get("summary"):
-                    full_history.append({
-                        "role": "assistant",
-                        "content": res.get("summary"),
-                        "created_at": datetime.now(timezone.utc).isoformat()
-                    })
 
                 k_entry.metadata_["history"] = full_history
                 k_entry.metadata_["chat_history"] = full_history

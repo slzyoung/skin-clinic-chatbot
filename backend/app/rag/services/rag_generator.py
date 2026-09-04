@@ -41,10 +41,19 @@ class OpenAIAdapter(BaseLLMAdapter):
         target_model = model_name or settings.openai_model_name
         logger.info(f"Initializing OpenAI-compatible LLM Adapter: model='{target_model}', base_url='{base_url or 'default'}'")
         
+        # Configurable temperature from settings / env var LLM_GENERATION_TEMPERATURE.
+        # CRITICAL MEDICAL DOMAIN NOTE:
+        # The recommended safe operating range for the ERHA medical domain is 0.0 to 0.2 ONLY.
+        # Temperatures above 0.2 are strictly not recommended due to high risk of factual variations
+        # or hallucinations in sensitive clinical claims, pricing, SKUs, and active ingredient dosages.
+        # The default remains strictly 0.0 for maximum determinism and consistency.
+        gen_temperature = float(getattr(settings, "llm_generation_temperature", 0.0))
+        logger.info(f"Configuring LLM generation temperature: {gen_temperature} (Default: 0.0, Recommended Clinical Range: 0.0-0.2)")
+
         kwargs = {
             "model": target_model,
             "api_key": api_key,
-            "temperature": 0.0  # Grounded & factual response (0.0 temperature)
+            "temperature": gen_temperature
         }
         if base_url:
             kwargs["base_url"] = base_url
@@ -204,10 +213,11 @@ Tugas utamamu adalah membantu Admin menelusuri (READ), memperbarui (EDIT), dan m
 2. AKSI EDIT / PERBAIKAN DATA (2-Step Lifecycle):
    - STEP 1 (Pratinjau / EDIT_PREVIEW):
      Jika Admin meminta ubah/edit/update data (harga, deskripsi, bahan aktif, cara pakai, indikasi, masa berlaku, title, dll):
-     - Tampilkan 📝 **Pratinjau Perubahan** yang berisi:
-       * Nama Dokumen
-       * Bagian/Field yang diubah
-       * Nilai Lama -> Nilai Baru
+     - Tampilkan 📝 **Pratinjau Perubahan** yang HANYA berisi:
+       * Knowledge ID: `<ID_DOKUMEN>`
+       * Bagian yang Diubah: `<NAMA_FIELD>`
+       * Rencana Nilai Baru: `<NILAI_BARU>`
+       *(DILARANG menampilkan keterangan Nama Dokumen atau Kategori)*
      - Tanyakan konfirmasi: "Apakah Anda yakin ingin menerapkan perubahan ini? Balas 'YA' atau 'SETUJU' untuk menerapkan perbaikan, atau 'BATAL' untuk membatalkan."
      - Sertakan JSON block di akhir respons:
        ```json
@@ -217,9 +227,10 @@ Tugas utamamu adalah membantu Admin menelusuri (READ), memperbarui (EDIT), dan m
 3. AKSI HAPUS DOKUMEN (2-Step Lifecycle):
    - STEP 1 (Pratinjau Konfirmasi / DELETE_PREVIEW):
      Jika Admin meminta hapus/delete dokumen:
-     - Tampilkan ⚠️ **Konfirmasi Penghapusan** yang berisi:
-       * Nama Dokumen & ID Dokumen
-       * Ringkasan singkat dokumen yang akan dihapus
+     - Tampilkan ⚠️ **Konfirmasi Penghapusan** yang HANYA berisi:
+       * Knowledge ID: `<ID_DOKUMEN>`
+       * Rencana Aksi: Penghapusan permanen dari Basis Data Pengetahuan ERHA
+       *(DILARANG menampilkan keterangan Nama Dokumen atau Kategori)*
      - Tanyakan konfirmasi: "Apakah Anda yakin ingin menghapus dokumen ini secara permanen dari basis pengetahuan ERHA? Balas 'YA, HAPUS' untuk mengeksekusi atau 'BATAL' untuk membatalkan."
      - Sertakan JSON block di akhir respons:
        ```json
@@ -234,6 +245,9 @@ Tugas utamamu adalah membantu Admin menelusuri (READ), memperbarui (EDIT), dan m
        ```json
        {"action": "cancel"}
        ```
+
+🚫 ATURAN PENUTUP & ANTI-KLISE SALES:
+DILARANG KERAS menyertakan kalimat penutup klise sales atau penawaran pemesanan di akhir respons (seperti: 'Jika memerlukan informasi lebih lanjut atau ingin melakukan pemesanan, silakan beri tahu saya.'). Langsung akhiri jawaban pada fakta atau pratinjau yang diminta.
 """
 
 
@@ -342,11 +356,12 @@ class GenerationPipeline:
             return query
 
         anaphora_indicators = [
-            r"\bnya\b", r"\bini\b", r"\bitu\b", r"\btersebut\b", r"\bdia\b", 
+            r"\w+nya\b", r"\bnya\b", r"\bini\b", r"\bitu\b", r"\btersebut\b", r"\bdia\b", 
             r"\bproduk ini\b", r"\btreatment ini\b", r"\btindakan ini\b",
             r"\bcara pakai\b", r"\bcara penggunaan\b", r"\bkandungan\b", 
             r"\bkomposisi\b", r"\bharga\b", r"\befek samping\b", 
-            r"\bkontraindikasi\b", r"\bdosis\b", r"\bberapa\b", r"\burutan\b"
+            r"\bkontraindikasi\b", r"\bdosis\b", r"\bberapa\b", r"\burutan\b",
+            r"\btahapan\b", r"\bprosedur\b"
         ]
 
         has_anaphora = any(re.search(ind, clean_q) for ind in anaphora_indicators)
@@ -362,10 +377,46 @@ class GenerationPipeline:
         last_context = ""
         for msg in reversed(history):
             content = msg.get("content", "")
-            if content and not content.startswith("{"):
-                cleaned = content.replace("###", "").replace("##", "").replace("**", "").replace("\n", " ")
-                words = cleaned.split()
+            if not content or content.startswith("{") or "Untuk saat ini informasi tersebut belum tersedia" in content:
+                continue
+
+            # 1. Check for bold title or heading: **Product/Treatment Name**
+            bold_matches = re.findall(r'\*\*([A-Za-z0-9\s\.\-\/\+]{3,60})\*\*', content)
+            if bold_matches:
+                ignore_labels = {"harga", "status", "dokumen id", "knowledge id", "catatan", "indikasi", "aturan pakai", "cara pakai", "perubahan", "nilai baru"}
+                valid_bolds = [b.strip() for b in bold_matches if b.strip().lower() not in ignore_labels and len(b.strip()) >= 4]
+                if valid_bolds:
+                    last_context = valid_bolds[0]
+                    break
+
+            # 2. Check for markdown headings ### Heading
+            heading_matches = re.findall(r'###\s*([A-Za-z0-9\s\.\-\/\+]{3,60})', content)
+            if heading_matches:
+                ignore_h = {"diagnosis klinis", "perawatan", "produk", "catatan klinis", "pratinjau perubahan", "tahapan treatment"}
+                valid_headings = [h.strip() for h in heading_matches if h.strip().lower() not in ignore_h and len(h.strip()) >= 4]
+                if valid_headings:
+                    last_context = valid_headings[0]
+                    break
+
+            # 3. Check for image markdown label ![Label](http...)
+            img_labels = re.findall(r'!\[([A-Za-z0-9\s\.\-\/\+]{3,60})\]\(', content)
+            if img_labels:
+                last_context = img_labels[0].strip()
+                break
+
+            # 4. If user message, extract core query entity
+            role = str(msg.get("role", "")).lower()
+            if role in ("user", "admin"):
+                cleaned = re.sub(r'^(?:tolong|bisa|apakah|bagaimana|apa|mohon|info|tanya|jelaskan\s+tentang)\s+', '', content, flags=re.IGNORECASE)
+                clean_words = cleaned.split()[:5]
+                if clean_words:
+                    candidate = " ".join(clean_words).strip("?.!,")
+                    if len(candidate) >= 3:
+                        last_context = candidate
+                        break
+
         if last_context:
+            logger.info(f"🔗 [Contextualize Query] Follow-up detected ('{query}') -> Contextualized with '{last_context}'")
             return f"{last_context} {query}"
 
         return query
@@ -456,40 +507,13 @@ class GenerationPipeline:
         intent: QueryIntent
     ) -> Tuple[bool, str]:
         """
-        Clinical Safety Gate: Single Evidence Validation before final answer delivery.
-        1. Safety-critical queries (pregnancy, lactation, contraindications, allergies, interactions):
-           - If context_status is REJECTED (empty evidence), blocks speculation and returns a safe rejection.
-           - If context lacks explicit safety text, appends a clinical safety note.
-        2. Strips literal image_url placeholders (e.g. ![Product](image_url)) if no HTTP URL is present.
+        Post-generation sanitization:
+        - Strips literal image_url placeholders (e.g. ![Product](image_url)) if no HTTP URL is present.
+        - Strips recurring hardcoded closing clichés.
+        - Injects authentic MinIO images specifically above corresponding items.
         """
         import re
         sanitized = answer.strip()
-        q_lower = query.lower()
-
-        safety_critical_keywords = [
-            "ibu hamil", "bumil", "kehamilan", "pregnancy", "pregnant",
-            "menyusui", "lactation", "breastfeeding",
-            "alergi", "kontraindikasi", "contraindication",
-            "efek samping parah", "bahaya", "interaksi obat", "drug interaction",
-            "retinol bumil", "tretinoin bumil", "hydroquinone bumil", "isotretinoin"
-        ]
-        is_safety_critical = any(kw in q_lower for kw in safety_critical_keywords)
-
-        if is_safety_critical:
-            if context_status == "REJECTED" or not results:
-                logger.warning("🚨 [CLINICAL SAFETY GATE] Blocked safety-critical query due to absence of grounded evidence.")
-                return False, (
-                    "Mohon maaf Dok, panduan resmi terkait keamanan klinis/kontraindikasi spesifik untuk kondisi ini "
-                    "belum tercantum secara lengkap dalam referensi knowledge base. "
-                    "Demi keselamatan pasien, disarankan untuk melakukan evaluasi klinis langsung atau merujuk ke pedoman farmakologi klinis resmi."
-                )
-            
-            # Context is accepted, verify if the generated answer contains explicit safety instructions
-            context_text = " ".join([r.get("text", "") for r in results]).lower()
-            has_safety_evidence = any(kw in context_text for kw in ["hamil", "menyusui", "kontraindikasi", "alergi", "aman", "caution", "warning"])
-            if not has_safety_evidence and "tidak disarankan" not in sanitized.lower() and "kontraindikasi" not in sanitized.lower():
-                logger.warning("⚠️ [CLINICAL SAFETY GATE] Safety-critical query lacks explicit safety text in context. Appending clinical safety notice.")
-                sanitized += "\n\n*Catatan Keamanan Klinis: Informasi spesifik mengenai kontraindikasi/keamanan kondisi ini tidak tercantum dalam dokumen rujukan. Disarankan untuk menunda tindakan/penggunaan bahan aktif hingga ada petunjuk klinis resmi.*"
 
         # Strip literal image_url placeholders
         sanitized = re.sub(r'!\[([^\]]*)\]\((image_url|url|\s*)\)', r'\1', sanitized)
@@ -501,7 +525,11 @@ class GenerationPipeline:
             r'Silakan lakukan konfirmasi manual ke Dept Functional / Admin untuk detail lebih lanjut\.?',
             r'Silakan lakukan konfirmasi manual ke Dept Functional / Admin\.?',
             r'Informasi mengenai gambar produk yang tersedia di panduan resmi ERHA saat ini,?\s*Dok\.?',
-            r'Informasi mengenai gambar produk yang tersedia di panduan resmi ERHA saat ini\.?'
+            r'Informasi mengenai gambar produk yang tersedia di panduan resmi ERHA saat ini\.?',
+            r'[\r\n\s]*(?:Jika\s+(?:Anda\s+)?(?:memerlukan|butuh|ingin)\s+informasi\s+lebih\s+lanjut\s+atau\s+ingin\s+melakukan\s+pemesanan[^\.\!\?]*[\.\!\?]?)',
+            r'[\r\n\s]*(?:Jika\s+(?:Anda\s+)?(?:memerlukan|butuh|ingin)\s+informasi\s+lebih\s+lanjut[^\.\!\?]*[\.\!\?]?)',
+            r'[\r\n\s]*(?:Jika\s+ada\s+hal\s+lain\s+yang\s+ingin\s+ditanyakan\s+atau\s+ingin\s+memesan[^\.\!\?]*[\.\!\?]?)',
+            r'[\r\n\s]*(?:Silakan\s+beri\s+tahu\s+saya\s+jika\s+(?:memerlukan|ada)[^\.\!\?]*[\.\!\?]?)',
         ]
         for c in cliches:
             sanitized = re.sub(c, '', sanitized, flags=re.IGNORECASE).strip()
@@ -674,18 +702,15 @@ class GenerationPipeline:
             or effective_context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
             or len(effective_context.strip()) == 0
         )
-        context_status = "REJECTED" if is_context_empty else "ACCEPTED"
-        context_for_prompt = effective_context if not is_context_empty else "(Tidak ada dokumen spesifik ERHA yang ditemukan dalam basis pengetahuan untuk kueri ini.)"
 
-        # 4. Clinical Safety Gate Check before LLM generation
-        is_safe_gate, safe_msg = self.validate_clinical_safety_gate(query, "", context_status, results, intent)
-        if not is_safe_gate:
+        if is_context_empty:
+            out_of_knowledge_answer = "Untuk saat ini informasi tersebut belum tersedia."
             log_rag_chat(
                 query=query,
                 intent_val=intent.value,
                 top_k=effective_top_k,
-                results=results,
-                context_status=context_status,
+                results=[],
+                context_status="REJECTED",
                 retrieval_ms=retrieval_ms,
                 llm_ms=0,
                 guardrails_status="PASSED",
@@ -693,13 +718,16 @@ class GenerationPipeline:
             )
             return {
                 "query": query,
-                "answer": safe_msg,
-                "context": effective_context,
-                "results": results,
+                "answer": out_of_knowledge_answer,
+                "context": "",
+                "results": [],
                 "agent_used": agent_used
             }
 
-        # 5. Unified Single LLM Prompt & Synthesis
+        context_status = "ACCEPTED"
+        context_for_prompt = effective_context
+
+        # 4. Unified Single LLM Prompt & Synthesis
         full_prompt = self.build_prompt(query, context_for_prompt, history, intent, intent_rules, doctor_name=doctor_name)
         t0_llm = _time.time()
         error_msg = None
@@ -713,6 +741,14 @@ class GenerationPipeline:
         # 6. Output Guardrails Processing & Clinical Safety Gate
         sanitized_answer = GuardrailsPipeline.process_output(raw_answer)
         _, final_answer = self.validate_clinical_safety_gate(query, sanitized_answer, context_status, results, intent)
+
+        # Out-of-knowledge normalization to match design
+        if (
+            "untuk saat ini informasi tersebut belum tersedia" in final_answer.lower()
+            or (any(p in final_answer.lower() for p in ["belum ada data", "tidak ada informasi", "belum tercantum", "tidak tercantum", "tidak ditemukan", "belum ditemukan", "belum tersedia", "tidak tersedia"]) and not any(kw in final_answer.lower() for kw in ["rp ", "kandungan", "manfaat", "downtime", "indikasi"]))
+        ):
+            final_answer = "Untuk saat ini informasi tersebut belum tersedia."
+            results = []
 
         # 7. Standardized Visual Backend Logging
         log_rag_chat(
@@ -842,25 +878,25 @@ class GenerationPipeline:
             or effective_context in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
             or len(effective_context.strip()) == 0
         )
-        context_status = "REJECTED" if is_context_empty else "ACCEPTED"
-        context_for_prompt = effective_context if not is_context_empty else "(Tidak ada dokumen spesifik ERHA yang ditemukan dalam basis pengetahuan untuk kueri ini.)"
 
-        # Check Clinical Safety Gate before streaming LLM tokens
-        is_safe_gate, safe_msg = self.validate_clinical_safety_gate(query, "", context_status, results, intent)
-        if not is_safe_gate:
+        if is_context_empty:
+            out_of_knowledge_answer = "Untuk saat ini informasi tersebut belum tersedia."
             log_rag_chat(
                 query=query,
                 intent_val=intent.value,
                 top_k=effective_top_k,
-                results=results,
-                context_status=context_status,
+                results=[],
+                context_status="REJECTED",
                 retrieval_ms=retrieval_ms,
                 llm_ms=0,
                 guardrails_status="PASSED",
                 agent_used=agent_used
             )
-            yield safe_msg
+            yield out_of_knowledge_answer
             return
+
+        context_status = "ACCEPTED"
+        context_for_prompt = effective_context
 
         full_prompt = self.build_prompt(query, context_for_prompt, history, intent, intent_rules)
 

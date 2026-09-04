@@ -68,7 +68,7 @@ DEFAULT_APP_CONFIGS: dict[str, str] = {
     "TOKEN_LIMIT_GP": "250000",
     "TIME_LIMIT_PER_SESSION": "30",
     "LLM_ACTIVE_PROVIDER": "openai",
-    "LLM_ACTIVE_MODEL_NAME": "gpt-4o-mini",
+    "LLM_ACTIVE_MODEL_NAME": "gpt-5.4-mini",
 }
 
 ALL_TABLES: list[str] = [

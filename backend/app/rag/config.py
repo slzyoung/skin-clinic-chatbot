@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     openai_api_key: Optional[str] = None
     openai_model_name: str = "gpt-5.4-mini"
+    llm_generation_temperature: float = 0.0  # Default 0.0. Recommended clinical range: 0.0 - 0.2
 
     # Vector DB (PGVector) Settings
     pg_host: str = "db"
@@ -49,6 +50,7 @@ class Settings(BaseSettings):
     guardrails_enabled: bool = True
     guardrails_block_offtopic: bool = True
     guardrails_redact_pii: bool = True
+    prompt_injection_confidence_threshold: float = 0.7  # Score threshold for blocking prompt injections
 
     # Vector Store Provider (factory pattern)
     vector_store_provider: str = "pgvector"  # "pgvector" | "qdrant"
