@@ -2,6 +2,18 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.7] - 2026-09-04
+
+### DOCX Embedded Table & Inline Image Parser Enhancement
+- **Relationship-Aware Image Extraction in DOCX Fast Parser (`app/rag/utils/parser.py`)**:
+  - Enhanced `_parse_docx_fast` to pre-extract and upload embedded images directly from `doc.part.rels` (`word/media/*`), mapping relationship IDs (`rId`) to MinIO storage URLs.
+  - Added XML drawing traversal (`.//a:blip/@r:embed`) across table cells and paragraphs, preserving inline and table-embedded images as markdown `![ColumnName/Image](url)` tags.
+  - Fixed issue where cells containing only drawings (e.g. Before & After images) returned empty strings (`cell.text`), leaving tables blank in parsed document output and AI summaries.
+- **Ingestion Cancellation Reset on Upload & Reingest (`app/rag/router.py`)**:
+  - Implemented `uncancel_ingestion_job(knowledge_id)` to clear stale cancellation flags from `CANCELLED_INGESTION_IDS` when re-uploading or re-ingesting documents, preventing false-positive background job aborts.
+
+---
+
 ## [1.2.6] - 2026-09-02
 
 ### CIS Master Data Batch Webhook Synchronization

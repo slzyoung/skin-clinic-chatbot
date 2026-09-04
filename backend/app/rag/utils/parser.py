@@ -52,17 +52,70 @@ class DocumentParser:
     # FAST EXTRACTION: DOCX
     # -------------------------------------------------------------------------
     def _parse_docx_fast(self, file_path: str) -> ParseResult:
-        """Extract text from .docx using python-docx with heading hierarchy and table structure."""
+        """Extract text from .docx using python-docx with heading hierarchy, inline images, and table structure."""
         from docx import Document as DocxDocument
         import re
+        import os
 
         doc = DocxDocument(file_path)
         pages = []
         current_page_text = []
         page_num = 1
 
+        # 1. Pre-extract and upload embedded images from docx relationships
+        rid_to_url = {}
+        extracted_image_urls = []
+        try:
+            from app.services.storage import upload_image
+
+            for rId, rel in doc.part.rels.items():
+                if hasattr(rel, "target_ref") and "image" in str(rel.target_ref).lower() and hasattr(rel, "target_part"):
+                    try:
+                        img_bytes = rel.target_part.blob
+                        img_ext = os.path.splitext(rel.target_ref)[1].lower().replace(".", "") or "png"
+                        fname = f"docx_img_{rId}_{os.path.basename(rel.target_ref)}"
+                        upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
+                        img_url = upload_res.get("image_url")
+                        if img_url:
+                            rid_to_url[rId] = img_url
+                            extracted_image_urls.append(img_url)
+                            logger.info(f"🖼️ Extracted and uploaded embedded DOCX image '{rel.target_ref}' (rId: {rId}) -> {img_url}")
+                    except Exception as upload_err:
+                        logger.debug(f"Failed uploading image for rId {rId}: {upload_err}")
+        except Exception as img_init_err:
+            logger.debug(f"DOCX rel image extraction error: {img_init_err}")
+
+        # Fallback zip extraction if relationship extraction yielded nothing
+        if not extracted_image_urls:
+            try:
+                import zipfile
+                from app.services.storage import upload_image
+
+                with zipfile.ZipFile(file_path, 'r') as z:
+                    media_files = [f for f in z.namelist() if f.startswith('word/media/')]
+                    for idx, media_name in enumerate(media_files, start=1):
+                        img_bytes = z.read(media_name)
+                        img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
+                        if img_ext in ["png", "jpg", "jpeg", "webp"]:
+                            fname = f"docx_img_{idx}_{os.path.basename(media_name)}"
+                            upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
+                            img_url = upload_res.get("image_url")
+                            if img_url:
+                                extracted_image_urls.append(img_url)
+            except Exception as zip_err:
+                logger.debug(f"DOCX zip fallback image extraction skipped: {zip_err}")
+
+        # 2. Extract paragraphs with inline images
         for para in doc.paragraphs:
             text = para.text.strip()
+            blips = para._element.xpath('.//a:blip/@r:embed')
+            img_tags = [f"![Gambar]({rid_to_url[rId]})" for rId in blips if rId in rid_to_url]
+            if img_tags:
+                if text:
+                    text = f"{text}\n\n" + "\n\n".join(img_tags)
+                else:
+                    text = "\n\n".join(img_tags)
+
             if not text:
                 continue
 
@@ -101,11 +154,24 @@ class DocumentParser:
 
             current_page_text.append(formatted_text)
 
-        # Extract tables in docx as clean markdown tables
+        # 3. Extract tables in docx as clean markdown tables (including embedded images in cells)
         for table in doc.tables:
             table_rows = []
+            header_cells = [cell.text.strip() for cell in table.rows[0].cells] if table.rows else []
             for row in table.rows:
-                row_cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                row_cells = []
+                for c_idx, cell in enumerate(row.cells):
+                    c_text = cell.text.strip().replace("\n", " ")
+                    blips = cell._element.xpath('.//a:blip/@r:embed')
+                    if blips:
+                        col_name = header_cells[c_idx] if c_idx < len(header_cells) and header_cells[c_idx] else "Gambar"
+                        cell_img_tags = [f"![{col_name}]({rid_to_url[rId]})" for rId in blips if rId in rid_to_url]
+                        if cell_img_tags:
+                            if c_text:
+                                c_text = f"{c_text} " + " ".join(cell_img_tags)
+                            else:
+                                c_text = " ".join(cell_img_tags)
+                    row_cells.append(c_text)
                 table_rows.append("| " + " | ".join(row_cells) + " |")
             if table_rows:
                 if len(table_rows) >= 1:
@@ -118,30 +184,9 @@ class DocumentParser:
         if current_page_text:
             pages.append({"page": page_num, "text": "\n\n".join(current_page_text)})
 
-        # Extract embedded images from .docx media parts and upload to MinIO
-        try:
-            import zipfile
-            from app.services.storage import upload_image
-
-            with zipfile.ZipFile(file_path, 'r') as z:
-                media_files = [f for f in z.namelist() if f.startswith('word/media/')]
-                extracted_image_urls = []
-                for idx, media_name in enumerate(media_files, start=1):
-                    img_bytes = z.read(media_name)
-                    img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
-                    if img_ext in ["png", "jpg", "jpeg", "webp"]:
-                        fname = f"docx_img_{idx}_{os.path.basename(media_name)}"
-                        upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
-                        img_url = upload_res.get("image_url")
-                        if img_url:
-                            extracted_image_urls.append(img_url)
-                            logger.info(f"🖼️ Extracted and uploaded embedded DOCX image #{idx} '{media_name}' to MinIO -> {img_url}")
-                
-                if extracted_image_urls and pages:
-                    pages[0]["image_urls"] = extracted_image_urls
-                    pages[0]["image_url"] = extracted_image_urls[0]
-        except Exception as img_err:
-            logger.debug(f"DOCX embedded image extraction skipped: {img_err}")
+        if extracted_image_urls and pages:
+            pages[0]["image_urls"] = extracted_image_urls
+            pages[0]["image_url"] = extracted_image_urls[0]
 
         return ParseResult(pages=pages, method="fast")
 
