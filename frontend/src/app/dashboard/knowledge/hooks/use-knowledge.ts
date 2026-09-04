@@ -1,3 +1,4 @@
+import { chatHistoryKeys } from "@/app/dashboard/chat-history/api/keys";
 import { api } from "@/lib/axios";
 import { getErrorMessage } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,9 +7,9 @@ import { knowledgeKeys, projectKeys } from "../api/keys";
 import type {
 	KnowledgeResponse,
 	KnowledgeStatus,
-	VisibilitySettings,
 	KnowledgeTextIngestRequest,
 	KnowledgeTextIngestResponse,
+	VisibilitySettings,
 } from "../api/types";
 
 export const useKnowledgeBaseList = () => {
@@ -89,7 +90,9 @@ export const useIngestTextKnowledge = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async (payload: KnowledgeTextIngestRequest): Promise<KnowledgeTextIngestResponse> => {
+		mutationFn: async (
+			payload: KnowledgeTextIngestRequest,
+		): Promise<KnowledgeTextIngestResponse> => {
 			const response = await api.post("/knowledge/text", payload);
 			return response.data;
 		},
@@ -206,7 +209,20 @@ export const useEditKnowledge = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async ({ id, data, hideToast }: { id: string; data: { summary: string; categories: string[]; visibility_settings?: VisibilitySettings; title?: string }; hideToast?: boolean }) => {
+		mutationFn: async ({
+			id,
+			data,
+			hideToast,
+		}: {
+			id: string;
+			data: {
+				summary: string;
+				categories: string[];
+				visibility_settings?: VisibilitySettings;
+				title?: string;
+			};
+			hideToast?: boolean;
+		}) => {
 			const response = await api.put(`/knowledge/${id}`, data);
 			return { data: response.data, hideToast, id };
 		},
@@ -308,7 +324,9 @@ export const useQueryGeneral = () => {
 				queryClient.invalidateQueries({ queryKey: projectKeys.all });
 				queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 				if (data.target_knowledge_id) {
-					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(data.target_knowledge_id) });
+					queryClient.invalidateQueries({
+						queryKey: knowledgeKeys.detail(data.target_knowledge_id),
+					});
 				}
 			}
 		},
@@ -351,10 +369,14 @@ export const useGeneralChatSession = (sessionId?: string | null) => {
 };
 
 export const useCreateGeneralChatSession = () => {
+	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async (): Promise<GeneralChatSessionResponse> => {
 			const response = await api.post("/knowledge/general-session");
 			return response.data;
+		},
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: chatHistoryKeys.all });
 		},
 	});
 };
@@ -363,25 +385,40 @@ export const useSendGeneralChatMessage = (sessionId?: string | null) => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async (payload: { prompt: string; attachments?: Record<string, unknown>; signal?: AbortSignal }): Promise<GeneralChatSessionResponse> => {
+		mutationFn: async (payload: {
+			prompt: string;
+			attachments?: Record<string, unknown>;
+			signal?: AbortSignal;
+		}): Promise<GeneralChatSessionResponse> => {
 			const { signal, ...body } = payload;
-			const response = await api.post(`/knowledge/general-session/${sessionId}/messages`, body, { signal });
+			const response = await api.post(`/knowledge/general-session/${sessionId}/messages`, body, {
+				signal,
+			});
 			return response.data;
 		},
 		onSuccess: (data) => {
 			queryClient.setQueryData(["general-session", sessionId], data);
+			queryClient.invalidateQueries({ queryKey: chatHistoryKeys.all });
+			if (sessionId) {
+				queryClient.invalidateQueries({ queryKey: chatHistoryKeys.detail(sessionId) });
+				queryClient.invalidateQueries({ queryKey: ["chat-messages", sessionId] });
+			}
 			const latestMsg = data.messages[data.messages.length - 1];
 			if (latestMsg?.action === "edit_applied" || latestMsg?.action === "delete_applied") {
 				queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 				queryClient.invalidateQueries({ queryKey: projectKeys.all });
 				queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 				if (latestMsg.target_knowledge_id) {
-					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(latestMsg.target_knowledge_id) });
+					queryClient.invalidateQueries({
+						queryKey: knowledgeKeys.detail(latestMsg.target_knowledge_id),
+					});
 				}
 			}
 		},
 		onError: (error: unknown) => {
-			const isCanceled = (error as { name?: string; code?: string })?.name === "CanceledError" || (error as { name?: string; code?: string })?.code === "ERR_CANCELED";
+			const isCanceled =
+				(error as { name?: string; code?: string })?.name === "CanceledError" ||
+				(error as { name?: string; code?: string })?.code === "ERR_CANCELED";
 			if (!isCanceled) {
 				toast.error(getErrorMessage(error, "Failed to send message."));
 			}

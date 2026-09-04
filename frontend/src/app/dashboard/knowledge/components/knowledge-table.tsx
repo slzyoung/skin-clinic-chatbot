@@ -19,6 +19,12 @@ import {
 	DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
+import {
 	RiBookOpenLine,
 	RiBookletLine,
 	RiDatabase2Line,
@@ -29,6 +35,9 @@ import {
 	RiCloseLine,
 	RiMore2Line,
 	RiDeleteBinLine,
+	RiSearchLine,
+	RiCheckLine,
+	RiArrowDownSLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -71,9 +80,17 @@ export function KnowledgeTable({
 	const router = useRouter();
 	const [statusFilter, setStatusFilter] = useState("ALL");
 	const [categoryFilter, setCategoryFilter] = useState("ALL");
+	const [isCategoryPopoverOpen, setIsCategoryPopoverOpen] = useState(false);
+	const [categorySearchQuery, setCategorySearchQuery] = useState("");
 	const { data: knowledgeList, isLoading, isError } = useKnowledgeBaseList();
 	const { data: availableCategories = [] } = useCategories();
 	const deleteMutation = useDeleteKnowledge();
+
+	const filteredAvailableCategories = useMemo(() => {
+		if (!categorySearchQuery.trim()) return availableCategories;
+		const q = categorySearchQuery.toLowerCase().trim();
+		return availableCategories.filter((c) => c.name.toLowerCase().includes(q));
+	}, [availableCategories, categorySearchQuery]);
 
 	// Delete Confirmation Modal State
 	const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -309,6 +326,7 @@ export function KnowledgeTable({
 	const handleResetFilters = () => {
 		setStatusFilter("ALL");
 		setCategoryFilter("ALL");
+		setCategorySearchQuery("");
 		setPage(1);
 		if (onClearProjectFilter) onClearProjectFilter();
 	};
@@ -377,34 +395,112 @@ export function KnowledgeTable({
 						</Button>
 					)}
 
-					{/* Category Filter */}
-					<DropdownMenu>
-						<DropdownMenuTrigger
+					{/* Category Filter with Search */}
+					<Popover open={isCategoryPopoverOpen} onOpenChange={setIsCategoryPopoverOpen}>
+						<PopoverTrigger
 							render={
 								<Button
 									variant="outline"
-									className="min-w-44 h-10 justify-start gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 rounded-lg text-sm shadow-none cursor-pointer"
+									title={categoryFilter === "ALL" ? "All Categories" : categoryFilter}
+									className="min-w-44 h-10 justify-between gap-2 bg-white font-normal text-zinc-700 hover:bg-zinc-50 border-gray-200 rounded-lg text-sm shadow-none cursor-pointer"
 								/>
 							}
 						>
-							<RiDatabase2Line className="size-4 shrink-0 text-gray-500" />
-							<span className="truncate">
-								{categoryFilter === "ALL" ? "All Categories" : categoryFilter}
-							</span>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent className="w-56 max-h-80 overflow-y-auto rounded-lg border border-gray-200 shadow-none p-1 bg-white">
-							<DropdownMenuRadioGroup value={categoryFilter} onValueChange={setCategoryFilter}>
-								<DropdownMenuRadioItem closeOnClick value="ALL">
-									All Categories
-								</DropdownMenuRadioItem>
-								{availableCategories.map((cat) => (
-									<DropdownMenuRadioItem key={cat.id} closeOnClick value={cat.name}>
-										{cat.name}
-									</DropdownMenuRadioItem>
-								))}
-							</DropdownMenuRadioGroup>
-						</DropdownMenuContent>
-					</DropdownMenu>
+							<div className="flex items-center gap-2 min-w-0 flex-1">
+								<RiDatabase2Line className="size-4 shrink-0 text-gray-500" />
+								<span className="truncate text-left">
+									{categoryFilter === "ALL" ? "All Categories" : categoryFilter}
+								</span>
+							</div>
+							<RiArrowDownSLine className="size-4 shrink-0 text-zinc-400 ml-1" />
+						</PopoverTrigger>
+						<PopoverContent
+							align="start"
+							className="w-56 p-2 flex flex-col gap-2 z-50 bg-white border border-gray-200 shadow-none rounded-lg ring-0 outline-none"
+						>
+							{/* Search Bar inside Popover */}
+							<div className="relative w-full">
+								<RiSearchLine className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-zinc-400 pointer-events-none" />
+								<Input
+									placeholder="Search category..."
+									value={categorySearchQuery}
+									onChange={(e) => setCategorySearchQuery(e.target.value)}
+									className="h-8 pl-8 pr-7 text-xs bg-zinc-50 border-gray-200 focus-visible:ring-blue-500 rounded-md"
+									autoFocus
+								/>
+								{categorySearchQuery && (
+									<button
+										type="button"
+										onClick={() => setCategorySearchQuery("")}
+										className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
+									>
+										<RiCloseLine className="size-3.5" />
+									</button>
+								)}
+							</div>
+
+							{/* Category List */}
+							<div className="flex flex-col gap-0.5 max-h-56 overflow-y-auto overscroll-contain pr-0.5">
+								{(!categorySearchQuery ||
+									"all categories".includes(categorySearchQuery.toLowerCase().trim())) && (
+									<button
+										type="button"
+										onClick={() => {
+											setCategoryFilter("ALL");
+											setIsCategoryPopoverOpen(false);
+											setCategorySearchQuery("");
+											setPage(1);
+										}}
+										className={`flex items-center justify-between w-full px-2.5 py-1.5 rounded-md text-xs font-medium text-left transition-colors cursor-pointer ${
+											categoryFilter === "ALL"
+												? "bg-blue-50 text-blue-700"
+												: "text-zinc-700 hover:bg-zinc-100"
+										}`}
+									>
+										<span className="truncate">All Categories</span>
+										{categoryFilter === "ALL" && (
+											<RiCheckLine className="size-3.5 text-blue-600 shrink-0 ml-1.5" />
+										)}
+									</button>
+								)}
+
+								{filteredAvailableCategories.map((cat) => {
+									const isSelected = categoryFilter === cat.name;
+									return (
+										<button
+											type="button"
+											key={cat.id}
+											title={cat.name}
+											onClick={() => {
+												setCategoryFilter(cat.name);
+												setIsCategoryPopoverOpen(false);
+												setCategorySearchQuery("");
+												setPage(1);
+											}}
+											className={`flex items-center justify-between w-full px-2.5 py-1.5 rounded-md text-xs font-medium text-left transition-colors cursor-pointer ${
+												isSelected
+													? "bg-blue-50 text-blue-700"
+													: "text-zinc-700 hover:bg-zinc-100"
+											}`}
+										>
+											<span className="truncate min-w-0 flex-1">{cat.name}</span>
+											{isSelected && (
+												<RiCheckLine className="size-3.5 text-blue-600 shrink-0 ml-1.5" />
+											)}
+										</button>
+									);
+								})}
+
+								{filteredAvailableCategories.length === 0 &&
+									categorySearchQuery &&
+									!"all categories".includes(categorySearchQuery.toLowerCase().trim()) && (
+										<div className="py-4 text-center text-xs text-zinc-400">
+											No categories found
+										</div>
+									)}
+							</div>
+						</PopoverContent>
+					</Popover>
 
 					{/* Status Filter */}
 					<DropdownMenu>
@@ -436,9 +532,6 @@ export function KnowledgeTable({
 								</DropdownMenuRadioItem>
 								<DropdownMenuRadioItem closeOnClick value="PROCESSING">
 									Processing
-								</DropdownMenuRadioItem>
-								<DropdownMenuRadioItem closeOnClick value="REJECTED">
-									Rejected
 								</DropdownMenuRadioItem>
 							</DropdownMenuRadioGroup>
 						</DropdownMenuContent>
