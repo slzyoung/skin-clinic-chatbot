@@ -25,6 +25,7 @@ import {
 import { useRouter } from "next/navigation";
 import { use, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useSafeBack } from "@/hooks/use-safe-back";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { IngestSuccessModal } from "@/app/dashboard/knowledge/components/preview/ingest-success-modal";
 import { useApproveBatchKnowledge, useDeleteKnowledge, useKnowledgeBatch } from "../../hooks/use-knowledge";
@@ -33,6 +34,7 @@ import { BatchDocumentTabs } from "./BatchDocumentTabs";
 
 export default function BatchKnowledgePage({ params }: { params: Promise<{ id: string }> }) {
 	const router = useRouter();
+	const handleBack = useSafeBack("/dashboard/knowledge");
 	const unwrappedParams = use(params);
 	const batchId = unwrappedParams.id;
 	const { data: batchDocuments, isLoading, error } = useKnowledgeBatch(batchId);
@@ -166,8 +168,10 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					<Button
 						variant="ghost"
 						size="icon"
-						onClick={() => router.back()}
+						onClick={handleBack}
 						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+						title="Back"
+						aria-label="Back"
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>

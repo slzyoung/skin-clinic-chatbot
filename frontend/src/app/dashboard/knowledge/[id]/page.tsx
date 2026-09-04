@@ -6,14 +6,13 @@ import { Button } from "@/components/ui/button";
 import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line, RiCheckLine, RiStopCircleLine } from "@remixicon/react";
 import { toast } from "sonner";
 
-import { useRouter } from "next/navigation";
 import { use, useState } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail, useEditKnowledge } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
+import { useSafeBack } from "@/hooks/use-safe-back";
 import { VisibilitySettings } from "../api/types";
 
 export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
-	const router = useRouter();
 	const unwrappedParams = use(params);
 	const id = unwrappedParams.id;
 	const { data, isLoading, error } = useKnowledgeDetail(id);
@@ -26,6 +25,11 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
 	const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
 	const editKnowledge = useEditKnowledge();
+
+	const fallbackPath = data?.project_id
+		? `/dashboard/knowledge/project/${data.project_id}`
+		: "/dashboard/knowledge";
+	const handleBack = useSafeBack(fallbackPath);
 
 	const initialCategories = (data?.metadata?.categories as string[]) || (data?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
 	const initialVisibility = (data?.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
@@ -49,16 +53,8 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 
 	const handleDelete = async () => {
 		await deleteMutation.mutateAsync(id);
-		router.push("/dashboard/knowledge");
+		handleBack();
 	};
-
-	if (error) {
-		return (
-			<div className="flex items-center justify-center h-full text-red-500">
-				Error loading document details
-			</div>
-		);
-	}
 
 	const formatDisplayTitle = (raw: string | undefined) => {
 		if (!raw) return "Knowledge Document";
@@ -80,6 +76,14 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 		setIsEditMode(false);
 	};
 
+	if (error) {
+		return (
+			<div className="flex items-center justify-center h-full text-red-500">
+				Error loading document details
+			</div>
+		);
+	}
+
 	return (
 		<div className="flex flex-col absolute inset-0">
 			{/* Title Header with Actions */}
@@ -88,8 +92,10 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					<Button
 						variant="ghost"
 						size="icon"
-						onClick={() => router.back()}
+						onClick={handleBack}
 						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+						title="Back"
+						aria-label="Back"
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>

@@ -36,6 +36,7 @@ import {
 	RiUser3Line,
 } from "@remixicon/react";
 import { useParams, useRouter } from "next/navigation";
+import { useSafeBack } from "@/hooks/use-safe-back";
 
 const getFileIconAndColor = (filename?: string | null) => {
 	if (!filename)
@@ -51,32 +52,39 @@ const getFileIconAndColor = (filename?: string | null) => {
 		case "xlsx":
 		case "csv":
 			return { Icon: RiFileExcel2Line, bgColor: "bg-emerald-50", textColor: "text-emerald-600" };
-		case "png":
 		case "jpg":
 		case "jpeg":
-		case "gif":
+		case "png":
+		case "webp":
 			return { Icon: RiImage2Line, bgColor: "bg-purple-50", textColor: "text-purple-600" };
-		case "txt":
 		default:
 			return { Icon: RiFileTextLine, bgColor: "bg-blue-50", textColor: "text-blue-600" };
 	}
 };
 
 const IGNORED_METADATA_KEYS = new Set([
-	"action",
-	"target_knowledge_id",
-	"total_found",
-	"total_documents",
-	"results",
-	"error",
+	"page",
+	"score",
+	"relevance",
+	"similarity",
+	"distance",
+	"rank",
+	"type",
+	"source",
+	"category",
+	"doc_id",
+	"knowledge_id",
+	"id",
 	"status",
+	"timestamp",
+	"created_at",
+	"updated_at",
 ]);
 
 const getAttachmentNames = (
 	attachments?: Record<string, unknown> | null,
 	role?: string,
 ): string[] => {
-	// Assistant messages in general chat store internal metadata in attachments, not uploaded files
 	if (role?.toUpperCase() === "ASSISTANT") {
 		return [];
 	}
@@ -102,12 +110,14 @@ const getAttachmentNames = (
 export default function ChatHistoryDetailPage() {
 	const params = useParams();
 	const router = useRouter();
+	const handleBack = useSafeBack("/dashboard/chat-history");
 	const sessionId = params.id as string;
 
 	const { data: currentUser } = useCurrentUser();
 	const { data: session } = useChatHistoryDetail(sessionId);
 	const { data: messages, isLoading } = useChatMessages(sessionId);
 
+	const isOwner = Boolean(currentUser?.id && session?.user_id && currentUser.id === session.user_id);
 	const isStaffOrAdmin = currentUser?.type === "STAFF" || currentUser?.type === "ADMIN";
 	const isGeneralChat =
 		session?.session_type === "GENERAL_ASSISTANT" ||
@@ -115,17 +125,17 @@ export default function ChatHistoryDetailPage() {
 		session?.user_type === "STAFF";
 
 	useEffect(() => {
-		if (isStaffOrAdmin && isGeneralChat && sessionId) {
+		if (isOwner && isStaffOrAdmin && isGeneralChat && sessionId) {
 			router.replace(`/dashboard/ingest/chat?session_id=${sessionId}`);
 		}
-	}, [isStaffOrAdmin, isGeneralChat, sessionId, router]);
+	}, [isOwner, isStaffOrAdmin, isGeneralChat, sessionId, router]);
 
 	const formattedDate = session?.created_at
 		? new Intl.DateTimeFormat("en-US", {
 				month: "short",
 				day: "numeric",
 				year: "numeric",
-				hour: "numeric",
+				hour: "2-digit",
 				minute: "2-digit",
 		  }).format(new Date(session.created_at))
 		: null;
@@ -145,9 +155,10 @@ export default function ChatHistoryDetailPage() {
 					<Button
 						variant="ghost"
 						size="icon"
-						onClick={() => router.push("/dashboard/chat-history")}
+						onClick={handleBack}
 						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 shrink-0"
-						title="Back to Chat History"
+						title="Back"
+						aria-label="Back"
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>
@@ -162,7 +173,7 @@ export default function ChatHistoryDetailPage() {
 				</div>
 
 				<div className="flex items-center gap-2 shrink-0">
-					{isStaffOrAdmin && isGeneralChat && (
+					{isOwner && isStaffOrAdmin && isGeneralChat && (
 						<Button
 							variant="outline"
 							size="sm"
