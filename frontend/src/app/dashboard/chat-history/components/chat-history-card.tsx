@@ -14,6 +14,7 @@ export function ChatHistoryCard({ item }: { item: ChatHistoryResponse }) {
     hour: 'numeric', minute: '2-digit'
   }).format(new Date(item.created_at))
 
+  const isOwner = Boolean(currentUser?.id && item.user_id && currentUser.id === item.user_id)
   const isStaffOrAdmin = currentUser?.type === "STAFF" || currentUser?.type === "ADMIN"
   const isGeneralChat =
     item.session_type === "GENERAL_ASSISTANT" ||
@@ -21,7 +22,7 @@ export function ChatHistoryCard({ item }: { item: ChatHistoryResponse }) {
     item.user_type === "STAFF"
 
   const handleClick = () => {
-    if (isStaffOrAdmin && isGeneralChat) {
+    if (isOwner && isStaffOrAdmin && isGeneralChat) {
       router.push(`/dashboard/ingest/chat?session_id=${item.id}`)
     } else {
       router.push(`/dashboard/chat-history/${item.id}`)
