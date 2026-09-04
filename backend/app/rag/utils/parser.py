@@ -569,26 +569,21 @@ class DocumentParser:
 
                     client = OpenAI(**client_kwargs)
                     prompt_text = (
-                        "You are an expert medical aesthetic AI knowledge engineer for PT Arya Noble (ERHA) Knowledge Base.\n\n"
-                        "Your task is to analyze the provided image (which could be a Product Photo or a Clinical Before-After Face Condition Photo) and extract accurate, fluent, and cohesive knowledge.\n\n"
-                        "## Guidelines:\n"
-                        "1. **Natural & Cohesive Language**: Write natural, professional, fluent Indonesian prose suitable for clinical doctors and aesthetic specialists. Avoid stiff key-value forms or empty template blocks.\n"
-                        "2. **Product Photos (Foto Produk)**:\n"
-                        "   - Describe the product name, intended skin types, key benefits, and usage naturally.\n"
-                        "   - Include active ingredients in standard markdown bullet points.\n"
-                        "3. **Before-After Face Condition Photos (Foto Wajah Before-After)**:\n"
-                        "   - State the treatment/product name.\n"
-                        "   - Analyze the clinical skin condition changes (Before vs After) naturally (e.g. reduction of inflammatory acne lesions, fading of post-acne erythema, smoothing of skin texture).\n"
-                        "4. **No Visual Fluff**: Do NOT describe background color, packaging graphics, lighting, or photography angles.\n\n"
+                        "You are an expert product recognition system for PT Arya Noble (ERHA) Knowledge Base.\n\n"
+                        "Your task is to identify the EXACT PRODUCT NAME shown on the product packaging or image.\n\n"
+                        "## STRICT RULES (MANDATORY):\n"
+                        "1. **IDENTIFY PRODUCT NAME ONLY**: Recognize and extract ONLY the official Product Name printed on the packaging (e.g., 'Exfoliating Cleansing Scrub', 'Acne Act Acne Spot Gel').\n"
+                        "2. **DO NOT EXTRACT PACKAGING DETAILS**: Do NOT generate, OCR, or invent packaging text such as Brand, SKU, Net Weight, instructions, benefits, or 'Informasi Tertera pada Kemasan'. Generating packaging text is strictly forbidden to prevent false detections.\n"
+                        "3. **PRESERVE RETRIEVAL CONTEXT**: Provide the clean product name and a clean 1-line Indonesian context so this image has full context and can be retrieved accurately in search and RAG answers.\n"
+                        "4. **Clinical / Before-After Photos**: If this is a clinical photo of skin/face (not product packaging), identify the treatment or clinical condition (e.g., 'Acne Vulgaris - Before Treatment') and state whether it is BEFORE or AFTER.\n\n"
                         "## Output Format (Valid JSON ONLY):\n"
                         "{\n"
-                        '  "title": "ERHA Acneact Gentle Acne Moisturizer",\n'
-                        '  "product_name": "ERHA Acneact Gentle Acne Moisturizer",\n'
+                        '  "title": "Exact Visible Product Name",\n'
+                        '  "product_name": "Exact Visible Product Name",\n'
+                        '  "image_role": "PRODUCT_PACKAGING",\n'
+                        '  "caption": "Foto produk Exact Visible Product Name",\n'
                         '  "document_type": "PRODUCT",\n'
-                        '  "brand": "ERHA",\n'
-                        '  "sku": null,\n'
-                        '  "active_ingredients": ["Granactive Acne Peptide", "Salicylic Acid (BHA)"],\n'
-                        '  "summary_markdown": "# ERHA Acneact Gentle Acne Moisturizer\\n\\nERHA Acneact Gentle Acne Moisturizer adalah pelembap wajah ringan yang diformulasikan khusus untuk kulit berminyak, berjerawat, dan sensitif. Memiliki tekstur gel-krim yang cepat meresap dan tidak menyumbat pori-pori.\\n\\n## Manfaat & Penggunaan\\n- Melembapkan kulit berjerawat sekaligus menenangkan kemerahan.\\n- Membantu mengontrol produksi sebum berlebih.\\n- Digunakan secara merata pada wajah setelah pembersih dan serum.\\n\\n## Active Ingredients\\n- **Granactive Acne Peptide**: Membantu meredakan peradangan jerawat.\\n- **Salicylic Acid (BHA)**: Merawat pori-pori dan mencegah timbulnya jerawat baru."\n'
+                        '  "summary_markdown": "# Exact Visible Product Name\\n\\n![Exact Visible Product Name](IMAGE_URL_PLACEHOLDER)\\n\\nDokumen visual produk resmi ERHA: Exact Visible Product Name."\n'
                         "}"
                     )
 
@@ -634,47 +629,40 @@ class DocumentParser:
 
                             img_title = data.get("title") or data.get("product_name") or os.path.splitext(file_name)[0]
                             p_name = data.get("product_name") or img_title
-                            brand = data.get("brand") or "ERHA"
-                            active_ing = data.get("active_ingredients") or []
-                            sku_val = data.get("sku")
-                            clean_sku = str(sku_val).strip() if sku_val and str(sku_val).strip().lower() not in ["none", "null", "n/a", "-"] else None
+                            brand = "ERHA"
+                            active_ing = []
+                            clean_sku = None
+
+                            # Infer or extract image role
+                            img_role = data.get("image_role")
+                            valid_roles = ["PRODUCT_PACKAGING", "CLINICAL_BEFORE", "CLINICAL_AFTER", "TREATMENT_PROCEDURE", "GENERAL"]
+                            if not img_role or img_role not in valid_roles:
+                                lower_fname = file_name.lower()
+                                lower_text = (data.get("summary_markdown") or "").lower()
+                                if any(k in lower_fname or k in lower_text for k in ["before", "sebelum"]):
+                                    img_role = "CLINICAL_BEFORE"
+                                elif any(k in lower_fname or k in lower_text for k in ["after", "sesudah", "setelah"]):
+                                    img_role = "CLINICAL_AFTER"
+                                elif any(k in lower_fname or k in lower_text for k in ["kemasan", "packaging", "bottle", "box", "produk"]):
+                                    img_role = "PRODUCT_PACKAGING"
+                                else:
+                                    img_role = "PRODUCT_PACKAGING" if data.get("document_type") == "PRODUCT" else "GENERAL"
+
+                            caption = data.get("caption") or f"Foto produk {p_name}"
 
                             extracted_meta.update({
                                 "title": img_title,
                                 "product_name": p_name,
                                 "brand": brand,
-                                "sku": clean_sku,
-                                "active_ingredients": active_ing
+                                "sku": None,
+                                "active_ingredients": [],
+                                "image_role": img_role,
+                                "caption": caption
                             })
 
-                            # If Vision LLM provided a beautiful fluent summary_markdown directly, use it!
-                            raw_summary_md = data.get("summary_markdown")
-                            if raw_summary_md and raw_summary_md.strip():
-                                summary_text = raw_summary_md.strip()
-                                # Ensure image URL is embedded right below the first H1 title
-                                if image_url and image_url not in summary_text:
-                                    lines = summary_text.split("\n")
-                                    if lines and lines[0].startswith("#"):
-                                        summary_text = lines[0] + f"\n\n![{img_title}]({image_url})\n" + "\n".join(lines[1:])
-                                    else:
-                                        summary_text = f"# {img_title}\n\n![{img_title}]({image_url})\n\n" + summary_text
-                                extracted_text = summary_text
-                            else:
-                                # Fallback natural markdown
-                                md_blocks = [f"# {img_title}\n\n![{img_title}]({image_url})"]
-                                deskripsi = data.get("deskripsi_fungsi") or data.get("searchable_knowledge") or ""
-                                if deskripsi:
-                                    md_blocks.append(f"## Deskripsi & Fungsi Produk\n{deskripsi}")
-                                if active_ing:
-                                    ing_lines = ["## Active Ingredients"]
-                                    if isinstance(active_ing, list):
-                                        for ing in active_ing:
-                                            if ing and str(ing).strip():
-                                                ing_lines.append(f"- {ing}")
-                                    else:
-                                        ing_lines.append(f"- {active_ing}")
-                                    md_blocks.append("\n".join(ing_lines))
-                                extracted_text = "\n\n".join(md_blocks)
+                            # Clean structured markdown with product name and image context only (zero packaging hallucination)
+                            clean_markdown = f"# {img_title}\n\n![{img_title}]({image_url})\n\nDokumen visual produk resmi ERHA: {p_name}."
+                            extracted_text = clean_markdown
 
                         except Exception as json_err:
                             logger.warning(f"Could not parse Vision LLM JSON response for '{file_name}': {json_err}. Using raw output.")
@@ -699,14 +687,40 @@ class DocumentParser:
                 clean_title = os.path.splitext(file_name)[0]
                 extracted_text = f"### Image Asset: {clean_title}\n\n![{clean_title}]({image_url})\n\nStorage Key: `{s3_key}`."
 
+            import uuid
+            img_id = f"img_{uuid.uuid4().hex[:8]}"
+            clean_title = os.path.splitext(file_name)[0]
+            current_role = img_role if 'img_role' in locals() and img_role else ("PRODUCT_PACKAGING" if any(k in file_name.lower() for k in ["produk", "bottle", "box"]) else "GENERAL")
+            current_caption = caption if 'caption' in locals() and caption else f"Foto {clean_title}"
+            current_pname = p_name if 'p_name' in locals() and p_name else clean_title
+
+            image_asset = {
+                "id": img_id,
+                "url": image_url,
+                "s3_key": s3_key,
+                "role": current_role,
+                "product_name": current_pname,
+                "caption": current_caption
+            }
+
             page_data = {
                 "page": 1,
                 "text": extracted_text,
+                "image_id": img_id,
                 "image_urls": [image_url] if image_url else [],
                 "image_url": image_url,
+                "images": [image_asset],
                 "s3_key": s3_key,
                 "storage_key": s3_key,
-                "image_reference": image_url
+                "image_reference": image_url,
+                "clinics": ["all"],
+                "doctor_types": ["all"],
+                "doctors": ["all"],
+                "visibility_settings": {
+                    "clinics": ["all"],
+                    "doctor_types": ["all"],
+                    "doctors": ["all"]
+                }
             }
             page_data.update(extracted_meta)
 

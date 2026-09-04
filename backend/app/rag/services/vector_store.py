@@ -163,6 +163,9 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
                         elif isinstance(v, list):
                             from sqlalchemy import or_
                             or_clauses = [DocumentChunk.metadata_[k].astext.ilike(f"%{item}%") for item in v if item]
+                            if "all" in v:
+                                or_clauses.append(DocumentChunk.metadata_[k].astext.ilike("%all%"))
+                                or_clauses.append(DocumentChunk.metadata_[k].is_(None))
                             if or_clauses:
                                 q = q.filter(or_(*or_clauses))
                         elif v:
@@ -184,21 +187,23 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
             logger.error(f"Search failed in PGVector store: {e}")
             return []
 
-    def delete_document(self, source_file: str):
+    def delete_document(self, identifier: str):
         try:
-            logger.info(f"Deleting chunks for source_file: {source_file}")
-            from sqlalchemy import or_, text
+            logger.info(f"Deleting chunks for identifier: {identifier}")
+            from sqlalchemy import text
             with self.Session() as session:
-                session.execute(text(f"""
+                result = session.execute(text(f"""
                     DELETE FROM {self.collection_name}
                     WHERE source_file = :src
+                       OR source_file ILIKE :src_like
                        OR metadata ->> 'knowledge_id' = :src
                        OR metadata ->> 'file_name' = :src
-                """), {"src": str(source_file)})
+                """), {"src": str(identifier), "src_like": f"%{identifier}%"})
                 session.commit()
-            logger.info(f"Successfully deleted chunks for {source_file} from PGVector.")
+                deleted_rows = result.rowcount
+            logger.info(f"Successfully deleted {deleted_rows} chunks for {identifier} from PGVector.")
         except Exception as e:
-            logger.error(f"Failed to delete chunks for {source_file}: {e}")
+            logger.error(f"Failed to delete chunks for {identifier}: {e}")
             raise
 
     def clear_all(self):

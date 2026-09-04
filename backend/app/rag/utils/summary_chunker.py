@@ -102,6 +102,7 @@ def chunk_summary_markdown(
     valid_until: str = None,
     visibility_settings: dict = None,
     max_section_chars: int = 1200,
+    default_image_url: str = None,
 ) -> list:
     """
     Structure-aware chunking of AI-reviewed Markdown summary.
@@ -122,6 +123,53 @@ def chunk_summary_markdown(
     if not summary or not summary.strip():
         return []
 
+    # Discover document-level fallback image URL if not provided
+    if not default_image_url:
+        all_doc_imgs = re.findall(r'!\[.*?\]\((https?://[^\s\)]+)\)', summary)
+        if all_doc_imgs:
+            default_image_url = all_doc_imgs[0]
+
+    # Discover document-level related products / treatments for knowledge interconnection
+    doc_related_products = []
+    rel_prod_match = re.search(r'(?:Related Products|Produk Terkait|Produk Pendukung|Kombinasi Produk)\s*[:\n](.+?)(?=\n##|\Z)', summary, re.IGNORECASE | re.DOTALL)
+    if rel_prod_match:
+        raw_items = rel_prod_match.group(1).split("\n")
+        for item in raw_items:
+            sub_items = re.split(r'[•\*\-\|]', item)
+            for sub in sub_items:
+                clean_sub = sub.strip()
+                if clean_sub and len(clean_sub) > 3 and clean_sub.lower() not in ["none", "null", "-", "n/a", "related products", "produk terkait"]:
+                    if clean_sub not in doc_related_products:
+                        doc_related_products.append(clean_sub)
+
+    doc_related_treatments = []
+    rel_treat_match = re.search(r'(?:Related Treatments|Treatment Terkait|Tindakan Terkait|Kombinasi Treatment)\s*[:\n](.+?)(?=\n##|\Z)', summary, re.IGNORECASE | re.DOTALL)
+    if rel_treat_match:
+        raw_items = rel_treat_match.group(1).split("\n")
+        for item in raw_items:
+            sub_items = re.split(r'[•\*\-\|]', item)
+            for sub in sub_items:
+                clean_sub = sub.strip()
+                if clean_sub and len(clean_sub) > 3 and clean_sub.lower() not in ["none", "null", "-", "n/a", "related treatments", "treatment terkait"]:
+                    if clean_sub not in doc_related_treatments:
+                        doc_related_treatments.append(clean_sub)
+
+    # Standardized clinical indications taxonomy for automatic medical cross-referencing
+    clinical_taxonomy = {
+        "acne_vulgaris": ["acne vulgaris", "jerawat", "papul", "pustul", "comedonal acne", "acne-prone", "jerawat aktif", "radang jerawat"],
+        "comedones": ["komedo", "blackhead", "whitehead", "closed comedones", "open comedones", "penyumbatan pori"],
+        "acne_scar": ["acne scar", "bekas jerawat", "boxcar scar", "rolling scar", "atrophic scar", "bopeng", "scar treatment"],
+        "sebum_oily": ["kulit berminyak", "oily skin", "produksi minyak", "sebum control", "sebum"],
+        "enlarged_pores": ["pori besar", "pori-pori", "enlarged pores", "tampilan pori"],
+        "hyperpigmentation": ["hiperpigmentasi", "dark spots", "noda hitam", "flek hitam", "melasma", "pih", "post inflammatory hyperpigmentation"],
+        "dull_skin": ["kulit kusam", "mencerahkan", "brightening", "glowing", "warna kulit tidak merata", "uneven skin tone", "skin radiance"],
+        "aging_wrinkles": ["aging", "penuaan", "kerutan", "garis halus", "wrinkle", "fine lines", "kulit kendur", "anti-aging"],
+        "sensitive_barrier": ["kulit sensitif", "skin barrier", "kemerahan", "iritasi", "inflamasi", "soothing", "calming"]
+    }
+
+    doc_summary_lower = summary.lower()
+    doc_indications = [k for k, kws in clinical_taxonomy.items() if any(kw in doc_summary_lower for kw in kws)]
+
     categories = categories or []
     visibility_settings = visibility_settings or {
         "clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]
@@ -135,12 +183,13 @@ def chunk_summary_markdown(
 
     logger.info(f"Structure-aware chunking: split summary into {len(sections)} sections by ## headings.")
 
-    # Lightweight meta builder
+    # Lightweight meta builder with clean, non-redundant schema
     def _build_meta(chunk_text, entity_name, chunk_index):
+        heading_path = f"{title} > {entity_name}" if title and entity_name and title.lower() != entity_name.lower() else (entity_name or title)
         meta = {
             "source_file": source_file,
-            "entity": entity_name,
             "section": entity_name,
+            "heading_path": heading_path,
             "page": 1,
             "chunk_index": chunk_index,
             "knowledge_id": knowledge_id,
@@ -148,12 +197,16 @@ def chunk_summary_markdown(
             "file_hash": file_hash,
             "title": title,
             "document_type": doc_type,
+            "related_products": doc_related_products,
+            "related_treatments": doc_related_treatments,
             "clinics": visibility_settings.get("clinics", ["all"]),
             "doctor_types": visibility_settings.get("doctor_types", ["all"]),
             "doctors": visibility_settings.get("doctors", ["all"]),
         }
-        heading_path = f"{title} > {entity_name}" if title and entity_name and title.lower() != entity_name.lower() else (entity_name or title)
-        meta["heading_path"] = heading_path
+
+        chunk_txt_lower = (chunk_text or "").lower()
+        chunk_inds = [k for k, kws in clinical_taxonomy.items() if any(kw in chunk_txt_lower for kw in kws)]
+        meta["indications"] = list(dict.fromkeys(doc_indications + chunk_inds))
 
         if doc_type == "TREATMENT":
             meta["treatment_name"] = title if title else entity_name
@@ -164,6 +217,8 @@ def chunk_summary_markdown(
             img_matches = re.findall(r'!\[.*?\]\(([^\s\)]+)\)', chunk_text)
             if img_matches:
                 meta["image_url"] = img_matches[0]
+            elif default_image_url:
+                meta["image_url"] = default_image_url
 
             # Extract SKU
             sku_match = re.search(
