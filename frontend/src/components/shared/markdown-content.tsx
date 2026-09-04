@@ -5,7 +5,13 @@ import remarkGfm from "remark-gfm";
 
 export function resolveImageUrl(src?: string | null): string {
 	if (!src) return "";
-	const trimmed = src.trim();
+	let trimmed = src.trim();
+
+	// Normalize hallucinated `https://api/` or `http://api/` prefixes
+	if (/^https?:\/\/api\//i.test(trimmed)) {
+		trimmed = trimmed.replace(/^https?:\/\/api\//i, "/api/");
+	}
+
 	if (
 		trimmed.startsWith("http://") ||
 		trimmed.startsWith("https://") ||
@@ -50,6 +56,19 @@ interface CardData {
 	items: KeyValueItem[];
 }
 
+interface BeforeAfterImageItem {
+	url: string;
+	alt?: string;
+	description?: string;
+}
+
+interface BeforeAfterData {
+	title?: string;
+	beforeImage: BeforeAfterImageItem;
+	afterImage: BeforeAfterImageItem;
+	notes?: string[];
+}
+
 function parseBulletLines(text: string): KeyValueItem[] {
 	const items: KeyValueItem[] = [];
 	const lines = text.split("\n");
@@ -72,9 +91,16 @@ function parseBulletLines(text: string): KeyValueItem[] {
 }
 
 interface Segment {
-	type: "markdown" | "product-card" | "treatment-card" | "regimen-card" | "dos-donts-card";
+	type:
+		| "markdown"
+		| "product-card"
+		| "treatment-card"
+		| "regimen-card"
+		| "dos-donts-card"
+		| "before-after-card";
 	content: string;
 	data?: CardData;
+	beforeAfterData?: BeforeAfterData;
 	extraData?: Record<string, unknown>;
 }
 
@@ -92,6 +118,10 @@ function parseMarkdownSegments(markdown: string): Segment[] {
 	// Pattern 3: Do's & Don'ts Comparison Card
 	const dosDontsPattern =
 		/###\s*(?:Anjuran\s+&\s+Larangan|Do's\s+&\s+Don'ts|Do's\s+and\s+Don'ts|Yang\s+Boleh\s+&\s+Dilarang|Instruksi\s+Pasien)\s*\n+((?:[ \t]*[-*]\s*\*\*(?:Do's?|Anjuran|Boleh|Disarankan|Don'ts?|Larangan|Dilarang|Tidak\s+Boleh)\*\*\s*[:–-][^\n]+(?:\n|$))+)/gi;
+
+	// Pattern 4: Consecutive Images / Before & After Side-by-Side Images
+	const beforeAfterPattern =
+		/!\[([^\]]*)\]\(([^)]+)\)\s*\n+!\[([^\]]*)\]\(([^)]+)\)/gi;
 
 	interface MatchRange {
 		start: number;
@@ -153,6 +183,46 @@ function parseMarkdownSegments(markdown: string): Segment[] {
 				data: { items },
 			},
 		});
+	}
+
+	let mBA: RegExpExecArray | null;
+	while ((mBA = beforeAfterPattern.exec(markdown)) !== null) {
+		const rawImg1Alt = mBA[1] || "";
+		const rawImg1Url = mBA[2] || "";
+		const rawImg2Alt = mBA[3] || "";
+		const rawImg2Url = mBA[4] || "";
+
+		if (isValidImageUrl(rawImg1Url) && isValidImageUrl(rawImg2Url)) {
+			const cleanImg1Url = resolveImageUrl(rawImg1Url);
+			const cleanImg2Url = resolveImageUrl(rawImg2Url);
+
+			const isImg1After = /sesudah|setelah|after/i.test(rawImg1Alt);
+			const isImg2Before = /sebelum|before/i.test(rawImg2Alt);
+
+			const beforeUrl = isImg1After && isImg2Before ? cleanImg2Url : cleanImg1Url;
+			const beforeAlt = isImg1After && isImg2Before ? rawImg2Alt : rawImg1Alt;
+			const afterUrl = isImg1After && isImg2Before ? cleanImg1Url : cleanImg2Url;
+			const afterAlt = isImg1After && isImg2Before ? rawImg1Alt : rawImg2Alt;
+
+			ranges.push({
+				start: mBA.index,
+				end: beforeAfterPattern.lastIndex,
+				segment: {
+					type: "before-after-card",
+					content: mBA[0],
+					beforeAfterData: {
+						beforeImage: {
+							url: beforeUrl,
+							alt: beforeAlt || "Sebelum Perawatan",
+						},
+						afterImage: {
+							url: afterUrl,
+							alt: afterAlt || "Sesudah Perawatan",
+						},
+					},
+				},
+			});
+		}
 	}
 
 	// Sort ranges by start index and filter out overlapping ranges
@@ -605,6 +675,64 @@ function DosAndDontsCard({ data }: { data: CardData }) {
 	);
 }
 
+function BeforeAfterCard({ data }: { data: BeforeAfterData }) {
+	const { beforeImage, afterImage } = data;
+
+	return (
+		<div className="not-prose my-1.5 flex flex-row flex-wrap sm:flex-nowrap gap-2 items-start">
+			{/* Left / Before Image */}
+			<span className="flex-1 min-w-40 max-w-full rounded-lg border border-zinc-200 bg-zinc-50/50 overflow-hidden align-top inline-block">
+				{/* eslint-disable-next-line @next/next/no-img-element */}
+				<img
+					src={beforeImage.url}
+					alt={beforeImage.alt || "Sebelum Perawatan"}
+					className="max-h-64 w-full object-contain cursor-pointer transition hover:opacity-90 block"
+					loading="lazy"
+					onClick={() => {
+						if (beforeImage.url) {
+							window.open(beforeImage.url, "_blank", "noopener,noreferrer");
+						}
+					}}
+					onError={(e) => {
+						const parent = e.currentTarget.parentElement;
+						if (parent) parent.style.display = "none";
+					}}
+				/>
+				{beforeImage.alt && (
+					<span className="block px-2 py-0.5 text-[11px] text-zinc-600 font-normal bg-white truncate max-w-full">
+						{beforeImage.alt}
+					</span>
+				)}
+			</span>
+
+			{/* Right / After Image */}
+			<span className="flex-1 min-w-40 max-w-full rounded-lg border border-zinc-200 bg-zinc-50/50 overflow-hidden align-top inline-block">
+				{/* eslint-disable-next-line @next/next/no-img-element */}
+				<img
+					src={afterImage.url}
+					alt={afterImage.alt || "Sesudah Perawatan"}
+					className="max-h-64 w-full object-contain cursor-pointer transition hover:opacity-90 block"
+					loading="lazy"
+					onClick={() => {
+						if (afterImage.url) {
+							window.open(afterImage.url, "_blank", "noopener,noreferrer");
+						}
+					}}
+					onError={(e) => {
+						const parent = e.currentTarget.parentElement;
+						if (parent) parent.style.display = "none";
+					}}
+				/>
+				{afterImage.alt && (
+					<span className="block px-2 py-0.5 text-[11px] text-zinc-600 font-normal bg-white truncate max-w-full">
+						{afterImage.alt}
+					</span>
+				)}
+			</span>
+		</div>
+	);
+}
+
 function extractNodeText(node: React.ReactNode): string {
 	if (!node) return "";
 	if (typeof node === "string" || typeof node === "number") {
@@ -823,6 +951,9 @@ export function MarkdownContent({
 				}
 				if (seg.type === "dos-donts-card" && seg.data) {
 					return <DosAndDontsCard key={idx} data={seg.data} />;
+				}
+				if (seg.type === "before-after-card" && seg.beforeAfterData) {
+					return <BeforeAfterCard key={idx} data={seg.beforeAfterData} />;
 				}
 				return (
 					<ReactMarkdown key={idx} remarkPlugins={[remarkGfm]} components={mergedComponents}>
