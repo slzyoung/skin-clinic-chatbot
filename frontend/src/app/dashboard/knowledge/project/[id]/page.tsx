@@ -11,6 +11,8 @@ import { AttachProjectDialog } from "@/app/dashboard/knowledge/components/attach
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { SearchBar } from "@/components/shared/search-bar";
 import { useDebounce } from "@/hooks/use-debounce";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -276,21 +278,35 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 		);
 	};
 
-	const filteredList = displayRows
-		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
-		?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
-		?.filter(
-			(item) =>
-				item.title.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-				item.allFileNames.some((f) => f.toLowerCase().includes(debouncedSearch.toLowerCase())) ||
-				item.description.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-				item.categories.some((c) => c.toLowerCase().includes(debouncedSearch.toLowerCase())),
-		)
-		.sort((a, b) => {
-			const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-			const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-			return timeB - timeA;
-		});
+	const filteredList = useMemo(() => {
+		return displayRows
+			?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
+			?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
+			?.filter(
+				(item) =>
+					item.title.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+					item.allFileNames.some((f) => f.toLowerCase().includes(debouncedSearch.toLowerCase())) ||
+					item.description.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+					item.categories.some((c) => c.toLowerCase().includes(debouncedSearch.toLowerCase())),
+			)
+			.sort((a, b) => {
+				const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+				const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+				return timeB - timeA;
+			});
+	}, [displayRows, statusFilter, categoryFilter, debouncedSearch]);
+
+	const {
+		page,
+		pageSize,
+		totalPages,
+		totalItems,
+		paginatedItems,
+		setPage,
+		setPageSize,
+		startIndex,
+		endIndex,
+	} = usePagination({ items: filteredList, initialPageSize: 10 });
 
 	const hasActiveFilters = searchQuery.trim() !== "" || statusFilter !== "ALL" || categoryFilter !== "ALL";
 
@@ -298,6 +314,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 		setSearchQuery("");
 		setStatusFilter("ALL");
 		setCategoryFilter("ALL");
+		setPage(1);
 	};
 
 	const getStatusBadge = (status: string) => {
@@ -560,7 +577,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 										</TableCell>
 									</TableRow>
 								) : (
-									filteredList?.map((row) => (
+									!isLoading &&
+									paginatedItems?.map((row) => (
 										<TableRow
 											key={row.isBatch ? `batch-${row.batchId}` : `doc-${row.id}`}
 											className="hover:bg-gray-50/60 cursor-pointer"
@@ -692,6 +710,18 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 							</TableBody>
 						</Table>
 					</div>
+
+					<DataTablePagination
+						page={page}
+						pageSize={pageSize}
+						totalPages={totalPages}
+						totalItems={totalItems}
+						startIndex={startIndex}
+						endIndex={endIndex}
+						onPageChange={setPage}
+						onPageSizeChange={setPageSize}
+						itemName="documents"
+					/>
 				</div>
 			</div>
 

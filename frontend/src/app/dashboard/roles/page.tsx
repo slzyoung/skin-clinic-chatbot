@@ -19,6 +19,8 @@ import {
 import { RoleDialog } from "./components/role-dialog";
 import { useRoles } from "./hooks/use-roles";
 import { RoleDetailResponse } from "./api/types";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 
 export default function RolesPage() {
 	const [searchQuery, setSearchQuery] = useState("");
@@ -53,6 +55,18 @@ export default function RolesPage() {
 				r.accesses?.some((a) => a.toLowerCase().includes(q)),
 		);
 	}, [rolesData, debouncedSearch]);
+
+	const {
+		page,
+		pageSize,
+		totalPages,
+		totalItems,
+		paginatedItems,
+		setPage,
+		setPageSize,
+		startIndex,
+		endIndex,
+	} = usePagination({ items: filteredRoles, initialPageSize: 10 });
 
 	return (
 		<div className="flex flex-col h-full gap-6 p-6">
@@ -106,7 +120,7 @@ export default function RolesPage() {
 									</TableCell>
 								</TableRow>
 							) : (
-								filteredRoles.map((role: RoleDetailResponse) => (
+								paginatedItems.map((role: RoleDetailResponse) => (
 									<TableRow key={role.id}>
 										<TableCell>
 											<div className="flex items-center gap-2">
@@ -168,6 +182,18 @@ export default function RolesPage() {
 						</TableBody>
 					</Table>
 				</div>
+
+				<DataTablePagination
+					page={page}
+					pageSize={pageSize}
+					totalPages={totalPages}
+					totalItems={totalItems}
+					startIndex={startIndex}
+					endIndex={endIndex}
+					onPageChange={setPage}
+					onPageSizeChange={setPageSize}
+					itemName="roles"
+				/>
 			</div>
 
 			<RoleDialog

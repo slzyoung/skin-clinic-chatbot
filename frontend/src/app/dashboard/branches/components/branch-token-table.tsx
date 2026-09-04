@@ -14,6 +14,8 @@ import {
 import { useBranches } from "../hooks/use-branches";
 import { useConfigs } from "../../configuration/hooks/use-config";
 import { ViewBranchSheet } from "./view-branch-sheet";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 
 export function BranchTokenTable() {
 	const [searchQuery, setSearchQuery] = useState("");
@@ -36,6 +38,18 @@ export function BranchTokenTable() {
 				branch.ecosystem?.toLowerCase().includes(q),
 		);
 	}, [branches, debouncedSearch]);
+
+	const {
+		page,
+		pageSize,
+		totalPages,
+		totalItems,
+		paginatedItems,
+		setPage,
+		setPageSize,
+		startIndex,
+		endIndex,
+	} = usePagination({ items: filteredBranches, initialPageSize: 10 });
 
 	return (
 		<div className="flex flex-col gap-4 w-full">
@@ -83,7 +97,7 @@ export function BranchTokenTable() {
 								</TableCell>
 							</TableRow>
 						) : (
-							filteredBranches.map((branch) => {
+							paginatedItems.map((branch) => {
 								const limit = isGlobalLimitActive
 									? Number(globalBranchLimit)
 									: (branch.token_limit ?? branch.tokensMonth ?? 0);
@@ -122,6 +136,18 @@ export function BranchTokenTable() {
 					</TableBody>
 				</Table>
 			</div>
+
+			<DataTablePagination
+				page={page}
+				pageSize={pageSize}
+				totalPages={totalPages}
+				totalItems={totalItems}
+				startIndex={startIndex}
+				endIndex={endIndex}
+				onPageChange={setPage}
+				onPageSizeChange={setPageSize}
+				itemName="branches"
+			/>
 		</div>
 	);
 }

@@ -38,6 +38,8 @@ import { useCategories } from "@/app/dashboard/category/hooks/use-categories";
 import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
 import { AttachProjectDialog } from "./attach-project-dialog";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 
 interface DisplayRowItem {
 	id: string;
@@ -271,30 +273,45 @@ export function KnowledgeTable({
 		return rows;
 	}, [knowledgeList]);
 
+	const filteredList = useMemo(() => {
+		return displayRows
+			?.filter((item) => (selectedProjectId ? item.projectId === selectedProjectId : !item.projectId))
+			?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
+			?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
+			?.filter(
+				(item) =>
+					item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+					item.allFileNames.some((f) => f.toLowerCase().includes(searchQuery.toLowerCase())) ||
+					item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+					item.categories.some((c) => c.toLowerCase().includes(searchQuery.toLowerCase())),
+			)
+			.sort((a, b) => {
+				const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+				const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+				return timeB - timeA;
+			});
+	}, [displayRows, selectedProjectId, statusFilter, categoryFilter, searchQuery]);
+
+	const {
+		page,
+		pageSize,
+		totalPages,
+		totalItems,
+		paginatedItems,
+		setPage,
+		setPageSize,
+		startIndex,
+		endIndex,
+	} = usePagination({ items: filteredList, initialPageSize: 10 });
+
 	const hasActiveFilters = statusFilter !== "ALL" || categoryFilter !== "ALL" || !!selectedProjectId;
 
 	const handleResetFilters = () => {
 		setStatusFilter("ALL");
 		setCategoryFilter("ALL");
+		setPage(1);
 		if (onClearProjectFilter) onClearProjectFilter();
 	};
-
-	const filteredList = displayRows
-		?.filter((item) => (selectedProjectId ? item.projectId === selectedProjectId : !item.projectId))
-		?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
-		?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
-		?.filter(
-			(item) =>
-				item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-				item.allFileNames.some((f) => f.toLowerCase().includes(searchQuery.toLowerCase())) ||
-				item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-				item.categories.some((c) => c.toLowerCase().includes(searchQuery.toLowerCase())),
-		)
-		.sort((a, b) => {
-			const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-			const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-			return timeB - timeA;
-		});
 
 	const getStatusBadge = (status: string) => {
 		switch (status) {
@@ -484,7 +501,7 @@ export function KnowledgeTable({
 						)}
 
 						{!isLoading &&
-							filteredList?.map((row) => (
+							paginatedItems?.map((row) => (
 								<TableRow
 									key={row.isBatch ? `batch-${row.batchId}` : `doc-${row.id}`}
 									className="hover:bg-gray-50/60 cursor-pointer"
@@ -610,6 +627,18 @@ export function KnowledgeTable({
 					</TableBody>
 				</Table>
 			</div>
+
+			<DataTablePagination
+				page={page}
+				pageSize={pageSize}
+				totalPages={totalPages}
+				totalItems={totalItems}
+				startIndex={startIndex}
+				endIndex={endIndex}
+				onPageChange={setPage}
+				onPageSizeChange={setPageSize}
+				itemName="documents"
+			/>
 
 			<AttachProjectDialog
 				isOpen={isAttachModalOpen}

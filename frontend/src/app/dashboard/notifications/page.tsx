@@ -32,6 +32,8 @@ import { cn } from "@/lib/utils";
 
 import { NOTIFICATION_KEYS } from "./api/keys";
 import { FeedbackNotification } from "./api/types";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 
 type FilterTab = "all" | "unread" | "read";
 
@@ -105,11 +107,24 @@ export default function NotificationsPage() {
 		});
 	}, [feedbacks, activeTab, doctorFilter, doctorTypeFilter]);
 
+	const {
+		page,
+		pageSize,
+		totalPages,
+		totalItems,
+		paginatedItems,
+		setPage,
+		setPageSize,
+		startIndex,
+		endIndex,
+	} = usePagination({ items: filteredFeedbacks, initialPageSize: 10 });
+
 	const hasActiveFilters = doctorFilter !== "ALL" || doctorTypeFilter !== "ALL";
 
 	const handleResetDropdownFilters = () => {
 		setDoctorFilter("ALL");
 		setDoctorTypeFilter("ALL");
+		setPage(1);
 	};
 
 	const handleMarkAllAsRead = () => {
@@ -332,7 +347,7 @@ export default function NotificationsPage() {
 					</div>
 				) : (
 					<div className="flex flex-col gap-2.5">
-						{filteredFeedbacks.map((item: FeedbackNotification) => {
+						{paginatedItems.map((item: FeedbackNotification) => {
 							const isUnread = !item.is_feedback_read;
 
 							return (
@@ -424,6 +439,18 @@ export default function NotificationsPage() {
 								</div>
 							);
 						})}
+
+						<DataTablePagination
+							page={page}
+							pageSize={pageSize}
+							totalPages={totalPages}
+							totalItems={totalItems}
+							startIndex={startIndex}
+							endIndex={endIndex}
+							onPageChange={setPage}
+							onPageSizeChange={setPageSize}
+							itemName="notifications"
+						/>
 					</div>
 				)}
 			</div>

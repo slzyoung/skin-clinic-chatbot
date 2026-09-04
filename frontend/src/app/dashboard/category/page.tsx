@@ -18,6 +18,8 @@ import { useState, useMemo } from "react";
 import { CategoryResponse } from "./api/types";
 import { CategoryDialog } from "./components/category-dialog";
 import { useCategories, useDeleteCategory } from "./hooks/use-categories";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 
 export default function CategoriesPage() {
 	const [searchQuery, setSearchQuery] = useState("");
@@ -65,6 +67,18 @@ export default function CategoriesPage() {
 		const q = debouncedSearch.toLowerCase();
 		return categories.filter((c) => c.name.toLowerCase().includes(q));
 	}, [categories, debouncedSearch]);
+
+	const {
+		page,
+		pageSize,
+		totalPages,
+		totalItems,
+		paginatedItems,
+		setPage,
+		setPageSize,
+		startIndex,
+		endIndex,
+	} = usePagination({ items: filteredCategories, initialPageSize: 10 });
 
 	return (
 		<div className="p-6 flex flex-col gap-6 h-full">
@@ -115,7 +129,7 @@ export default function CategoriesPage() {
 									</TableCell>
 								</TableRow>
 							) : (
-								filteredCategories.map((category) => (
+								paginatedItems.map((category) => (
 									<TableRow key={category.id}>
 										<TableCell>
 											<Badge
@@ -152,6 +166,18 @@ export default function CategoriesPage() {
 						</TableBody>
 					</Table>
 				</div>
+
+				<DataTablePagination
+					page={page}
+					pageSize={pageSize}
+					totalPages={totalPages}
+					totalItems={totalItems}
+					startIndex={startIndex}
+					endIndex={endIndex}
+					onPageChange={setPage}
+					onPageSizeChange={setPageSize}
+					itemName="categories"
+				/>
 			</div>
 
 			<CategoryDialog

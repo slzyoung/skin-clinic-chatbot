@@ -40,6 +40,8 @@ import { DoctorDetailsSheet } from "./components/doctor-details-sheet";
 import { UserAddSheet } from "./components/user-add-sheet";
 import { UserStaffProfileSheet } from "./components/user-staff-profile-sheet";
 import { useUsers } from "./hooks/use-users";
+import { usePagination } from "@/hooks/use-pagination";
+import { DataTablePagination } from "@/components/shared/data-table-pagination";
 
 export default function UsersPage() {
 	const [activeTab, setActiveTab] = useState<string>("staff");
@@ -128,6 +130,9 @@ export default function UsersPage() {
 			return true;
 		});
 	}, [doctorData, debouncedSearch, selectedDrType, selectedBranches, branches.length]);
+
+	const staffPagination = usePagination({ items: filteredStaff, initialPageSize: 10 });
+	const doctorPagination = usePagination({ items: filteredDoctors, initialPageSize: 10 });
 
 	const handleToggleBranch = (id: string) => {
 		setSelectedBranches((prev) =>
@@ -360,7 +365,7 @@ export default function UsersPage() {
 										</TableCell>
 									</TableRow>
 								) : (
-									filteredStaff.map((staff: UserResponse) => (
+									staffPagination.paginatedItems.map((staff: UserResponse) => (
 										<TableRow key={staff.id}>
 											<TableCell>
 												<div className="flex items-center gap-3">
@@ -407,6 +412,18 @@ export default function UsersPage() {
 							</TableBody>
 						</Table>
 					</div>
+
+					<DataTablePagination
+						page={staffPagination.page}
+						pageSize={staffPagination.pageSize}
+						totalPages={staffPagination.totalPages}
+						totalItems={staffPagination.totalItems}
+						startIndex={staffPagination.startIndex}
+						endIndex={staffPagination.endIndex}
+						onPageChange={staffPagination.setPage}
+						onPageSizeChange={staffPagination.setPageSize}
+						itemName="staff members"
+					/>
 				</TabsContent>
 
 				{/* Doctors Tab Content */}
@@ -432,7 +449,7 @@ export default function UsersPage() {
 										</TableCell>
 									</TableRow>
 								) : (
-									filteredDoctors.map((doc: UserResponse) => (
+									doctorPagination.paginatedItems.map((doc: UserResponse) => (
 										<TableRow key={doc.id}>
 											<TableCell>
 												<div className="flex items-center gap-3">
@@ -483,6 +500,18 @@ export default function UsersPage() {
 							</TableBody>
 						</Table>
 					</div>
+
+					<DataTablePagination
+						page={doctorPagination.page}
+						pageSize={doctorPagination.pageSize}
+						totalPages={doctorPagination.totalPages}
+						totalItems={doctorPagination.totalItems}
+						startIndex={doctorPagination.startIndex}
+						endIndex={doctorPagination.endIndex}
+						onPageChange={doctorPagination.setPage}
+						onPageSizeChange={doctorPagination.setPageSize}
+						itemName="doctors"
+					/>
 				</TabsContent>
 			</Tabs>
 
