@@ -98,7 +98,8 @@ async def get_general_chat_session(
     """Retrieve saved messages for a persistent General Knowledge Assistant session."""
     stmt = select(ChatSession).where(
         ChatSession.id == session_id,
-        ChatSession.session_type == "GENERAL_ASSISTANT"
+        ChatSession.session_type == "GENERAL_ASSISTANT",
+        ChatSession.user_id == current_user.id
     )
     res = await db.execute(stmt)
     session = res.scalar_one_or_none()
@@ -149,7 +150,8 @@ async def send_general_chat_message(
     """Append message to persistent session, execute RAG search/management, and persist response in DB."""
     stmt = select(ChatSession).where(
         ChatSession.id == session_id,
-        ChatSession.session_type == "GENERAL_ASSISTANT"
+        ChatSession.session_type == "GENERAL_ASSISTANT",
+        ChatSession.user_id == current_user.id
     )
     res = await db.execute(stmt)
     session = res.scalar_one_or_none()

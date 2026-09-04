@@ -325,20 +325,26 @@ async def get_chat_stats(
 ):
     """Return overview counts of users reached, sessions, ratings, and missing knowledge."""
     has_messages = select(ChatMessage.id).where(ChatMessage.session_id == ChatSession.id).exists()
-    base_where = [has_messages]
+    base_where = [has_messages, User.type == UserType.DOCTOR]
     if session_type:
         base_where.append(ChatSession.session_type == session_type)
+    else:
+        base_where.append(ChatSession.session_type == "DOCTOR")
+
     if not await has_chats_read_access(current_user, db):
         base_where.append(ChatSession.user_id == current_user.id)
     elif doctor_id:
         base_where.append(ChatSession.user_id == doctor_id)
 
-    stmt = select(
-        func.count(func.distinct(ChatSession.user_id)).label("doctors_reached"),
-        func.count(ChatSession.id).label("total_sessions"),
-        func.count(ChatSession.id).filter(ChatSession.rating == ChatRating.GOOD).label("positive_ratings"),
-        func.count(ChatSession.id).filter(ChatSession.rating == ChatRating.BAD).label("negative_ratings"),
-        func.count(ChatSession.id).filter(ChatSession.has_data_issue.is_(True)).label("missing_knowledge"),
+    stmt = (
+        select(
+            func.count(func.distinct(ChatSession.user_id)).label("doctors_reached"),
+            func.count(ChatSession.id).label("total_sessions"),
+            func.count(ChatSession.id).filter(ChatSession.rating == ChatRating.GOOD).label("positive_ratings"),
+            func.count(ChatSession.id).filter(ChatSession.rating == ChatRating.BAD).label("negative_ratings"),
+            func.count(ChatSession.id).filter(ChatSession.has_data_issue.is_(True)).label("missing_knowledge"),
+        )
+        .join(User, ChatSession.user_id == User.id)
     )
     if base_where:
         stmt = stmt.where(*base_where)
@@ -514,9 +520,10 @@ async def update_chat_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_flexible)
 ):
-    stmt = select(ChatSession).where(ChatSession.id == session_id)
-    if not await has_chats_read_access(current_user, db):
-        stmt = stmt.where(ChatSession.user_id == current_user.id)
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id,
+        ChatSession.user_id == current_user.id
+    )
         
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
@@ -612,10 +619,11 @@ async def create_chat_message(
     content: str = Form(...),
     files: Optional[List[UploadFile]] = File(None)
 ):
-    # Verify access to session
-    stmt_session = select(ChatSession).where(ChatSession.id == session_id)
-    if not await has_chats_read_access(current_user, db):
-        stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
+    # Verify access to session - message creation is only allowed for the session owner
+    stmt_session = select(ChatSession).where(
+        ChatSession.id == session_id,
+        ChatSession.user_id == current_user.id
+    )
     
     result_session = await db.execute(stmt_session)
     chat_session = result_session.scalar_one_or_none()
@@ -844,10 +852,11 @@ async def stream_chat_message(
     
     role = role.lower()
 
-    # Verify access to session
-    stmt_session = select(ChatSession).where(ChatSession.id == session_id)
-    if not await has_chats_read_access(current_user, db):
-        stmt_session = stmt_session.where(ChatSession.user_id == current_user.id)
+    # Verify access to session - stream chat is only allowed for the session owner
+    stmt_session = select(ChatSession).where(
+        ChatSession.id == session_id,
+        ChatSession.user_id == current_user.id
+    )
     
     result_session = await db.execute(stmt_session)
     chat_session = result_session.scalar_one_or_none()
