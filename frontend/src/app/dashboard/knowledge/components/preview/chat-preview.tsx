@@ -206,7 +206,16 @@ export function ChatPreview({
 	const { data: generalSession } = useGeneralChatSession(mode === "general" ? sessionId : null);
 	const sendGeneralMsg = useSendGeneralChatMessage(mode === "general" ? sessionId : null);
 
-	const [userChatMessages, setUserChatMessages] = useState<Message[]>(() => {
+	const [prevScopeId, setPrevScopeId] = useState(`${knowledgeId}-${sessionId}`);
+	const [chatTurns, setChatTurns] = useState<Message[]>([]);
+
+	if (prevScopeId !== `${knowledgeId}-${sessionId}`) {
+		setPrevScopeId(`${knowledgeId}-${sessionId}`);
+		setChatTurns([]);
+	}
+
+	const initialMsgs = useMemo(() => {
+		if (mode !== "knowledge") return [];
 		return getInitialMessages(
 			knowledge,
 			knowledgeStatus,
@@ -215,58 +224,7 @@ export function ChatPreview({
 			fileName,
 			initialPrompt,
 		);
-	});
-
-	useEffect(() => {
-		if (mode === "knowledge") {
-			const timer = setTimeout(() => {
-				setUserChatMessages((prev) => {
-					const next = getInitialMessages(
-						knowledge,
-						knowledgeStatus,
-						isEditMode,
-						aiSummary,
-						fileName,
-						initialPrompt,
-					);
-					if (next.length === 0 && prev.length > 0) {
-						return prev;
-					}
-					// If approved and not in edit mode, enforce clean single summary
-					if (knowledgeStatus === "APPROVED" && !isEditMode) {
-						return next;
-					}
-					const prevLast = prev[prev.length - 1];
-					const nextLast = next[next.length - 1];
-					if (
-						prevLast &&
-						nextLast &&
-						prevLast.role === "assistant" &&
-						nextLast.role === "assistant" &&
-						prevLast.content !== nextLast.content
-					) {
-						return next;
-					}
-					if (prev.length > next.length) {
-						return prev;
-					}
-					return next;
-				});
-			}, 0);
-			return () => clearTimeout(timer);
-		}
-	}, [
-		mode,
-		knowledgeId,
-		knowledge,
-		knowledge?.id,
-		knowledge?.metadata,
-		knowledgeStatus,
-		isEditMode,
-		aiSummary,
-		fileName,
-		initialPrompt,
-	]);
+	}, [mode, knowledge, knowledgeStatus, isEditMode, aiSummary, fileName, initialPrompt]);
 
 	const sessionMessages = generalSession?.messages;
 	const dbMessages: Message[] = useMemo(() => {
@@ -300,6 +258,7 @@ export function ChatPreview({
 	const dragCounter = useRef(0);
 	const initialPromptTriggeredRef = useRef<string | null>(null);
 	const abortControllerRef = useRef<AbortController | null>(null);
+	const viewportRef = useRef<HTMLDivElement>(null);
 
 	const isFailedState =
 		knowledgeStatus === "REJECTED" ||
@@ -321,6 +280,13 @@ export function ChatPreview({
 		setOptimisticUserMsg(null);
 		toast.info("AI generation stopped.");
 	};
+
+	// Reset scroll position to top (below tabs) when switching documents in knowledge mode
+	useEffect(() => {
+		if (mode === "knowledge" && viewportRef.current) {
+			viewportRef.current.scrollTop = 0;
+		}
+	}, [knowledgeId, mode]);
 
 	useEffect(() => {
 		if (
@@ -363,7 +329,7 @@ export function ChatPreview({
 			} else {
 				const sendInitialStateless = async () => {
 					const userMsg: Message = { role: "user", content: initialPrompt };
-					setUserChatMessages([userMsg]);
+					setChatTurns([userMsg]);
 					setIsLoading(true);
 					const controller = new AbortController();
 					abortControllerRef.current = controller;
@@ -373,7 +339,7 @@ export function ChatPreview({
 							history: [],
 						}, { signal: controller.signal });
 						const data = response.data;
-						setUserChatMessages([
+						setChatTurns([
 							userMsg,
 							{
 								role: "assistant",
@@ -481,8 +447,10 @@ export function ChatPreview({
 	const messages: Message[] = [];
 	if (mode === "general" && sessionId) {
 		messages.push(...dbMessages);
+	} else if (mode === "knowledge") {
+		messages.push(...initialMsgs, ...chatTurns);
 	} else {
-		messages.push(...userChatMessages);
+		messages.push(...chatTurns);
 	}
 	if (optimisticUserMsg) {
 		messages.push(optimisticUserMsg);
@@ -704,7 +672,7 @@ export function ChatPreview({
 		};
 
 		if (!sessionId) {
-			setUserChatMessages((prev) => [...prev, userMsg]);
+			setChatTurns((prev) => [...prev, userMsg]);
 		} else if (mode === "general") {
 			setOptimisticUserMsg(userMsg);
 		}
@@ -732,7 +700,7 @@ export function ChatPreview({
 						history: messages.map((m) => ({ role: m.role, content: m.content })),
 					}, { signal: controller.signal });
 					const data = response.data;
-					setUserChatMessages((prev) => [
+					setChatTurns((prev) => [
 						...prev,
 						{
 							role: "assistant",
@@ -778,7 +746,7 @@ export function ChatPreview({
 					: response.data.feedback
 						? response.data.feedback
 						: "I've updated the document summary based on your instructions.";
-				setUserChatMessages((prev) => [...prev, { role: "assistant", content: chatResponse }]);
+				setChatTurns((prev) => [...prev, { role: "assistant", content: chatResponse }]);
 
 				if (knowledgeId) {
 					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(knowledgeId) });
@@ -793,7 +761,7 @@ export function ChatPreview({
 					history: messages,
 				}, { signal: controller.signal });
 
-				setUserChatMessages((prev) => [
+				setChatTurns((prev) => [
 					...prev,
 					{ role: "assistant", content: response.data.answer },
 				]);
@@ -812,6 +780,10 @@ export function ChatPreview({
 		}
 	};
 
+	const isLiveChat =
+		(mode === "general" && messages.length > 0) ||
+		(mode === "knowledge" && (chatTurns.length > 0 || optimisticUserMsg !== null));
+
 	const isInputDisabled =
 		mode === "general"
 			? isProcessing
@@ -824,7 +796,7 @@ export function ChatPreview({
 		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
 			<MessageScrollerProvider>
 				<MessageScroller className="flex-1 min-h-0">
-					<MessageScrollerViewport className="px-6 sm:px-8">
+					<MessageScrollerViewport ref={viewportRef} className="px-6 sm:px-8">
 						<MessageScrollerContent className="py-8 gap-6 w-full max-w-5xl mx-auto min-w-0">
 							{isDetailLoading && (
 								<MessageScrollerItem>
@@ -975,7 +947,7 @@ export function ChatPreview({
 							)}
 
 							{messages.length > 0 && (
-								<MessageScrollerItem key="msg-0" scrollAnchor={messages.length === 1 && !isLoading}>
+								<MessageScrollerItem key="msg-0" scrollAnchor={isLiveChat && messages.length === 1 && !isLoading}>
 									<div
 										className={`flex flex-col w-full min-w-0 max-w-full ${messages[0].role === "user" ? "items-end" : "items-start"}`}
 									>
@@ -1086,7 +1058,7 @@ export function ChatPreview({
 								return (
 									<MessageScrollerItem
 										key={`msg-${actualIndex}`}
-										scrollAnchor={actualIndex === messages.length - 1 && !isLoading}
+										scrollAnchor={isLiveChat && actualIndex === messages.length - 1 && !isLoading}
 									>
 										<div
 											className={`flex flex-col w-full min-w-0 max-w-full ${msg.role === "user" ? "items-end" : "items-start"}`}

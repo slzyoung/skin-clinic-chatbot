@@ -3,8 +3,12 @@
 import { ChatPreview } from "@/app/dashboard/knowledge/components/preview/chat-preview";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { useState, forwardRef, useImperativeHandle } from "react";
-import { useKnowledgeDetail, useEditKnowledge, useDeleteKnowledge } from "../../hooks/use-knowledge";
-import { VisibilitySettings } from "../../api/types";
+import {
+	useKnowledgeDetail,
+	useEditKnowledge,
+	useDeleteKnowledge,
+} from "../../hooks/use-knowledge";
+import { KnowledgeResponse, VisibilitySettings } from "../../api/types";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
@@ -15,6 +19,7 @@ export interface BatchTabHandle {
 
 interface BatchKnowledgeTabContentProps {
 	knowledgeId: string;
+	initialKnowledge?: KnowledgeResponse;
 	isEditMode: boolean;
 	setIsEditMode: (v: boolean) => void;
 	headerNode?: React.ReactNode;
@@ -23,35 +28,64 @@ interface BatchKnowledgeTabContentProps {
 }
 
 export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledgeTabContentProps>(
-	({ knowledgeId, isEditMode, setIsEditMode, headerNode, preHeaderNode, onDeleteSuccess }, ref) => {
+	(
+		{
+			knowledgeId,
+			initialKnowledge,
+			isEditMode,
+			setIsEditMode,
+			headerNode,
+			preHeaderNode,
+			onDeleteSuccess,
+		},
+		ref,
+	) => {
 		const { data, isLoading, error } = useKnowledgeDetail(knowledgeId);
 		const editKnowledge = useEditKnowledge();
 		const deleteMutation = useDeleteKnowledge();
 		const router = useRouter();
 
-		const initialCategories = (data?.metadata?.categories as string[]) || (data?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
-		const initialVisibility = (data?.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
-		
+		const doc = data || initialKnowledge;
+
+		const initialCategories =
+			(doc?.metadata?.categories as string[]) ||
+			(doc?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) ||
+			[];
+		const initialVisibility = (doc?.metadata?.visibility_settings as VisibilitySettings) || {
+			clinics: ["all"],
+			doctor_types: ["all"],
+			doctors: ["all"],
+		};
+
 		const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
-		const [pendingVisibilitySettings, setPendingVisibilitySettings] = useState<VisibilitySettings>(initialVisibility);
-		const [pendingTitle, setPendingTitle] = useState(data?.title || "");
-		const [prevMetadataStr, setPrevMetadataStr] = useState(JSON.stringify(data?.metadata || {}));
-		const [prevTitle, setPrevTitle] = useState(data?.title);
+		const [pendingVisibilitySettings, setPendingVisibilitySettings] =
+			useState<VisibilitySettings>(initialVisibility);
+		const [pendingTitle, setPendingTitle] = useState(doc?.title || "");
+		const [prevMetadataStr, setPrevMetadataStr] = useState(JSON.stringify(doc?.metadata || {}));
+		const [prevTitle, setPrevTitle] = useState(doc?.title);
 		const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
-		if (JSON.stringify(data?.metadata || {}) !== prevMetadataStr) {
-			setPrevMetadataStr(JSON.stringify(data?.metadata || {}));
+		if (JSON.stringify(doc?.metadata || {}) !== prevMetadataStr) {
+			setPrevMetadataStr(JSON.stringify(doc?.metadata || {}));
 			setPendingCategories(initialCategories);
 			setPendingVisibilitySettings(initialVisibility);
 		}
-		
-		if (data?.title !== prevTitle && !isEditMode) {
-			setPrevTitle(data?.title);
-			setPendingTitle(data?.title || "");
+
+		if (doc?.title !== prevTitle && !isEditMode) {
+			setPrevTitle(doc?.title);
+			setPendingTitle(doc?.title || "");
 		}
 
 		const handleSave = async (newTitle?: string) => {
-			await editKnowledge.mutateAsync({ id: knowledgeId, data: { summary: data?.ai_summary || "", categories: pendingCategories, visibility_settings: pendingVisibilitySettings, title: typeof newTitle === 'string' ? newTitle : pendingTitle } });
+			await editKnowledge.mutateAsync({
+				id: knowledgeId,
+				data: {
+					summary: doc?.ai_summary || "",
+					categories: pendingCategories,
+					visibility_settings: pendingVisibilitySettings,
+					title: typeof newTitle === "string" ? newTitle : pendingTitle,
+				},
+			});
 			setIsEditMode(false);
 		};
 
@@ -69,10 +103,10 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 			handleSave,
 			handleDelete: async () => {
 				setIsDeleteModalOpen(true);
-			}
+			},
 		}));
 
-		if (error) {
+		if (error && !doc) {
 			return (
 				<div className="flex items-center justify-center h-full text-red-500">
 					Error loading document details
@@ -83,7 +117,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 		const handleCancel = () => {
 			setPendingCategories(initialCategories);
 			setPendingVisibilitySettings(initialVisibility);
-			setPendingTitle(data?.title || "");
+			setPendingTitle(doc?.title || "");
 			setIsEditMode(false);
 		};
 
@@ -94,13 +128,13 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 					{/* Left Column (Chat / Preview) */}
 					<ChatPreview
 						knowledgeId={knowledgeId}
-						knowledge={data}
-						knowledgeStatus={data?.status}
-						aiSummary={data?.ai_summary}
-						fileName={data?.file_name}
-						initialPrompt={(data?.metadata?.initial_prompt as string) || undefined}
-						files={(data?.metadata?.files as { file_name: string; summary: string }[]) || []}
-						isDetailLoading={isLoading}
+						knowledge={doc}
+						knowledgeStatus={doc?.status}
+						aiSummary={doc?.ai_summary}
+						fileName={doc?.file_name}
+						initialPrompt={(doc?.metadata?.initial_prompt as string) || undefined}
+						files={(doc?.metadata?.files as { file_name: string; summary: string }[]) || []}
+						isDetailLoading={isLoading && !doc}
 						isEditMode={isEditMode}
 						categories={pendingCategories}
 						onChangeCategories={setPendingCategories}
@@ -128,7 +162,6 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 				/>
 			</div>
 		);
-	}
+	},
 );
 BatchKnowledgeTabContent.displayName = "BatchKnowledgeTabContent";
-

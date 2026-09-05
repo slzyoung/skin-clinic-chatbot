@@ -7,9 +7,18 @@ import {
 	AttachmentMedia,
 	AttachmentTitle,
 } from "@/components/ui/attachment";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useSession } from "@/hooks/use-session";
 import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useSession } from "@/hooks/use-session";
+import { cn } from "@/lib/utils";
+import {
+	RiArrowDownSLine,
 	RiArrowLeftLine,
 	RiCheckLine,
 	RiDeleteBin7Line,
@@ -28,7 +37,11 @@ import { toast } from "sonner";
 import { useSafeBack } from "@/hooks/use-safe-back";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { IngestSuccessModal } from "@/app/dashboard/knowledge/components/preview/ingest-success-modal";
-import { useApproveBatchKnowledge, useDeleteKnowledge, useKnowledgeBatch } from "../../hooks/use-knowledge";
+import {
+	useApproveBatchKnowledge,
+	useDeleteKnowledge,
+	useKnowledgeBatch,
+} from "../../hooks/use-knowledge";
 import { BatchKnowledgeTabContent, BatchTabHandle } from "./BatchKnowledgeTabContent";
 import { BatchDocumentTabs } from "./BatchDocumentTabs";
 
@@ -80,7 +93,8 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const activeDoc = batchDocuments.find((d) => d.id === currentTab) || batchDocuments[0];
 
 	const batchSummary = (
-		batchDocuments.find((d) => (d.metadata as Record<string, unknown>)?.batch_summary)?.metadata as Record<string, unknown>
+		batchDocuments.find((d) => (d.metadata as Record<string, unknown>)?.batch_summary)
+			?.metadata as Record<string, unknown>
 	)?.batch_summary as string | undefined;
 
 	const fallbackFeedbacks = batchDocuments
@@ -92,7 +106,8 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 		})
 		.filter(Boolean);
 
-	const displayedSummary = batchSummary || (fallbackFeedbacks.length > 0 ? fallbackFeedbacks.join("\n\n") : undefined);
+	const displayedSummary =
+		batchSummary || (fallbackFeedbacks.length > 0 ? fallbackFeedbacks.join("\n\n") : undefined);
 
 	const isEditMode = editModes[currentTab] || false;
 	const hasApprovableDocs = batchDocuments.some((d) => d.status === "PENDING");
@@ -164,18 +179,103 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 		<div className="flex flex-col h-full bg-white relative">
 			{/* Header */}
 			<div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-200 justify-between bg-white/50 backdrop-blur-sm z-10 sticky top-0">
-				<div className="flex items-center gap-3">
+				<div className="flex items-center gap-3 min-w-0">
 					<Button
 						variant="ghost"
 						size="icon"
 						onClick={handleBack}
-						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 shrink-0"
 						title="Back"
 						aria-label="Back"
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>
-					<h1 className="text-base font-semibold text-zinc-900">Batch Review Session</h1>
+					<h1 className="text-base font-semibold text-zinc-900 shrink-0">Batch Review Session</h1>
+
+					<div className="h-4 w-px bg-zinc-200 shrink-0 hidden sm:block" />
+
+					{/* Header Document Picker Dropdown */}
+					<DropdownMenu>
+						{(() => {
+							const { Icon: ActiveIcon, textColor: activeTextColor } = getFileIconAndColor(
+								activeDoc?.file_name || activeDoc?.title,
+							);
+							return (
+								<DropdownMenuTrigger className="inline-flex items-center justify-between h-9 text-xs sm:text-sm font-medium gap-2 text-zinc-700 bg-white hover:bg-zinc-50 border border-gray-200 px-3 rounded-lg cursor-pointer transition-colors shadow-none w-72 sm:w-80 shrink-0">
+									<div className="flex items-center gap-2 min-w-0 flex-1 text-left">
+										<ActiveIcon className={cn("size-4 shrink-0", activeTextColor)} />
+										<span className="truncate">
+											{activeDoc?.file_name ||
+												activeDoc?.title ||
+												`Document ${batchDocuments.findIndex((d) => d.id === currentTab) + 1}`}
+										</span>
+									</div>
+									<span className="text-xs text-zinc-400 shrink-0 font-normal">
+										({batchDocuments.findIndex((d) => d.id === currentTab) + 1}/
+										{batchDocuments.length})
+									</span>
+									<RiArrowDownSLine className="size-4 text-zinc-400 shrink-0 ml-0.5" />
+								</DropdownMenuTrigger>
+							);
+						})()}
+						<DropdownMenuContent
+							align="start"
+							className="w-72 sm:w-80 max-h-80 overflow-y-auto rounded-lg border border-gray-200 p-1.5 shadow-none bg-white"
+						>
+							{batchDocuments.map((doc, idx) => {
+								const { Icon: DocIcon, textColor: docTextColor } = getFileIconAndColor(
+									doc.file_name || doc.title,
+								);
+								return (
+									<DropdownMenuItem
+										key={doc.id}
+										onClick={() => setActiveTab(doc.id)}
+										className={cn(
+											"flex items-center justify-between gap-2 text-xs py-2 px-2.5 rounded-lg cursor-pointer transition-colors",
+											doc.id === currentTab
+												? "bg-blue-50 text-blue-900 font-medium"
+												: "hover:bg-zinc-50",
+										)}
+									>
+										<div className="flex items-center gap-2 min-w-0 flex-1">
+											<span className="text-[11px] text-zinc-500 font-mono w-4 shrink-0">
+												{idx + 1}.
+											</span>
+											<DocIcon className={cn("size-3.5 shrink-0", docTextColor)} />
+											<span
+												className="truncate"
+												title={doc.file_name || doc.title || `Document ${idx + 1}`}
+											>
+												{doc.file_name || doc.title || `Document ${idx + 1}`}
+											</span>
+										</div>
+										<div className="shrink-0">
+											{doc.status === "PROCESSING" && (
+												<Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] px-1.5 py-0 rounded-lg shadow-none">
+													Processing
+												</Badge>
+											)}
+											{doc.status === "PENDING" && (
+												<Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] px-1.5 py-0 rounded-lg shadow-none">
+													Review
+												</Badge>
+											)}
+											{doc.status === "APPROVED" && (
+												<Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] px-1.5 py-0 rounded-lg shadow-none">
+													Approved
+												</Badge>
+											)}
+											{doc.status === "REJECTED" && (
+												<Badge className="bg-red-50 text-red-700 border-red-200 text-[10px] px-1.5 py-0 rounded-lg shadow-none">
+													Failed
+												</Badge>
+											)}
+										</div>
+									</DropdownMenuItem>
+								);
+							})}
+						</DropdownMenuContent>
+					</DropdownMenu>
 				</div>
 				<div className="flex items-center gap-2">
 					{hasDeleteAccess && activeDoc?.status === "PROCESSING" && (
@@ -189,17 +289,18 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 							Cancel Ingestion
 						</Button>
 					)}
-					{hasDeleteAccess && (activeDoc?.status === "PENDING" || activeDoc?.status === "REJECTED") && (
-						<Button
-							variant="outline"
-							className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
-							onClick={() => setIsDeleteDocOpen(true)}
-							disabled={deleteMutation.isPending || isLoading}
-						>
-							<RiDeleteBin7Line className="size-4" />
-							Delete Document
-						</Button>
-					)}
+					{hasDeleteAccess &&
+						(activeDoc?.status === "PENDING" || activeDoc?.status === "REJECTED") && (
+							<Button
+								variant="outline"
+								className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+								onClick={() => setIsDeleteDocOpen(true)}
+								disabled={deleteMutation.isPending || isLoading}
+							>
+								<RiDeleteBin7Line className="size-4" />
+								Delete Document
+							</Button>
+						)}
 					{hasDeleteAccess && activeDoc?.status === "APPROVED" && (
 						<Button
 							variant="outline"
@@ -239,7 +340,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 			{/* Active Tab View */}
 			<div className="flex-1 overflow-hidden flex flex-col w-full">
 				<div className="flex-1 overflow-hidden relative">
-					{batchDocuments.map((doc) => {
+					{(() => {
 						const preHeaderNode = (
 							<div className="flex flex-row flex-wrap justify-end gap-2 mb-4 self-end max-h-36 overflow-y-auto w-full min-w-0 max-w-full pr-1">
 								{batchDocuments.map((tabDoc) => {
@@ -278,7 +379,9 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 											<RiSparklingLine className="size-5 shrink-0" />
 											<h3 className="font-semibold text-sm truncate">Executive Summary</h3>
 										</div>
-										<p className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">{displayedSummary}</p>
+										<p className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">
+											{displayedSummary}
+										</p>
 									</div>
 								)}
 
@@ -292,24 +395,23 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						);
 
 						return (
-							<div
-								key={doc.id}
-								className={`absolute inset-0 m-0 flex flex-col bg-white ${currentTab !== doc.id ? "hidden" : ""}`}
-							>
+							<div key={activeDoc.id} className="absolute inset-0 m-0 flex flex-col bg-white">
 								<BatchKnowledgeTabContent
-									knowledgeId={doc.id}
+									key={activeDoc.id}
+									knowledgeId={activeDoc.id}
+									initialKnowledge={activeDoc}
 									ref={(el) => {
-										tabRefs.current[doc.id] = el;
+										tabRefs.current[activeDoc.id] = el;
 									}}
-									isEditMode={editModes[doc.id] || false}
-									setIsEditMode={(v) => setEditModes((prev) => ({ ...prev, [doc.id]: v }))}
+									isEditMode={editModes[activeDoc.id] || false}
+									setIsEditMode={(v) => setEditModes((prev) => ({ ...prev, [activeDoc.id]: v }))}
 									headerNode={headerNode}
 									preHeaderNode={preHeaderNode}
 									onDeleteSuccess={handleDeleteSuccess}
 								/>
 							</div>
 						);
-					})}
+					})()}
 				</div>
 			</div>
 
