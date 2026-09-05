@@ -16,6 +16,11 @@ class InterceptHandler(logging.Handler):
     Redirect standard logging (Uvicorn, FastAPI, SQLAlchemy, HTTPX) to Loguru.
     """
     def emit(self, record):
+        # Ignore noisy periodic 200 OK health check logs from Docker / monitoring
+        message = record.getMessage()
+        if "GET /health" in message and " 200" in message:
+            return
+
         try:
             level = logger.level(record.levelname).name
         except ValueError:
@@ -26,7 +31,7 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        logger.opt(depth=depth, exception=record.exc_info).log(level, message)
 
 def setup_logging(log_level: str = "INFO"):
     """

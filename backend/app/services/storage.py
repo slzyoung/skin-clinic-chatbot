@@ -219,7 +219,11 @@ def get_s3_object_data(s3_key: str) -> tuple:
         ctype = resp.get("ContentType", "image/png")
         return body, ctype
     except Exception as e:
-        logger.warning(f"Failed to fetch S3 object '{clean_key}': {e}")
+        err_str = str(e)
+        if "NoSuchKey" in err_str or "Not Found" in err_str or "404" in err_str:
+            logger.debug(f"S3 object '{clean_key}' not found in bucket '{_images_bucket()}': {e}")
+        else:
+            logger.warning(f"Failed to fetch S3 object '{clean_key}': {e}")
         return None, None
 
 
