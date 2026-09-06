@@ -127,6 +127,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 				<div className="flex flex-1 overflow-hidden">
 					{/* Left Column (Chat / Preview) */}
 					<ChatPreview
+						mode="knowledge"
 						knowledgeId={knowledgeId}
 						knowledge={doc}
 						knowledgeStatus={doc?.status}

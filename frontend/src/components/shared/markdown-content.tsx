@@ -18,13 +18,14 @@ export function resolveImageUrl(src?: string | null): string {
 		trimmed.startsWith("data:") ||
 		trimmed.startsWith("blob:")
 	) {
-		return trimmed;
+		return encodeURI(decodeURI(trimmed));
 	}
 	const backendBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(
 		/\/api\/?$/,
 		"",
 	);
-	return trimmed.startsWith("/") ? `${backendBase}${trimmed}` : `${backendBase}/${trimmed}`;
+	const fullUrl = trimmed.startsWith("/") ? `${backendBase}${trimmed}` : `${backendBase}/${trimmed}`;
+	return encodeURI(decodeURI(fullUrl));
 }
 
 export function isValidImageUrl(src?: string | null): boolean {
@@ -37,6 +38,7 @@ export function isValidImageUrl(src?: string | null): boolean {
 		clean === "null" ||
 		clean === "none" ||
 		clean === "#" ||
+		/new_image|placeholder|dummy|undefined|test_image|url_gambar|gambar_terlampir|url_/i.test(clean) ||
 		clean.endsWith("/image_url") ||
 		clean.endsWith("/url")
 	) {
@@ -914,6 +916,16 @@ export function stripInternalMetadata(text?: string | null): string {
 		/^[ \t]*[-*]?\s*\*\*?(?:Action|Target Knowledge(?:\s*ID)?|Total Document(?:s)?|Total Found)\*\*?\s*[:–-][^\n]*(?:\n|$)/gim,
 		"",
 	);
+
+	// 3. Normalize unencoded spaces in markdown image links ![alt](url) -> ![alt](encodedUrl)
+	cleaned = cleaned.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawUrl) => {
+		const trimmedUrl = rawUrl.trim();
+		if (trimmedUrl.includes(" ")) {
+			const encoded = trimmedUrl.replace(/ /g, "%20");
+			return `![${alt}](${encoded})`;
+		}
+		return match;
+	});
 
 	return cleaned.trim();
 }

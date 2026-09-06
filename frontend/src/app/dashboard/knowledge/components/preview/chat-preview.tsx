@@ -390,6 +390,18 @@ export function ChatPreview({
 		}
 	};
 
+	const scrollToBottomAndFocus = () => {
+		setTimeout(() => {
+			if (viewportRef.current) {
+				viewportRef.current.scrollTo({
+					top: viewportRef.current.scrollHeight,
+					behavior: "smooth",
+				});
+			}
+			textareaRef.current?.focus();
+		}, 60);
+	};
+
 	const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -433,6 +445,7 @@ export function ChatPreview({
 
 		if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
 			setAttachedFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)]);
+			scrollToBottomAndFocus();
 		}
 	};
 
@@ -441,6 +454,7 @@ export function ChatPreview({
 		if (e.clipboardData.files && e.clipboardData.files.length > 0) {
 			e.preventDefault();
 			setAttachedFiles((prev) => [...prev, ...Array.from(e.clipboardData.files)]);
+			scrollToBottomAndFocus();
 		}
 	};
 
@@ -651,7 +665,9 @@ export function ChatPreview({
 		const files = e.target.files;
 		if (files && files.length > 0) {
 			setAttachedFiles((prev) => [...prev, ...Array.from(files)]);
+			scrollToBottomAndFocus();
 		}
+		e.target.value = "";
 	};
 
 	const removeAttachedFile = (indexToRemove: number) => {
@@ -722,7 +738,7 @@ export function ChatPreview({
 					}
 				}
 			} else if (
-				(knowledgeStatus === "PENDING" || (knowledgeStatus === "APPROVED" && isEditMode)) &&
+				(mode === "knowledge" || knowledgeStatus === "PENDING" || knowledgeStatus === "APPROVED" || isEditMode || filesToSend.length > 0) &&
 				knowledgeId
 			) {
 				const endpoint = `/knowledge/${knowledgeId}/refine`;
@@ -733,8 +749,11 @@ export function ChatPreview({
 					formData.append("prompt", userMsg.content);
 					formData.append("history", JSON.stringify([...messages, userMsg]));
 					formData.append("file", filesToSend[0]);
+					formData.append("attached_file", filesToSend[0]);
 
-					response = await api.post(endpoint, formData, { signal: controller.signal });
+					response = await api.post(endpoint, formData, {
+						signal: controller.signal,
+					});
 				} else {
 					response = await api.post(endpoint, {
 						prompt: userMsg.content,
@@ -789,8 +808,7 @@ export function ChatPreview({
 			? isProcessing
 			: knowledgeStatus === "PROCESSING" ||
 				isProcessing ||
-				isDetailLoading ||
-				(knowledgeStatus === "APPROVED" && !isEditMode);
+				isDetailLoading;
 
 	return (
 		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
@@ -1156,7 +1174,7 @@ export function ChatPreview({
 					onDrop={handleDrop}
 					onPaste={handlePaste}
 				>
-					{/* Drag & Drop Visual Overlay (Flat) */}
+					{/* Drag & Drop Visual Overlay (Compact inside chatbox) */}
 					{isDragging && (
 						<div className="absolute inset-0 z-30 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-blue-500 bg-blue-50/95 pointer-events-none gap-2 p-4 text-center">
 							<div className="flex items-center justify-center size-10 rounded-full bg-blue-100 text-blue-600">
@@ -1244,11 +1262,9 @@ export function ChatPreview({
 						placeholder={
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
-								: knowledgeStatus === "APPROVED" && !isEditMode && mode !== "general"
-									? "Click 'Edit Knowledge' to refine summary..."
-									: mode === "general"
-										? "Ask about the knowledge..."
-										: "Ask questions or request adjustments..."
+								: mode === "general"
+									? "Ask about the knowledge..."
+									: "Ask questions or request adjustments..."
 						}
 						disabled={mode === "general" ? false : isInputDisabled}
 						className="w-full bg-transparent resize-none border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-zinc-900 placeholder:text-zinc-500 max-h-32 overflow-y-auto custom-scrollbar disabled:opacity-50 disabled:cursor-not-allowed"
