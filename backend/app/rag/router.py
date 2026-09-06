@@ -1,4 +1,6 @@
 import os
+import re
+import time
 import json
 import asyncio
 from typing import List, Optional, Dict, Any, Union
@@ -152,10 +154,62 @@ def auto_embed_images_in_summary(
     4. Detects product packaging images and places them in the relevant Product Information section.
     5. Falls back cleanly to the first major topical subsection (##) if no specific heading matches.
     """
-    if not summary or not images_or_urls:
-        return summary or ""
+    # Check if summary has a | BEFORE | AFTER | table with empty cells: |  |  |
+    ba_table_pattern = re.compile(r'(\|\s*BEFORE\s*\|\s*AFTER\s*\|\s*\n\|\s*\-\-\-\s*\|\s*\-\-\-\s*\|\s*\n)\|\s*\|\s*\|\s*\n', re.IGNORECASE)
+    
+    # Extract asset URLs
+    urls = []
+    for item in images_or_urls:
+        if isinstance(item, dict) and item.get("url"):
+            urls.append(item["url"].strip())
+        elif isinstance(item, str) and item.strip():
+            urls.append(item.strip())
 
-    import re
+    updated = summary
+
+    # Case 1: 3 images (device, before, after) + empty Before/After table
+    if len(urls) >= 3 and ba_table_pattern.search(updated):
+        img_device = urls[0]
+        img_before = urls[1]
+        img_after = urls[2]
+
+        # Discover specific treatment name from markdown dynamically
+        t_match = re.search(r'(?:-\s*)?\*\*(?:Jenis|Nama)\s+Treatment\*\*\s*[:=]\s*([^\n\r\|]+)', updated, re.IGNORECASE)
+        if not t_match:
+            t_match = re.search(r'\b(?:Jenis|Nama)\s+Treatment\s*[:=]\s*([^\n\r\|]+)', updated, re.IGNORECASE)
+        if not t_match:
+            t_match = re.search(r'\|\s*(?:Jenis Treatment|Nama Treatment|Treatment)\s*\|\s*([^\|\n]+)\s*\|', updated, re.IGNORECASE)
+        
+        treatment_name = ""
+        if t_match:
+            treatment_name = t_match.group(1).strip()
+        if not treatment_name:
+            treatment_name = re.sub(r'(?i)\b(Dummy|Documentation|Detail|Dokumentasi)\b', '', title).strip()
+        
+        treatment_name = re.sub(r'[\-_/&]+', ' ', treatment_name).strip()
+        treatment_name = re.sub(r'\s+', ' ', treatment_name).strip()
+        if treatment_name and not any(k in treatment_name.lower() for k in ["treatment", "perawatan"]):
+            treatment_name = f"{treatment_name} Treatment"
+
+        # Replace empty cells in Before/After table with actual image tags
+        table_replacement = rf'\1| ![Foto Sebelum Perawatan - {treatment_name}]({img_before}) | ![Foto Sesudah Perawatan - {treatment_name}]({img_after}) |\n'
+        updated = ba_table_pattern.sub(table_replacement, updated)
+
+        if img_device not in updated:
+            alat_pattern = re.compile(r'(?mi)^(#{2,6}\s*.*?(alat|device|peralatan).*?)$')
+            m = alat_pattern.search(updated)
+            if m:
+                pos = m.end()
+                img_md = f"\n\n![Foto Treatment - {treatment_name}]({img_device})\n\n"
+                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+            else:
+                updated += f"\n\n![Foto Treatment - {treatment_name}]({img_device})"
+
+        # Clean up any leftover top-level image dump under ## Gambar Alat Treatment
+        for img in [img_before, img_after]:
+            count = updated.count(img)
+            if count > 1:
+                updated = re.sub(rf'!\[[^\]]*\]\({re.escape(img)}\)\s*\n*', '', updated, count=1)
 
     # Normalize inputs into standard asset dictionary representations
     normalized_assets = []
@@ -188,10 +242,9 @@ def auto_embed_images_in_summary(
                 "caption": title
             })
 
-    updated = summary
     for asset in normalized_assets:
         clean_u = asset["url"]
-        # If the image URL is already embedded anywhere in the Markdown summary, respect LLM's placement!
+        # If the image URL is already embedded anywhere in the Markdown summary, respect LLM/table placement!
         if clean_u in updated:
             continue
 
@@ -260,13 +313,15 @@ def auto_embed_images_in_summary(
                 updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
                 placed = True
 
-        # --- HEURISTIC 5: Match First Major Subsection (## Heading) ---
+        # --- HEURISTIC 5: Match First Major Subsection (## Heading, excluding Ringkasan & Profil) ---
         if not placed:
-            sub_match = re.search(r'(?m)^(##\s*[^\n]+)', updated)
-            if sub_match:
-                pos = sub_match.end()
-                updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
-                placed = True
+            for m in re.finditer(r'(?m)^(##\s*([^\n]+))', updated):
+                h_title = m.group(2).strip().lower()
+                if not any(k in h_title for k in ["ringkasan", "overview", "profil", "catatan", "penutup"]):
+                    pos = m.end()
+                    updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
+                    placed = True
+                    break
 
         # --- FALLBACK: If document has only single header # Title ---
         if not placed:
@@ -276,6 +331,16 @@ def auto_embed_images_in_summary(
                 updated = updated[:pos] + img_md + updated[pos:].lstrip("\n")
             else:
                 updated = img_md.strip() + "\n\n" + updated
+
+    # Post-processing: Remove any images mistakenly placed under ## Ringkasan / ## Ringkasan Dokumen
+    # (Ringkasan should contain executive bullet points, not duplicate photo dumps)
+    ringkasan_match = re.search(r'(?mi)(##\s*Ringkasan\s*(?:Dokumen)?\b)([\s\S]*?)(?=\n##|\Z)', updated)
+    if ringkasan_match:
+        r_header = ringkasan_match.group(1)
+        r_body = ringkasan_match.group(2)
+        r_cleaned = re.sub(r'!\[[^\]]*\]\([^\)]+\)\s*\n*', '', r_body)
+        if r_cleaned != r_body:
+            updated = updated[:ringkasan_match.start()] + r_header + r_cleaned + updated[ringkasan_match.end():]
 
     return updated
 
@@ -626,7 +691,7 @@ def align_chunks_with_multitreatment(
 def resolve_pending_file(knowledge_id: str) -> Optional[str]:
     pending_dir = "data/pending"
     if not os.path.exists(pending_dir):
-        return None
+        os.makedirs(pending_dir, exist_ok=True)
     clean_p = os.path.join(pending_dir, f"{knowledge_id}.json")
     if os.path.exists(clean_p):
         return clean_p
@@ -650,12 +715,24 @@ def resolve_pending_file(knowledge_id: str) -> Optional[str]:
                         return full_p
             except Exception:
                 pass
+
+    # MinIO Source of Truth Hydration fallback
+    try:
+        from app.services.storage import get_staging_json
+        staged_data = get_staging_json(knowledge_id)
+        if staged_data:
+            with open(clean_p, "w", encoding="utf-8") as fp:
+                json.dump(staged_data, fp, indent=4, ensure_ascii=False)
+            return clean_p
+    except Exception as e:
+        logger.debug(f"MinIO staging hydration note: {e}")
+
     return None
 
 def resolve_approved_file(knowledge_id: str) -> Optional[str]:
     approved_dir = "data/output"
     if not os.path.exists(approved_dir):
-        return None
+        os.makedirs(approved_dir, exist_ok=True)
     clean_p = os.path.join(approved_dir, f"{knowledge_id}.json")
     if os.path.exists(clean_p):
         return clean_p
@@ -693,7 +770,23 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
                         return full_p
             except Exception:
                 pass
-    return fallback_match
+
+    if fallback_match:
+        return fallback_match
+
+    # MinIO Source of Truth Hydration fallback
+    try:
+        from app.services.storage import get_approved_json
+        approved_data = get_approved_json(knowledge_id)
+        if approved_data:
+            with open(clean_p, "w", encoding="utf-8") as fp:
+                json.dump(approved_data, fp, indent=4, ensure_ascii=False)
+            return clean_p
+    except Exception as e:
+        logger.debug(f"MinIO approved hydration note: {e}")
+
+    return None
+
 
 
 def detect_duplicate_lifecycle(file_hash: str, file_name: str) -> Dict[str, Any]:
@@ -799,8 +892,13 @@ def cancel_ingestion_job(knowledge_id: Union[str, uuid.UUID]):
         CANCELLED_INGESTION_IDS.add(k_str)
         logger.info(f"🛑 [INGESTION CANCELLED] Registered cancellation for knowledge_id: {k_str}")
 
+<<<<<<< HEAD
 def uncancel_ingestion_job(knowledge_id: Union[str, uuid.UUID]):
     """Reset the cancellation state for a knowledge_id when a new ingestion job starts."""
+=======
+def clear_cancellation_job(knowledge_id: Union[str, uuid.UUID]):
+    """Clear cancellation status for a knowledge_id so new ingestion attempts can proceed."""
+>>>>>>> 04991ae (feat(RAG):update)
     if knowledge_id:
         k_str = str(knowledge_id).lower()
         CANCELLED_INGESTION_IDS.discard(k_str)
@@ -960,6 +1058,11 @@ async def process_ingestion_background(
 
             with open(pending_file_path, 'w', encoding='utf-8') as f:
                 json.dump(initial_staged_doc, f, indent=4, ensure_ascii=False)
+            try:
+                from app.services.storage import upload_staging_json
+                upload_staging_json(knowledge_id, initial_staged_doc)
+            except Exception as st_err:
+                logger.debug(f"MinIO staging upload note: {st_err}")
                 
             if is_ingestion_cancelled(knowledge_id):
                 logger.info(f"🛑 [INGESTION ABORTED] Knowledge ID '{knowledge_id}' was cancelled before LLM review.")
@@ -968,6 +1071,11 @@ async def process_ingestion_background(
                         os.remove(pending_file_path)
                     except Exception:
                         pass
+                try:
+                    from app.services.storage import delete_staging_json
+                    delete_staging_json(knowledge_id)
+                except Exception:
+                    pass
                 return
 
             # ─── CANONICAL TEXT: raw parser output, NOT rewritten by LLM ───────────────────
@@ -1137,7 +1245,7 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
                         ai_formatted_summary = parsed_meta.get("formatted_summary") or parsed_meta.get("summary")
                         if ai_formatted_summary and len(str(ai_formatted_summary).strip()) > 30:
                             summary = str(ai_formatted_summary).strip()
-                            logger.info(f"✨ AI formatted document into structured Markdown ({len(summary)} chars)")
+                            logger.info(f"AI formatted document into structured Markdown ({len(summary)} chars)")
 
                     # Apply deterministic refinements if user specified price/SKU/title in user_prompt
                     if user_prompt and str(user_prompt).strip() and summary:
@@ -1167,26 +1275,40 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
         }
 
         # Collect ALL document-level image URLs from parser chunks AND from AI summary
+        all_structured_images = []
         for c in enriched_chunks:
             if isinstance(c, dict) and c.get("metadata"):
                 m = c["metadata"]
                 if m.get("image_url") and m["image_url"] not in all_doc_image_urls:
                     all_doc_image_urls.append(m["image_url"])
+                if m.get("image_urls") and isinstance(m["image_urls"], list):
+                    for u in m["image_urls"]:
+                        if u and u not in all_doc_image_urls:
+                            all_doc_image_urls.append(u)
+                if m.get("images") and isinstance(m["images"], list):
+                    for img_obj in m["images"]:
+                        if isinstance(img_obj, dict) and img_obj.get("url") and img_obj not in all_structured_images:
+                            all_structured_images.append(img_obj)
                 if m.get("s3_key") and not doc_s3_key:
                     doc_s3_key = m["s3_key"]
                 elif m.get("storage_key") and not doc_s3_key:
                     doc_s3_key = m["storage_key"]
+            if isinstance(c, dict) and c.get("text"):
+                import re as _re
+                for url in _re.findall(r'!\[.*?\]\(([^\s\)]+)\)', c["text"]):
+                    if url and url not in all_doc_image_urls:
+                        all_doc_image_urls.append(url)
 
         # Extract image URLs embedded in canonical summary markdown (from parser Vision LLM output)
         if summary:
             import re as _re
-            for url in _re.findall(r'!\[.*?\]\((https?://[^\s\)]+)\)', summary):
+            for url in _re.findall(r'!\[.*?\]\(([^\s\)]+)\)', summary):
                 if url and url not in all_doc_image_urls:
                     all_doc_image_urls.append(url)
 
         # Structured image assets
         structured_images = normalize_image_assets(
-            existing_images=None,
+            existing_images=all_structured_images,
             image_urls=all_doc_image_urls,
             default_product_name=recommended_title,
             default_role="PRODUCT_PACKAGING" if extracted_doc_type == "PRODUCT" else "GENERAL"
@@ -1263,6 +1385,13 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
         with open(pending_file_path, 'w', encoding='utf-8') as f:
             json.dump(staged_document, f, indent=4, ensure_ascii=False)
 
+        # Upload staging JSON to MinIO staging bucket (Source of Truth)
+        try:
+            from app.services.storage import upload_staging_json
+            upload_staging_json(knowledge_id, staged_document)
+        except Exception as st_err:
+            logger.debug(f"MinIO staging upload note for {knowledge_id}: {st_err}")
+
         # Remove temporary output_file if named differently (e.g. filename_parsed.json)
         if output_file and os.path.exists(output_file) and os.path.abspath(output_file) != os.path.abspath(pending_file_path):
             try:
@@ -1277,6 +1406,11 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
                     os.remove(pending_file_path)
                 except Exception:
                     pass
+            try:
+                from app.services.storage import delete_staging_json
+                delete_staging_json(knowledge_id)
+            except Exception:
+                pass
             return
 
         # Update Knowledge DB table status to PENDING
@@ -1336,7 +1470,7 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
 
         logger.info(
             f"\n"
-            f"⏱️ [SINGLE FILE INGESTION TIMING] File: '{file_name}' (ID: {knowledge_id})\n"
+            f"[SINGLE FILE INGESTION TIMING] File: '{file_name}' (ID: {knowledge_id})\n"
             f"  - Parsing Stage        : {timing_metrics['parsing_ms']} ms\n"
             f"  - LLM Review Stage     : {timing_metrics['llm_review_ms']} ms\n"
             f"  - DB Staging Stage     : {timing_metrics['database_insert_ms']} ms\n"
@@ -1824,7 +1958,11 @@ async def ingest_document(
                         logger.warning(f"{file_label} MinIO upload note: {minio_err}")
 
                     # Spawn concurrent background ingestion task (governed by _ingestion_semaphore)
+<<<<<<< HEAD
                     uncancel_ingestion_job(k_id)
+=======
+                    clear_cancellation_job(k_id)
+>>>>>>> 04991ae (feat(RAG):update)
                     asyncio.create_task(
                         process_ingestion_background(
                             k_id,
@@ -2574,6 +2712,12 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
 
         with open(pending_file, "w", encoding="utf-8") as f:
             json.dump(final_updated_data, f, indent=4, ensure_ascii=False)
+
+        try:
+            from app.services.storage import upload_staging_json
+            upload_staging_json(k_id, final_updated_data)
+        except Exception as st_err:
+            logger.debug(f"MinIO staging upload note: {st_err}")
             
         return final_updated_data
     except Exception as e:
@@ -2906,6 +3050,12 @@ async def edit_approved_document(
         with open(approved_file, "w", encoding="utf-8") as f:
             json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
 
+        try:
+            from app.services.storage import upload_approved_json
+            upload_approved_json(knowledge_id, approved_doc_structure)
+        except Exception as app_err:
+            logger.debug(f"MinIO approved upload note: {app_err}")
+
         target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
         if target_store:
             logger.info(f"Re-indexing PGVector for knowledge_id '{knowledge_id}'...")
@@ -3045,6 +3195,12 @@ async def edit_pending_document(
 
         with open(pending_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+
+        try:
+            from app.services.storage import upload_staging_json
+            upload_staging_json(knowledge_id, existing_doc)
+        except Exception as st_err:
+            logger.debug(f"MinIO staging upload note: {st_err}")
 
         return existing_doc
     except HTTPException:
@@ -3399,12 +3555,12 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
         with open(approved_file, "w", encoding="utf-8") as f:
             json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
 
-        # Sync canonical JSON to MinIO after refine
+        # Sync canonical / approved JSON to MinIO after refine
         try:
-            from app.services.storage import upload_canonical_json
-            upload_canonical_json(knowledge_id, approved_doc_structure)
+            from app.services.storage import upload_approved_json
+            upload_approved_json(knowledge_id, approved_doc_structure)
         except Exception as canon_err:
-            logger.warning(f"Could not sync canonical JSON to MinIO after refine: {canon_err}")
+            logger.warning(f"Could not sync approved JSON to MinIO after refine: {canon_err}")
         target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
         if target_store:
             logger.info(f"Re-indexing PGVector for knowledge_id '{knowledge_id}'...")
@@ -3435,30 +3591,175 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
 
 @router.post("/ingest/approve/{knowledge_id}", tags=["Ingestion"], summary="Approve Document")
 async def approve_document(
-    knowledge_id: str = Path(..., description="Document ID(s) to approve (supports single ID or comma-separated list)"),
+    knowledge_id: str = Path(..., description="Document ID(s) to approve (supports single ID, comma-separated list, batch/session ID, or 'all')"),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
     bm25: BM25Index = Depends(get_bm25_index)
 ):
     """
     Approves pending staged document(s) and indexes them into vector and BM25 search databases.
+    Supports:
+    - Single document ID (e.g. '3dc6c820-...')
+    - Comma-separated list of document IDs (e.g. 'id1,id2')
+    - Batch/Session ID (e.g. 'eda14712-...') -> expands to approve all documents in that session
+    - 'all' -> discovers and approves all pending documents across local disk and MinIO
     """
-    targets = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() not in ("string", "all")]
-
-    if not targets:
+    raw_parts = [k.strip() for k in knowledge_id.split(",") if k and k.strip() and k.strip().lower() != "string"]
+    if not raw_parts:
         raise HTTPException(status_code=400, detail="At least one valid knowledge_id must be provided.")
+
+    pending_dir = "data/pending"
+    targets = []
+
+    # 1. Handle "all" keyword
+    if any(p.lower() == "all" for p in raw_parts):
+        all_ids = set()
+        # Scan local pending directory
+        if os.path.exists(pending_dir):
+            for f in os.listdir(pending_dir):
+                if f.endswith(".json") and f != "bm25_index.pkl":
+                    kid = f.replace("_parsed.json", "").replace(".json", "")
+                    if kid:
+                        all_ids.add(kid)
+        # Scan MinIO staging bucket
+        try:
+            from app.services.storage import _get_client, _staging_bucket
+            s3 = _get_client()
+            if s3:
+                res = s3.list_objects_v2(Bucket=_staging_bucket())
+                for obj in res.get("Contents", []):
+                    k = obj["Key"]
+                    if k.endswith(".json"):
+                        all_ids.add(k.replace(".json", ""))
+        except Exception as s3_err:
+            logger.debug(f"MinIO staging scan note: {s3_err}")
+        # Scan PostgreSQL Knowledge table with status PENDING
+        try:
+            from app.core.database import engine
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                rows = conn.execute(text("SELECT id FROM knowledge WHERE status = 'PENDING' AND deleted_at IS NULL")).fetchall()
+                for r in rows:
+                    all_ids.add(str(r[0]))
+        except Exception as db_err:
+            logger.debug(f"DB pending scan note: {db_err}")
+
+        targets = list(all_ids)
+        if not targets:
+            return {"status": "success", "message": "No pending documents to approve.", "approved_ids": []}
+    else:
+        # 2. Check each part: is it a direct knowledge_id or a batch_id?
+        seen_targets = set()
+        for p in raw_parts:
+            batch_matched_kids = set()
+            # Check if p is a batch_id in local data/pending
+            if os.path.exists(pending_dir):
+                for f in os.listdir(pending_dir):
+                    if f.endswith(".json") and f != "bm25_index.pkl":
+                        fp = os.path.join(pending_dir, f)
+                        try:
+                            with open(fp, "r", encoding="utf-8") as jf:
+                                p_data = json.load(jf)
+                            b_id = p_data.get("batch_id") or p_data.get("upload_batch_id")
+                            if not b_id and p_data.get("chunks"):
+                                b_id = p_data["chunks"][0].get("metadata", {}).get("batch_id") or p_data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                            if b_id == p:
+                                kid = p_data.get("knowledge_id") or f.replace("_parsed.json", "").replace(".json", "")
+                                if kid:
+                                    batch_matched_kids.add(kid)
+                        except Exception:
+                            pass
+
+            # Check if p is a batch_id in MinIO staging
+            try:
+                from app.services.storage import _get_client, _staging_bucket
+                s3 = _get_client()
+                if s3:
+                    res = s3.list_objects_v2(Bucket=_staging_bucket())
+                    for obj in res.get("Contents", []):
+                        k = obj["Key"]
+                        if k.endswith(".json"):
+                            try:
+                                resp = s3.get_object(Bucket=_staging_bucket(), Key=k)
+                                p_data = json.loads(resp["Body"].read().decode("utf-8"))
+                                b_id = p_data.get("batch_id") or p_data.get("upload_batch_id")
+                                if not b_id and p_data.get("chunks"):
+                                    b_id = p_data["chunks"][0].get("metadata", {}).get("batch_id") or p_data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                                if b_id == p:
+                                    kid = p_data.get("knowledge_id") or k.replace(".json", "")
+                                    if kid:
+                                        batch_matched_kids.add(kid)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+            # Check if p is a batch_id in PostgreSQL Knowledge table
+            try:
+                from app.core.database import engine
+                from sqlalchemy import text
+                with engine.connect() as conn:
+                    rows = conn.execute(text(
+                        "SELECT id FROM knowledge WHERE deleted_at IS NULL AND "
+                        "(metadata ->> 'batch_id' = :b_id OR metadata ->> 'upload_batch_id' = :b_id)"
+                    ), {"b_id": p}).fetchall()
+                    for r in rows:
+                        batch_matched_kids.add(str(r[0]))
+            except Exception:
+                pass
+
+            if batch_matched_kids:
+                for k in batch_matched_kids:
+                    if k not in seen_targets:
+                        seen_targets.add(k)
+                        targets.append(k)
+            else:
+                if p not in seen_targets:
+                    seen_targets.add(p)
+                    targets.append(p)
 
     approved_results = []
     all_chunks_to_index = []
     for target_id in targets:
         pending_file = resolve_pending_file(target_id)
-        if not pending_file:
-            logger.warning(f"Pending document '{target_id}' not found for approval, skipping.")
+        data = None
+        if pending_file and os.path.exists(pending_file):
+            try:
+                with open(pending_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+
+        if not data:
+            # Try MinIO staging hydration
+            try:
+                from app.services.storage import get_staging_json
+                data = get_staging_json(target_id)
+                if data:
+                    pending_file = os.path.join("data/pending", f"{target_id}.json")
+                    os.makedirs("data/pending", exist_ok=True)
+                    with open(pending_file, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+
+        if not data:
+            # Fallback: check if already approved on disk or in MinIO approved
+            try:
+                approved_file = resolve_approved_file(target_id)
+                if approved_file and os.path.exists(approved_file):
+                    with open(approved_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                else:
+                    from app.services.storage import get_approved_json
+                    data = get_approved_json(target_id)
+            except Exception:
+                pass
+
+        if not data:
+            logger.warning(f"Pending/Approved document '{target_id}' not found for approval, skipping.")
             continue
             
         try:
-            with open(pending_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                
             chunks = data.get("chunks", []) if isinstance(data, dict) else data
             k_id = data.get("knowledge_id", target_id) if isinstance(data, dict) else target_id
             file_name = data.get("file_name", target_id) if isinstance(data, dict) else target_id
@@ -3508,19 +3809,37 @@ async def approve_document(
                     logger.warning(f"Approve: re-chunking failed, using existing chunks: {rechunk_err}")
 
             # Pre-clear existing entries for this doc from vector store and BM25
-            if pipeline.vector_store:
+            v_store = pipeline.vector_store
+            if not v_store:
                 try:
-                    pipeline.vector_store.delete_document(k_id)
+                    from app.rag.services.vector_store import PGVectorAdapter
+                    v_store = PGVectorAdapter()
+                except Exception:
+                    pass
+
+            if v_store:
+                try:
+                    v_store.delete_document(k_id)
                     if file_name and file_name != k_id:
-                        pipeline.vector_store.delete_document(file_name)
+                        v_store.delete_document(file_name)
                 except Exception as del_err:
                     logger.debug(f"Pre-approval vector deletion note: {del_err}")
 
-            if bm25:
+            bm25_inst = bm25
+            if not bm25_inst:
                 try:
-                    bm25.remove_file_chunks(k_id)
+                    from app.rag.services.rag_retriever import BM25Index
+                    bm25_inst = BM25Index()
+                    if os.path.exists(settings.bm25_index_path):
+                        bm25_inst.load(settings.bm25_index_path)
+                except Exception:
+                    pass
+
+            if bm25_inst:
+                try:
+                    bm25_inst.remove_file_chunks(k_id)
                     if file_name and file_name != k_id:
-                        bm25.remove_file_chunks(file_name)
+                        bm25_inst.remove_file_chunks(file_name)
                 except Exception as bm25_del_err:
                     logger.debug(f"Pre-approval BM25 deletion note: {bm25_del_err}")
 
@@ -3555,17 +3874,19 @@ async def approve_document(
             with open(approved_file, "w", encoding="utf-8") as f:
                 json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
                 
-            if os.path.exists(pending_file):
-                os.remove(pending_file)
+            if pending_file and os.path.exists(pending_file):
+                try:
+                    os.remove(pending_file)
+                except Exception:
+                    pass
 
-            # Upload canonical JSON to MinIO knowledge-documents bucket
+            # Promote staging to approved in MinIO and local disk
             try:
-                from app.services.storage import upload_canonical_json
-                canon_result = upload_canonical_json(k_id, approved_doc_structure)
-                if canon_result.get("status") == "success":
-                    logger.info(f"📋 Canonical JSON uploaded to MinIO for '{k_id}': {canon_result['s3_key']}")
+                from app.services.storage import promote_staging_to_approved
+                promote_staging_to_approved(k_id, approved_doc_structure)
+                logger.info(f"📋 Promoted staging to approved in MinIO for '{k_id}'")
             except Exception as canon_err:
-                logger.warning(f"Could not upload canonical JSON to MinIO for '{k_id}': {canon_err}")
+                logger.warning(f"Could not promote staging to approved in MinIO for '{k_id}': {canon_err}")
                 
             # Dual-sync update to Knowledge DB table
             try:
@@ -3604,16 +3925,33 @@ async def approve_document(
 
     # BATCH EMBEDDING & INDEXING: Index all chunks across approved documents in one single batch!
     if all_chunks_to_index:
-        if pipeline.vector_store:
+        v_store = pipeline.vector_store
+        if not v_store:
+            try:
+                from app.rag.services.vector_store import PGVectorAdapter
+                v_store = PGVectorAdapter()
+            except Exception as vs_err:
+                logger.error(f"Failed to instantiate PGVectorAdapter: {vs_err}")
+        if v_store:
             logger.info(f"⚡ [Batch Approval] Indexing {len(all_chunks_to_index)} chunks into vector store in batch...")
-            pipeline.vector_store.insert_chunks(all_chunks_to_index)
+            v_store.insert_chunks(all_chunks_to_index)
         else:
             logger.warning("No vector store instance available for batch indexing.")
 
-        if bm25:
+        bm25_inst = bm25
+        if not bm25_inst:
+            try:
+                from app.rag.services.rag_retriever import BM25Index
+                bm25_inst = BM25Index()
+                if os.path.exists(settings.bm25_index_path):
+                    bm25_inst.load(settings.bm25_index_path)
+            except Exception as bm_err:
+                logger.error(f"Failed to load BM25Index: {bm_err}")
+        if bm25_inst:
             logger.info(f"⚡ [Batch Approval] Indexing {len(all_chunks_to_index)} chunks into BM25 index...")
-            bm25.add_chunks(all_chunks_to_index)
-            bm25.save(settings.bm25_index_path)
+            bm25_inst.add_chunks(all_chunks_to_index)
+            os.makedirs(os.path.dirname(settings.bm25_index_path), exist_ok=True)
+            bm25_inst.save(settings.bm25_index_path)
 
     return {
         "status": "success", 
@@ -4729,37 +5067,44 @@ async def query_general_endpoint(
         clean_answer = _re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
         clean_answer = _re.sub(r'\{"action":\s*"[^"]+",\s*"knowledge_id":\s*"[^"]+".*?\}', '', clean_answer, flags=_re.DOTALL).strip()
 
-        # Inject authentic approved MinIO images
+        # Inject authentic approved MinIO images (Entity Isolated)
         injected_imgs = set()
         for hit in results:
             meta = hit.get("metadata", {})
             img = meta.get("image_url") or meta.get("image")
             if not img and meta.get("image_urls") and isinstance(meta.get("image_urls"), list) and len(meta["image_urls"]) > 0:
                 img = meta["image_urls"][0]
-            if not img or not str(img).startswith("http"):
+            if not img or not (str(img).startswith("http") or str(img).startswith("/api/storage/") or str(img).startswith("/storage/")):
                 continue
 
             img_filename = os.path.basename(str(img)).lower()
-            if "spot_gel" in img_filename or "spot" in img_filename:
-                target_match = "Acne Spot Gel"
-                display_label = "ERHA Acne Act Acne Spot Gel 10g"
-            elif "facial_wash" in img_filename or "wash" in img_filename or "cleanser" in img_filename:
-                target_match = "Facial Wash"
-                display_label = "Gentle Acne Facial Wash (ERHA)"
-            else:
-                target_match = meta.get("section") or meta.get("product_name") or ""
-                display_label = target_match
+            if ("pptx_img_1_" in img_filename or "pptx_img_2_" in img_filename or "cover" in img_filename) and not any(k in img_filename for k in ["before", "after", "spot", "wash", "s4_img"]):
+                continue
 
-            if not target_match or target_match in ("General", "unknown") or str(img) in injected_imgs:
+            section_name = meta.get("section") or meta.get("heading") or meta.get("product_name") or ""
+            if section_name and section_name not in ("General", "unknown", "ERHA Product List"):
+                target_match = section_name
+            else:
+                if "spot_gel" in img_filename or "spot" in img_filename:
+                    target_match = "ERHA Acneact Acne Spot Gel"
+                elif "witch_hazel" in img_filename or ("wash" in img_filename and "gentle" in img_filename):
+                    target_match = "ERHA Acneact Witch Hazel & BHA Gentle Acne Facial Wash"
+                elif "truwhite" in img_filename:
+                    target_match = "ERHA Truwhite Brightening Facial Wash"
+                elif "moisturizer" in img_filename:
+                    target_match = "ERHA Acneact Gentle Acne Moisturizer"
+                else:
+                    target_match = ""
+
+            display_label = target_match
+
+            if not target_match or str(img) in injected_imgs:
                 continue
 
             if target_match.lower() in clean_answer.lower() and str(img) not in clean_answer:
-                pattern = _re.compile(rf'(\*\*[^\*]*{_re.escape(target_match)}[^\*]*\*\*|###\s*[^\n]*{_re.escape(target_match)})', _re.IGNORECASE)
+                pattern = _re.compile(rf'(?:\n|^)(\*\*(?:ERHA|Erha)[^\*\n]*{_re.escape(target_match)}[^\*\n]*\*\*|###\s*[^\n]*{_re.escape(target_match)})', _re.IGNORECASE)
                 if pattern.search(clean_answer):
-                    clean_answer = pattern.sub(rf'![{display_label}]({img})\n\1', clean_answer, count=1)
-                    injected_imgs.add(str(img))
-                else:
-                    clean_answer = f"![{display_label}]({img})\n\n" + clean_answer
+                    clean_answer = pattern.sub(rf'\n![{display_label}]({img})\n\1', clean_answer, count=1)
                     injected_imgs.add(str(img))
 
         from app.rag.services.guardrails import OutputGuard

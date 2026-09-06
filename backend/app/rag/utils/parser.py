@@ -184,9 +184,40 @@ class DocumentParser:
         if current_page_text:
             pages.append({"page": page_num, "text": "\n\n".join(current_page_text)})
 
+<<<<<<< HEAD
         if extracted_image_urls and pages:
             pages[0]["image_urls"] = extracted_image_urls
             pages[0]["image_url"] = extracted_image_urls[0]
+=======
+        # Extract embedded images from .docx media parts and upload to MinIO in parallel queue
+        try:
+            import zipfile
+            from app.services.storage import upload_images_parallel
+
+            with zipfile.ZipFile(file_path, 'r') as z:
+                media_files = [f for f in z.namelist() if f.startswith('word/media/')]
+                upload_batch = []
+                for idx, media_name in enumerate(media_files, start=1):
+                    img_bytes = z.read(media_name)
+                    img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
+                    if img_ext in ["png", "jpg", "jpeg", "webp"]:
+                        fname = f"docx_img_{idx}_{os.path.basename(media_name)}"
+                        upload_batch.append({
+                            "content": img_bytes,
+                            "filename": fname,
+                            "content_type": f"image/{img_ext}"
+                        })
+                
+                if upload_batch:
+                    results = upload_images_parallel(upload_batch)
+                    extracted_image_urls = [r["image_url"] for r in results if r.get("image_url")]
+                    if extracted_image_urls and pages:
+                        pages[0]["image_urls"] = extracted_image_urls
+                        pages[0]["image_url"] = extracted_image_urls[0]
+                    logger.info(f"[ASYNC BATCH] Uploaded {len(extracted_image_urls)} embedded DOCX images to MinIO in parallel.")
+        except Exception as img_err:
+            logger.debug(f"DOCX embedded image extraction skipped: {img_err}")
+>>>>>>> 04991ae (feat(RAG):update)
 
         return ParseResult(pages=pages, method="fast")
 
@@ -241,25 +272,73 @@ class DocumentParser:
         # Try to extract embedded images from PDF pages and upload to MinIO in parallel
         try:
             import fitz  # PyMuPDF
+            import re
             from app.services.storage import upload_images_parallel
             doc = fitz.open(file_path)
             upload_batch = []
             
             for i, page in enumerate(doc):
-                img_list = page.get_images()
-                for img_idx, img_info in enumerate(img_list):
-                    xref = img_info[0]
+                img_infos = page.get_image_info(xrefs=True)
+                if not img_infos:
+                    raw_imgs = page.get_images()
+                    img_infos = [{"xref": im[0], "bbox": [0, 0, 0, 0]} for im in raw_imgs if len(im) > 0]
+
+                blocks = page.get_text("blocks")
+                text_blocks = [b for b in blocks if len(b) >= 5 and b[4].strip() and (len(b) < 7 or b[6] == 0)]
+                
+                seen_xrefs = set()
+                for img_idx, im in enumerate(img_infos):
+                    xref = im.get("xref")
+                    if not xref or xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
+                    
                     base_img = doc.extract_image(xref)
                     img_bytes = base_img.get("image")
                     img_ext = base_img.get("ext", "png")
-                    if img_bytes:
-                        upload_batch.append({
-                            "content": img_bytes,
-                            "filename": fname,
-                            "content_type": f"image/{img_ext}",
-                            "page_index": i,
-                            "img_fname": fname
-                        })
+                    if not img_bytes or len(img_bytes) < 100:
+                        continue
+                        
+                    bbox = im.get("bbox", [0, 0, 0, 0])
+                    img_y_mid = (bbox[1] + bbox[3]) / 2.0
+                    
+                    best_block = None
+                    best_dist = float("inf")
+                    for b in text_blocks:
+                        b_y_mid = (b[1] + b[3]) / 2.0
+                        dist = abs(b_y_mid - img_y_mid)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_block = b
+                            
+                    prod_label = ""
+                    if best_block and best_dist <= 80:
+                        lines = [l.strip() for l in best_block[4].splitlines() if l.strip()]
+                        for l in lines:
+                            if l.lower() in ("foto produk", "nama produk", "brand", "kategori", "ukuran", "deskripsi", "no", "action", "gambar"):
+                                continue
+                            prod_label = l
+                            break
+                            
+                    if not prod_label:
+                        prod_label = f"Image p{i+1}_{img_idx+1}"
+                        
+                    clean_fname = re.sub(r'[^a-zA-Z0-9_\-]', '_', prod_label)[:40].strip('_')
+                    if not clean_fname:
+                        clean_fname = f"pdf_img_p{i+1}_{img_idx+1}"
+                    else:
+                        clean_fname = f"pdf_img_p{i+1}_{img_idx+1}_{clean_fname}"
+                        
+                    fname = f"{clean_fname}.{img_ext}"
+                    
+                    upload_batch.append({
+                        "content": img_bytes,
+                        "filename": fname,
+                        "content_type": f"image/{img_ext}",
+                        "page_index": i,
+                        "img_fname": fname,
+                        "product_name": prod_label
+                    })
             
             if upload_batch:
                 results = upload_images_parallel(upload_batch)
@@ -267,16 +346,35 @@ class DocumentParser:
                     img_url = res.get("image_url")
                     p_idx = item["page_index"]
                     fname = item["img_fname"]
+                    prod_name = item.get("product_name") or fname
                     if img_url and p_idx < len(pages):
                         if "image_urls" not in pages[p_idx]:
                             pages[p_idx]["image_urls"] = []
+                        if "images" not in pages[p_idx]:
+                            pages[p_idx]["images"] = []
                         pages[p_idx]["image_urls"].append(img_url)
-                        pages[p_idx]["text"] += f"\n\n![{fname}]({img_url})"
+                        pages[p_idx]["images"].append({
+                            "id": f"img_p{p_idx+1}_{len(pages[p_idx]['images'])+1}",
+                            "url": img_url,
+                            "product_name": prod_name,
+                            "caption": prod_name,
+                            "role": "PRODUCT_PACKAGING"
+                        })
+                        # Embed image tag into page text near the product if found, else append
+                        if prod_name and prod_name in pages[p_idx]["text"]:
+                            pattern = re.compile(rf'(^.*{re.escape(prod_name)}.*$)', re.MULTILINE)
+                            if pattern.search(pages[p_idx]["text"]):
+                                pages[p_idx]["text"] = pattern.sub(rf'\1\n![{prod_name}]({img_url})', pages[p_idx]["text"], count=1)
+                            else:
+                                pages[p_idx]["text"] += f"\n\n![{prod_name}]({img_url})"
+                        else:
+                            pages[p_idx]["text"] += f"\n\n![{prod_name}]({img_url})"
+                            
                 for i in range(len(pages)):
                     if pages[i].get("image_urls"):
                         pages[i]["image_url"] = pages[i]["image_urls"][0]
         except Exception as img_err:
-            logger.debug(f"PDF embedded image extraction skipped/optional: {img_err}")
+            logger.warning(f"PDF embedded image extraction failed: {img_err}", exc_info=True)
 
         # Apply Structure Reconstruction / Document Normalization on each page's extracted text
         from app.rag.utils.normalizer import normalize_document_text
@@ -416,6 +514,7 @@ class DocumentParser:
 
             prs = Presentation(file_path)
             pages = []
+            any_shape_has_image = False
 
             for slide_idx, slide in enumerate(prs.slides, start=1):
                 slide_texts = []
@@ -427,8 +526,47 @@ class DocumentParser:
                     slide_title = slide.shapes.title.text.strip()
                     slide_texts.append(f"## {slide_title}")
 
+                # 1. Detect spatial Before / After text labels on this slide
+                before_labels = []
+                after_labels = []
+                for s in slide.shapes:
+                    if s.has_text_frame:
+                        s_text = s.text_frame.text.strip().upper()
+                        if any(w in s_text for w in ["SEBELUM", "BEFORE"]):
+                            before_labels.append((s.left, s.top, s_text))
+                        elif any(w in s_text for w in ["SESUDAH", "AFTER", "SETELAH"]):
+                            after_labels.append((s.left, s.top, s_text))
+
+                # 2. Collect and classify image shapes spatially
+                img_shapes_on_slide = [s for s in slide.shapes if hasattr(s, "image")]
+                classified_images = []
+
+                if img_shapes_on_slide:
+                    any_shape_has_image = True
+                    if before_labels and after_labels and len(img_shapes_on_slide) >= 2:
+                        # Spatial proximity matching: match each image to closest label on X axis
+                        scored_shapes = []
+                        for s in img_shapes_on_slide:
+                            dist_before = min(abs(s.left - bl[0]) for bl in before_labels)
+                            dist_after = min(abs(s.left - al[0]) for al in after_labels)
+                            scored_shapes.append((s, dist_before, dist_after))
+
+                        # Shape with smallest distance to Before label is BEFORE
+                        # Shape with smallest distance to After label is AFTER
+                        # Sort so that BEFORE comes first (0), AFTER comes second (1)
+                        scored_shapes.sort(key=lambda item: item[1] - item[2])
+                        for idx, (s, d_b, d_a) in enumerate(scored_shapes):
+                            role = "CLINICAL_BEFORE" if idx == 0 else "CLINICAL_AFTER"
+                            classified_images.append((s, role))
+                    else:
+                        # Standard reading order: top-to-bottom, left-to-right
+                        sorted_shapes = sorted(img_shapes_on_slide, key=lambda s: (round(s.top / 100000), s.left))
+                        for s in sorted_shapes:
+                            classified_images.append((s, "IMAGE"))
+
+                # 3. Process non-image shapes (text & tables)
                 for shape in slide.shapes:
-                    if shape == slide.shapes.title:
+                    if shape == slide.shapes.title or hasattr(shape, "image"):
                         continue
                     # Extract text frames
                     if shape.has_text_frame:
@@ -451,21 +589,27 @@ class DocumentParser:
                                 table_rows.insert(1, delimiter)
                             slide_texts.append("\n".join(table_rows))
 
-                    # Extract embedded images in shapes
-                    elif hasattr(shape, "image"):
-                        try:
-                            from app.services.storage import upload_image
-                            img_obj = shape.image
-                            img_bytes = img_obj.blob
-                            img_ext = img_obj.ext
-                            fname = f"pptx_s{slide_idx}_img.{img_ext}"
-                            upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
-                            img_url = upload_res.get("image_url")
-                            if img_url:
-                                slide_image_urls.append(img_url)
+                # 4. Upload and append classified image shapes in deterministic order (BEFORE first, then AFTER)
+                for img_idx, (shape, role) in enumerate(classified_images, start=1):
+                    try:
+                        from app.services.storage import upload_image
+                        img_obj = shape.image
+                        img_bytes = img_obj.blob
+                        img_ext = img_obj.ext
+                        role_tag = "before" if role == "CLINICAL_BEFORE" else ("after" if role == "CLINICAL_AFTER" else f"img_{img_idx}")
+                        fname = f"pptx_s{slide_idx}_{role_tag}.{img_ext}"
+                        upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
+                        img_url = upload_res.get("image_url")
+                        if img_url:
+                            slide_image_urls.append(img_url)
+                            if role == "CLINICAL_BEFORE":
+                                slide_texts.append(f"![Foto Sebelum Perawatan - {slide_title}]({img_url})")
+                            elif role == "CLINICAL_AFTER":
+                                slide_texts.append(f"![Foto Sesudah Perawatan - {slide_title}]({img_url})")
+                            else:
                                 slide_texts.append(f"![{slide_title} Image]({img_url})")
-                        except Exception as shape_img_err:
-                            logger.debug(f"PPTX slide image shape extraction skipped: {shape_img_err}")
+                    except Exception as shape_img_err:
+                        logger.debug(f"PPTX slide image shape extraction skipped: {shape_img_err}")
 
                 # Extract speaker notes if any
                 if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
@@ -485,32 +629,37 @@ class DocumentParser:
             if not pages:
                 pages = [{"page": 1, "text": "Presentasi PowerPoint kosong."}]
 
-            # Extract embedded images from .pptx media parts zip fallback
-            try:
-                import zipfile
-                from app.services.storage import upload_image
+            # Extract embedded images from .pptx media parts zip fallback ONLY if NO shapes had images
+            if not any_shape_has_image:
+                try:
+                    import zipfile
+                    from app.services.storage import upload_images_parallel
 
-                with zipfile.ZipFile(file_path, 'r') as z:
-                    media_files = [f for f in z.namelist() if f.startswith('ppt/media/')]
-                    extracted_image_urls = []
-                    for idx, media_name in enumerate(media_files, start=1):
-                        img_bytes = z.read(media_name)
-                        img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
-                        if img_ext in ["png", "jpg", "jpeg", "webp"]:
-                            fname = f"pptx_img_{idx}_{os.path.basename(media_name)}"
-                            upload_res = upload_image(img_bytes, fname, content_type=f"image/{img_ext}")
-                            img_url = upload_res.get("image_url")
-                            if img_url:
-                                extracted_image_urls.append(img_url)
-                                logger.info(f"🖼️ Extracted and uploaded embedded PPTX image #{idx} '{media_name}' to MinIO -> {img_url}")
-                    
-                    if extracted_image_urls and pages:
-                        existing_urls = pages[0].get("image_urls", [])
-                        combined_urls = list(dict.fromkeys(existing_urls + extracted_image_urls))
-                        pages[0]["image_urls"] = combined_urls
-                        pages[0]["image_url"] = combined_urls[0]
-            except Exception as img_err:
-                logger.debug(f"PPTX embedded image extraction skipped: {img_err}")
+                    with zipfile.ZipFile(file_path, 'r') as z:
+                        media_files = [f for f in z.namelist() if f.startswith('ppt/media/')]
+                        upload_batch = []
+                        for idx, media_name in enumerate(media_files, start=1):
+                            img_bytes = z.read(media_name)
+                            img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
+                            if img_ext in ["png", "jpg", "jpeg", "webp"]:
+                                fname = f"pptx_img_{idx}_{os.path.basename(media_name)}"
+                                upload_batch.append({
+                                    "content": img_bytes,
+                                    "filename": fname,
+                                    "content_type": f"image/{img_ext}"
+                                })
+                        
+                        if upload_batch:
+                            results = upload_images_parallel(upload_batch)
+                            extracted_image_urls = [r["image_url"] for r in results if r.get("image_url")]
+                            if extracted_image_urls and pages:
+                                existing_urls = pages[0].get("image_urls", [])
+                                combined_urls = list(dict.fromkeys(existing_urls + extracted_image_urls))
+                                pages[0]["image_urls"] = combined_urls
+                                pages[0]["image_url"] = combined_urls[0]
+                            logger.info(f"⚡ [ASYNC BATCH] Uploaded {len(extracted_image_urls)} embedded PPTX images to MinIO in parallel.")
+                except Exception as img_err:
+                    logger.debug(f"PPTX embedded image extraction skipped: {img_err}")
 
             return ParseResult(pages=pages, method="fast")
         except Exception as e:

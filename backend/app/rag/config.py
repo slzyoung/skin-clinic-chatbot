@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     llm_generation_temperature: float = 0.0  # Default 0.0. Recommended clinical range: 0.0 - 0.2
 
     # Vector DB (PGVector) Settings
-    pg_host: str = "db"
-    pg_port: int = 5432
+    pg_host: str = "localhost"
+    pg_port: int = 50010
     pg_db: str = "arya_noble"
     pg_user: str = "postgres"
     pg_password: str = "postgres"
@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     @property
     def pg_conn_str(self) -> str:
         host = os.getenv("POSTGRES_HOST") or os.getenv("PG_HOST") or self.pg_host
-        return f"postgresql+psycopg://{self.pg_user}:{self.pg_password}@{host}:{self.pg_port}/{self.pg_db}"
+        port = os.getenv("POSTGRES_PORT") or os.getenv("PG_PORT") or self.pg_port
+        return f"postgresql+psycopg://{self.pg_user}:{self.pg_password}@{host}:{port}/{self.pg_db}"
 
 
     
