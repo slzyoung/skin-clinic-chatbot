@@ -892,16 +892,13 @@ def cancel_ingestion_job(knowledge_id: Union[str, uuid.UUID]):
         CANCELLED_INGESTION_IDS.add(k_str)
         logger.info(f"🛑 [INGESTION CANCELLED] Registered cancellation for knowledge_id: {k_str}")
 
-<<<<<<< HEAD
 def uncancel_ingestion_job(knowledge_id: Union[str, uuid.UUID]):
     """Reset the cancellation state for a knowledge_id when a new ingestion job starts."""
-=======
-def clear_cancellation_job(knowledge_id: Union[str, uuid.UUID]):
-    """Clear cancellation status for a knowledge_id so new ingestion attempts can proceed."""
->>>>>>> 04991ae (feat(RAG):update)
     if knowledge_id:
         k_str = str(knowledge_id).lower()
         CANCELLED_INGESTION_IDS.discard(k_str)
+
+clear_cancellation_job = uncancel_ingestion_job
 
 def is_ingestion_cancelled(knowledge_id: Union[str, uuid.UUID]) -> bool:
     """Check whether a knowledge ingestion job was cancelled by user."""
@@ -1958,11 +1955,7 @@ async def ingest_document(
                         logger.warning(f"{file_label} MinIO upload note: {minio_err}")
 
                     # Spawn concurrent background ingestion task (governed by _ingestion_semaphore)
-<<<<<<< HEAD
                     uncancel_ingestion_job(k_id)
-=======
-                    clear_cancellation_job(k_id)
->>>>>>> 04991ae (feat(RAG):update)
                     asyncio.create_task(
                         process_ingestion_background(
                             k_id,

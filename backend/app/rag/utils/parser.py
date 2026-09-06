@@ -184,40 +184,9 @@ class DocumentParser:
         if current_page_text:
             pages.append({"page": page_num, "text": "\n\n".join(current_page_text)})
 
-<<<<<<< HEAD
         if extracted_image_urls and pages:
             pages[0]["image_urls"] = extracted_image_urls
             pages[0]["image_url"] = extracted_image_urls[0]
-=======
-        # Extract embedded images from .docx media parts and upload to MinIO in parallel queue
-        try:
-            import zipfile
-            from app.services.storage import upload_images_parallel
-
-            with zipfile.ZipFile(file_path, 'r') as z:
-                media_files = [f for f in z.namelist() if f.startswith('word/media/')]
-                upload_batch = []
-                for idx, media_name in enumerate(media_files, start=1):
-                    img_bytes = z.read(media_name)
-                    img_ext = os.path.splitext(media_name)[1].lower().replace(".", "")
-                    if img_ext in ["png", "jpg", "jpeg", "webp"]:
-                        fname = f"docx_img_{idx}_{os.path.basename(media_name)}"
-                        upload_batch.append({
-                            "content": img_bytes,
-                            "filename": fname,
-                            "content_type": f"image/{img_ext}"
-                        })
-                
-                if upload_batch:
-                    results = upload_images_parallel(upload_batch)
-                    extracted_image_urls = [r["image_url"] for r in results if r.get("image_url")]
-                    if extracted_image_urls and pages:
-                        pages[0]["image_urls"] = extracted_image_urls
-                        pages[0]["image_url"] = extracted_image_urls[0]
-                    logger.info(f"[ASYNC BATCH] Uploaded {len(extracted_image_urls)} embedded DOCX images to MinIO in parallel.")
-        except Exception as img_err:
-            logger.debug(f"DOCX embedded image extraction skipped: {img_err}")
->>>>>>> 04991ae (feat(RAG):update)
 
         return ParseResult(pages=pages, method="fast")
 
