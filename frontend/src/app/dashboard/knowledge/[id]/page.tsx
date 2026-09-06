@@ -4,9 +4,8 @@ import { ChatPreview } from "@/app/dashboard/knowledge/components/preview/chat-p
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { Button } from "@/components/ui/button";
 import { RiArrowLeftLine, RiDeleteBin7Line, RiEdit2Line, RiCheckLine, RiStopCircleLine } from "@remixicon/react";
-import { toast } from "sonner";
 
-import { use, useState } from "react";
+import { use, useState, useEffect } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail, useEditKnowledge } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
 import { useSafeBack } from "@/hooks/use-safe-back";
@@ -37,19 +36,19 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
 	const [pendingVisibilitySettings, setPendingVisibilitySettings] = useState<VisibilitySettings>(initialVisibility);
 	const [pendingTitle, setPendingTitle] = useState(data?.title || "");
-	const [prevMetadataStr, setPrevMetadataStr] = useState(JSON.stringify(data?.metadata || {}));
-	const [prevTitle, setPrevTitle] = useState(data?.title);
 
-	if (JSON.stringify(data?.metadata || {}) !== prevMetadataStr) {
-		setPrevMetadataStr(JSON.stringify(data?.metadata || {}));
-		setPendingCategories(initialCategories);
-		setPendingVisibilitySettings(initialVisibility);
-	}
-	
-	if (data?.title !== prevTitle && !isEditMode) {
-		setPrevTitle(data?.title);
-		setPendingTitle(data?.title || "");
-	}
+	useEffect(() => {
+		if (!isEditMode && data) {
+			const timer = setTimeout(() => {
+				const cats = (data.metadata?.categories as string[]) || (data.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
+				const vis = (data.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
+				setPendingCategories(cats);
+				setPendingVisibilitySettings(vis);
+				setPendingTitle(data.title || "");
+			}, 0);
+			return () => clearTimeout(timer);
+		}
+	}, [data, isEditMode]);
 
 	const handleDelete = async () => {
 		await deleteMutation.mutateAsync(id);
@@ -87,30 +86,31 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	return (
 		<div className="flex flex-col absolute inset-0">
 			{/* Title Header with Actions */}
-			<div className="flex items-center gap-4 p-4 border-b border-gray-200 shrink-0 bg-white justify-between">
-				<div className="flex items-center gap-4">
+			<div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 shrink-0 bg-white justify-between">
+				<div className="flex items-center gap-3 flex-1 min-w-0 mr-4">
 					<Button
 						variant="ghost"
 						size="icon"
 						onClick={handleBack}
-						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+						className="size-9 rounded-lg text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 shrink-0"
 						title="Back"
 						aria-label="Back"
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>
-					<div>
+					<div className="flex-1 min-w-0 max-w-2xl">
 						{isEditMode ? (
 							<input
 								value={pendingTitle}
 								onChange={(e) => setPendingTitle(e.target.value)}
-								className="text-lg font-semibold text-gray-900 border-b border-blue-500 focus:outline-none bg-transparent"
+								className="w-full text-base font-semibold text-zinc-900 border-b border-blue-500 focus:border-blue-600 focus:outline-none bg-transparent py-0.5"
 								placeholder="Knowledge Document Title"
 							/>
 						) : (
-							<h1 className="text-lg font-semibold text-gray-900">{formatDisplayTitle(data?.title)}</h1>
+							<h1 className="text-base font-semibold text-zinc-900 truncate" title={formatDisplayTitle(data?.title)}>
+								{formatDisplayTitle(data?.title)}
+							</h1>
 						)}
-						<p className="text-sm text-zinc-600">Knowledge Document Details</p>
 					</div>
 				</div>
 
@@ -138,22 +138,33 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 						</Button>
 					)}
 					{hasWriteAccess && data?.status === "APPROVED" && (
-						<Button
-							variant={isEditMode ? "default" : "outline"}
-							className={`gap-2 ${isEditMode ? "bg-blue-600 hover:bg-blue-700 text-white" : "border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50"} rounded-lg shadow-none h-10 px-4 font-medium text-sm transition-colors cursor-pointer`}
-							disabled={isLoading || editKnowledge.isPending}
-							onClick={() => {
-								if (isEditMode) {
-									setIsSaveModalOpen(true);
-								} else {
-									toast.info("You can now edit the document categories below.");
-									setIsEditMode(true);
-								}
-							}}
-						>
-							{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
-							{isEditMode ? "Save" : "Edit Knowledge"}
-						</Button>
+						<div className="flex items-center gap-2">
+							{isEditMode && (
+								<Button
+									variant="outline"
+									className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg shadow-none h-10 px-4 font-medium text-sm transition-colors cursor-pointer"
+									disabled={isLoading || editKnowledge.isPending}
+									onClick={handleCancel}
+								>
+									Cancel
+								</Button>
+							)}
+							<Button
+								variant={isEditMode ? "default" : "outline"}
+								className={`gap-2 ${isEditMode ? "bg-blue-600 hover:bg-blue-700 text-white" : "border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50"} rounded-lg shadow-none h-10 px-4 font-medium text-sm transition-colors cursor-pointer`}
+								disabled={isLoading || editKnowledge.isPending}
+								onClick={() => {
+									if (isEditMode) {
+										setIsSaveModalOpen(true);
+									} else {
+										setIsEditMode(true);
+									}
+								}}
+							>
+								{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
+								{isEditMode ? "Save Knowledge" : "Edit Knowledge"}
+							</Button>
+						</div>
 					)}
 
 				</div>
@@ -178,7 +189,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					onChangeVisibilitySettings={setPendingVisibilitySettings}
 					title={pendingTitle}
 					onChangeTitle={setPendingTitle}
-					onSave={handleSave}
+					onSave={() => setIsSaveModalOpen(true)}
 					onCancel={handleCancel}
 				/>
 			</div>

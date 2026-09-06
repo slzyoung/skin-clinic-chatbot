@@ -2,7 +2,7 @@
 
 import { ChatPreview } from "@/app/dashboard/knowledge/components/preview/chat-preview";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
-import { useState, forwardRef, useImperativeHandle } from "react";
+import { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import {
 	useKnowledgeDetail,
 	useEditKnowledge,
@@ -14,6 +14,8 @@ import { useRouter } from "next/navigation";
 
 export interface BatchTabHandle {
 	handleSave: (newTitle?: string) => Promise<void>;
+	handleCancel: () => void;
+	triggerSave: () => void;
 	handleDelete: () => Promise<void>;
 }
 
@@ -61,20 +63,31 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 		const [pendingVisibilitySettings, setPendingVisibilitySettings] =
 			useState<VisibilitySettings>(initialVisibility);
 		const [pendingTitle, setPendingTitle] = useState(doc?.title || "");
-		const [prevMetadataStr, setPrevMetadataStr] = useState(JSON.stringify(doc?.metadata || {}));
-		const [prevTitle, setPrevTitle] = useState(doc?.title);
 		const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+		const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
 
-		if (JSON.stringify(doc?.metadata || {}) !== prevMetadataStr) {
-			setPrevMetadataStr(JSON.stringify(doc?.metadata || {}));
-			setPendingCategories(initialCategories);
-			setPendingVisibilitySettings(initialVisibility);
-		}
-
-		if (doc?.title !== prevTitle && !isEditMode) {
-			setPrevTitle(doc?.title);
-			setPendingTitle(doc?.title || "");
-		}
+		useEffect(() => {
+			if (doc && !isEditMode) {
+				const timer = setTimeout(() => {
+					setPendingCategories(
+						(doc.metadata?.categories as string[]) ||
+							(doc.metadata?.suggested_categories as Array<{ name: string }>)?.map(
+								(c) => c.name,
+							) ||
+							[],
+					);
+					setPendingVisibilitySettings(
+						(doc.metadata?.visibility_settings as VisibilitySettings) || {
+							clinics: ["all"],
+							doctor_types: ["all"],
+							doctors: ["all"],
+						},
+					);
+					setPendingTitle(doc.title || "");
+				}, 0);
+				return () => clearTimeout(timer);
+			}
+		}, [doc, isEditMode]);
 
 		const handleSave = async (newTitle?: string) => {
 			await editKnowledge.mutateAsync({
@@ -101,6 +114,10 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 
 		useImperativeHandle(ref, () => ({
 			handleSave,
+			handleCancel,
+			triggerSave: () => {
+				setIsSaveModalOpen(true);
+			},
 			handleDelete: async () => {
 				setIsDeleteModalOpen(true);
 			},
@@ -143,12 +160,27 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 						onChangeVisibilitySettings={setPendingVisibilitySettings}
 						title={pendingTitle}
 						onChangeTitle={setPendingTitle}
-						onSave={handleSave}
+						onSave={() => setIsSaveModalOpen(true)}
 						onCancel={handleCancel}
 						headerNode={headerNode}
 						preHeaderNode={preHeaderNode}
 					/>
 				</div>
+
+				{/* Save Confirmation Modal */}
+				<ConfirmationModal
+					isOpen={isSaveModalOpen}
+					onOpenChange={setIsSaveModalOpen}
+					title="Save Knowledge?"
+					description="Are you sure you want to save the changes of the knowledge? If you confirm, it will be implemented into the chatbot."
+					confirmText="Save Knowledge"
+					cancelText="Cancel"
+					isLoading={editKnowledge.isPending}
+					onConfirm={async () => {
+						await handleSave();
+						setIsSaveModalOpen(false);
+					}}
+				/>
 
 				{/* Delete Confirmation Modal */}
 				<ConfirmationModal
@@ -158,6 +190,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 					description="Are you certain you want to delete this knowledge? If you proceed, it will be removed from the chatbot."
 					confirmText="Delete Knowledge"
 					cancelText="Cancel"
+					variant="destructive"
 					isLoading={deleteMutation.isPending}
 					onConfirm={handleDelete}
 				/>

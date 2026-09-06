@@ -94,11 +94,12 @@ function getInitialMessages(
 	aiSummary: string | null | undefined,
 	fileName: string | null | undefined,
 	initialPrompt: string | undefined,
+	initialSummarySnapshot?: string,
 ): Message[] {
 	const currentSummary = aiSummary || knowledge?.ai_summary;
 
-	// When document is APPROVED and not in edit mode, display only the latest updated knowledge
-	if (knowledgeStatus === "APPROVED" && !isEditMode) {
+	// For APPROVED documents, always provide the single current approved summary as Turn 0 baseline
+	if (knowledgeStatus === "APPROVED") {
 		if (currentSummary) {
 			return [{ role: "assistant", content: currentSummary }];
 		}
@@ -110,20 +111,12 @@ function getInitialMessages(
 		| Array<{ role: "user" | "assistant"; content: string; attachmentName?: string; attachmentNames?: string[] }>
 		| undefined;
 
-	// For approved document starting edit mode, start with the current approved summary
-	if (knowledgeStatus === "APPROVED" && isEditMode) {
-		if (currentSummary) {
-			return [{ role: "assistant", content: currentSummary }];
-		}
-		return [];
-	}
-
 	const effectivePrompt =
 		(initialPrompt && initialPrompt.trim()) ||
 		(typeof meta?.initial_prompt === "string" && meta.initial_prompt.trim()) ||
 		undefined;
 	const initialSummary =
-		(meta?.initial_summary as string) || currentSummary || undefined;
+		(meta?.initial_summary as string) || initialSummarySnapshot || currentSummary || undefined;
 	const docFile = fileName || knowledge?.file_name || undefined;
 
 	// Build Turn 0
@@ -167,14 +160,14 @@ function getInitialMessages(
 		];
 	}
 
-	if (currentSummary && knowledgeStatus !== "PROCESSING") {
+	if (initialSummary && knowledgeStatus !== "PROCESSING") {
 		if (effectivePrompt) {
 			return [
 				{ role: "user", content: effectivePrompt, attachmentName: docFile },
-				{ role: "assistant", content: currentSummary },
+				{ role: "assistant", content: initialSummary },
 			];
 		}
-		return [{ role: "assistant", content: currentSummary }];
+		return [{ role: "assistant", content: initialSummary }];
 	}
 
 	return [];
@@ -208,6 +201,34 @@ export function ChatPreview({
 
 	const [prevScopeId, setPrevScopeId] = useState(`${knowledgeId}-${sessionId}`);
 	const [chatTurns, setChatTurns] = useState<Message[]>([]);
+	const [initialSnapshotMap, setInitialSnapshotMap] = useState<Record<string, string>>({});
+
+	// Capture initial summary snapshot once per knowledgeId so Turn 0 is permanently immutable
+	useEffect(() => {
+		if (knowledgeId && (knowledge?.ai_summary || aiSummary)) {
+			const meta = knowledge?.metadata as Record<string, unknown> | undefined;
+			const summary = (meta?.initial_summary as string) || knowledge?.ai_summary || aiSummary;
+			if (summary) {
+				const timer = setTimeout(() => {
+					setInitialSnapshotMap((prev) => {
+						if (prev[knowledgeId]) return prev;
+						return { ...prev, [knowledgeId]: summary };
+					});
+				}, 0);
+				return () => clearTimeout(timer);
+			}
+		}
+	}, [knowledgeId, knowledge?.ai_summary, knowledge?.metadata, aiSummary]);
+
+	// Reset active session chat turns when exiting edit mode for approved knowledge
+	useEffect(() => {
+		if (!isEditMode && knowledgeStatus === "APPROVED") {
+			const timer = setTimeout(() => {
+				setChatTurns([]);
+			}, 0);
+			return () => clearTimeout(timer);
+		}
+	}, [isEditMode, knowledgeStatus]);
 
 	if (prevScopeId !== `${knowledgeId}-${sessionId}`) {
 		setPrevScopeId(`${knowledgeId}-${sessionId}`);
@@ -223,8 +244,9 @@ export function ChatPreview({
 			aiSummary,
 			fileName,
 			initialPrompt,
+			knowledgeId ? initialSnapshotMap[knowledgeId] : undefined,
 		);
-	}, [mode, knowledge, knowledgeStatus, isEditMode, aiSummary, fileName, initialPrompt]);
+	}, [mode, knowledge, knowledgeStatus, isEditMode, aiSummary, fileName, initialPrompt, knowledgeId, initialSnapshotMap]);
 
 	const sessionMessages = generalSession?.messages;
 	const dbMessages: Message[] = useMemo(() => {
@@ -287,6 +309,13 @@ export function ChatPreview({
 			viewportRef.current.scrollTop = 0;
 		}
 	}, [knowledgeId, mode]);
+
+	// Focus chat textarea without auto-scrolling the viewport when entering edit mode
+	useEffect(() => {
+		if (isEditMode && textareaRef.current) {
+			textareaRef.current.focus({ preventScroll: true });
+		}
+	}, [isEditMode]);
 
 	useEffect(() => {
 		if (
@@ -462,7 +491,18 @@ export function ChatPreview({
 	if (mode === "general" && sessionId) {
 		messages.push(...dbMessages);
 	} else if (mode === "knowledge") {
-		messages.push(...initialMsgs, ...chatTurns);
+		// Prevent duplicate turns if initialMsgs already absorbed the turns from server metadata
+		if (initialMsgs.length > 2 && chatTurns.length > 0) {
+			const lastInitial = initialMsgs[initialMsgs.length - 1];
+			const lastChatTurn = chatTurns[chatTurns.length - 1];
+			if (lastChatTurn && lastInitial && lastInitial.content === lastChatTurn.content) {
+				messages.push(...initialMsgs);
+			} else {
+				messages.push(...initialMsgs, ...chatTurns);
+			}
+		} else {
+			messages.push(...initialMsgs, ...chatTurns);
+		}
 	} else {
 		messages.push(...chatTurns);
 	}
@@ -698,6 +738,7 @@ export function ChatPreview({
 		if (textareaRef.current) {
 			textareaRef.current.style.height = "auto";
 		}
+		scrollToBottomAndFocus();
 
 		const controller = new AbortController();
 		abortControllerRef.current = controller;
@@ -807,6 +848,7 @@ export function ChatPreview({
 		mode === "general"
 			? isProcessing
 			: knowledgeStatus === "PROCESSING" ||
+				(knowledgeStatus === "APPROVED" && !isEditMode) ||
 				isProcessing ||
 				isDetailLoading;
 
@@ -1166,7 +1208,11 @@ export function ChatPreview({
 			<div className="px-6 sm:px-8 py-4 shrink-0 w-full">
 				<div
 					className={`max-w-5xl mx-auto relative rounded-lg p-4 flex flex-col gap-3 transition-colors border shadow-none ${
-						isDragging ? "border-blue-500 bg-blue-50/50" : "border-zinc-200 bg-white"
+						isDragging
+							? "border-blue-500 bg-blue-50/50"
+							: isInputDisabled
+								? "border-zinc-200 bg-zinc-50/60"
+								: "border-zinc-200 bg-white"
 					}`}
 					onDragEnter={handleDragEnter}
 					onDragLeave={handleDragLeave}
@@ -1244,7 +1290,7 @@ export function ChatPreview({
 					<textarea
 						ref={textareaRef}
 						rows={1}
-						autoFocus
+						autoFocus={!isInputDisabled}
 						value={input}
 						onChange={(e) => {
 							setInput(e.target.value);
@@ -1262,11 +1308,13 @@ export function ChatPreview({
 						placeholder={
 							knowledgeStatus === "PROCESSING"
 								? "Waiting for ingestion to complete..."
-								: mode === "general"
-									? "Ask about the knowledge..."
-									: "Ask questions or request adjustments..."
+								: knowledgeStatus === "APPROVED" && !isEditMode
+									? "Click 'Edit Knowledge' above to make adjustments..."
+									: mode === "general"
+										? "Ask about the knowledge..."
+										: "Ask questions or request adjustments..."
 						}
-						disabled={mode === "general" ? false : isInputDisabled}
+						disabled={isInputDisabled}
 						className="w-full bg-transparent resize-none border-none shadow-none focus-visible:ring-0 px-0 outline-none text-sm text-zinc-900 placeholder:text-zinc-500 max-h-32 overflow-y-auto custom-scrollbar disabled:opacity-50 disabled:cursor-not-allowed"
 					/>
 
@@ -1288,7 +1336,7 @@ export function ChatPreview({
 								size="icon-sm"
 								onClick={() => fileInputRef.current?.click()}
 								disabled={isInputDisabled}
-								className="text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+								className="text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 disabled:opacity-40"
 								title="Attach files"
 							>
 								<RiAttachment2 className="size-4" />
@@ -1307,10 +1355,10 @@ export function ChatPreview({
 						) : (
 							<Button
 								onClick={handleSend}
-								disabled={!input.trim() && attachedFiles.length === 0}
+								disabled={isInputDisabled || (!input.trim() && attachedFiles.length === 0)}
 								size="icon"
 								title="Send (Enter) • New line (Shift+Enter)"
-								className="bg-blue-600 text-white hover:bg-blue-700 shrink-0 rounded-lg shadow-none cursor-pointer"
+								className="bg-blue-600 text-white hover:bg-blue-700 shrink-0 rounded-lg shadow-none cursor-pointer disabled:opacity-50"
 							>
 								<RiCornerDownLeftLine className="w-4 h-4" />
 							</Button>

@@ -53,13 +53,14 @@ export function BatchDocumentTabs({
 }: BatchDocumentTabsProps) {
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-	// Auto-scroll active tab into view
+	// Auto-scroll active tab horizontally within its container without scrolling the page/viewport
 	useEffect(() => {
 		const el = scrollContainerRef.current;
 		if (!el) return;
 		const activeBtn = el.querySelector(`[data-tab-id="${activeId}"]`) as HTMLElement | null;
 		if (activeBtn) {
-			activeBtn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+			const left = activeBtn.offsetLeft - el.clientWidth / 2 + activeBtn.clientWidth / 2;
+			el.scrollTo({ left, behavior: "smooth" });
 		}
 	}, [activeId]);
 

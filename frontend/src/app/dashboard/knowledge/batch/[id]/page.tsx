@@ -28,7 +28,6 @@ import {
 	RiFileTextLine,
 	RiFileWord2Line,
 	RiImage2Line,
-	RiSparklingLine,
 	RiStopCircleLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
@@ -44,6 +43,7 @@ import {
 } from "../../hooks/use-knowledge";
 import { BatchKnowledgeTabContent, BatchTabHandle } from "./BatchKnowledgeTabContent";
 import { BatchDocumentTabs } from "./BatchDocumentTabs";
+import { BatchExecutiveSummary } from "./BatchExecutiveSummary";
 
 export default function BatchKnowledgePage({ params }: { params: Promise<{ id: string }> }) {
 	const router = useRouter();
@@ -62,6 +62,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const [isSuccessOpen, setIsSuccessOpen] = useState(false);
 	const [isCancelDocOpen, setIsCancelDocOpen] = useState(false);
 	const [isDeleteDocOpen, setIsDeleteDocOpen] = useState(false);
+	const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
 	const [editModes, setEditModes] = useState<Record<string, boolean>>({});
 	const tabRefs = useRef<Record<string, BatchTabHandle | null>>({});
 
@@ -102,7 +103,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 			const feedback = (d.metadata as Record<string, unknown>)?.feedback as string | undefined;
 			if (!feedback) return null;
 			const title = d.title || `Document ${i + 1}`;
-			return `• ${title}:\n  ${feedback}`;
+			return `- **${title}**:\n  ${feedback.trim()}`;
 		})
 		.filter(Boolean);
 
@@ -112,11 +113,12 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const isEditMode = editModes[currentTab] || false;
 	const hasApprovableDocs = batchDocuments.some((d) => d.status === "PENDING");
 
-	const handleEditToggle = async () => {
+	const handleEditToggle = () => {
 		if (isEditMode) {
-			await tabRefs.current[currentTab]?.handleSave();
+			if (tabRefs.current[currentTab]) {
+				tabRefs.current[currentTab]?.triggerSave();
+			}
 		} else {
-			toast.info("You can now edit the document categories below.");
 			setEditModes((prev) => ({ ...prev, [currentTab]: true }));
 		}
 	};
@@ -313,15 +315,30 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						</Button>
 					)}
 					{hasWriteAccess && activeDoc?.status === "APPROVED" && (
-						<Button
-							variant={isEditMode ? "default" : "outline"}
-							className={`gap-2 ${isEditMode ? "bg-blue-600 hover:bg-blue-700 text-white" : "border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50"} rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none`}
-							disabled={isLoading}
-							onClick={handleEditToggle}
-						>
-							{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
-							{isEditMode ? "Save" : "Edit Knowledge"}
-						</Button>
+						<div className="flex items-center gap-2">
+							{isEditMode && (
+								<Button
+									variant="outline"
+									className="border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+									disabled={isLoading}
+									onClick={() => {
+										tabRefs.current[currentTab]?.handleCancel();
+										setEditModes((prev) => ({ ...prev, [currentTab]: false }));
+									}}
+								>
+									Cancel
+								</Button>
+							)}
+							<Button
+								variant={isEditMode ? "default" : "outline"}
+								className={`gap-2 ${isEditMode ? "bg-blue-600 hover:bg-blue-700 text-white" : "border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50"} rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none`}
+								disabled={isLoading}
+								onClick={handleEditToggle}
+							>
+								{isEditMode ? <RiCheckLine className="size-4" /> : <RiEdit2Line className="size-4" />}
+								{isEditMode ? "Save Knowledge" : "Edit Knowledge"}
+							</Button>
+						</div>
 					)}
 					{hasWriteAccess && hasApprovableDocs && (
 						<Button
@@ -374,15 +391,12 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 							<div className="flex flex-col gap-4 mb-4 w-full min-w-0 max-w-full">
 								{/* Batch Summary Box if present */}
 								{displayedSummary && (
-									<div className="bg-zinc-100/50 rounded-lg p-4 w-full min-w-0 max-w-full text-zinc-950">
-										<div className="flex items-center gap-2 text-blue-600 mb-2">
-											<RiSparklingLine className="size-5 shrink-0" />
-											<h3 className="font-semibold text-sm truncate">Executive Summary</h3>
-										</div>
-										<p className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">
-											{displayedSummary}
-										</p>
-									</div>
+									<BatchExecutiveSummary
+										summary={displayedSummary}
+										documentCount={batchDocuments.length}
+										isExpanded={isSummaryExpanded}
+										onToggleExpand={() => setIsSummaryExpanded((prev) => !prev)}
+									/>
 								)}
 
 								{/* Batch Documents Tabs Bar */}
