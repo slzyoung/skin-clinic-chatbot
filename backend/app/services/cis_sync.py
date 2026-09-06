@@ -37,32 +37,54 @@ def get_cis_public_key():
         return serialization.load_ssh_public_key(key_bytes)
     return serialization.load_pem_public_key(key_bytes)
 
+def parse_cis_int(raw_id: Any) -> Optional[int]:
+    """
+    Safely coerces CIS numeric identifiers into integers.
+    Supports integer types, numeric strings with optional whitespace, and floats.
+    Returns None if missing, empty, or non-numeric.
+    """
+    if raw_id is None:
+        return None
+    if isinstance(raw_id, (int, float)):
+        try:
+            return int(raw_id)
+        except (ValueError, TypeError, OverflowError):
+            return None
+    raw_str = str(raw_id).strip()
+    if not raw_str:
+        return None
+    try:
+        return int(raw_str)
+    except (ValueError, TypeError):
+        try:
+            f = float(raw_str)
+            if f.is_integer():
+                return int(f)
+        except (ValueError, TypeError, OverflowError):
+            pass
+        return None
+
 async def _upsert_single_branch(db: AsyncSession, data: Dict[str, Any]) -> Branch:
     """Upsert an individual branch record."""
     if not isinstance(data, dict):
         raise ValueError(f"Invalid branch data: expected dict, got {type(data).__name__}")
         
     raw_id = data.get("id") or data.get("branch_id")
-    if raw_id is None:
-        raise ValueError("Missing branch id in payload")
-    
-    try:
-        external_id = int(raw_id)
-    except (ValueError, TypeError):
-        raise ValueError(f"Invalid branch id: '{raw_id}' must be an integer")
+    external_id = parse_cis_int(raw_id)
+    if external_id is None:
+        raise ValueError(f"Invalid or missing branch id in payload: '{raw_id}' must be an integer")
         
     name = str(data.get("name") or "")
     code = data.get("code")
     ecosystem = data.get("ecosystem", "Erha")
-    status = str(data.get("status", "1"))
+    raw_status = data.get("status", 1)
+    is_inactive = str(raw_status).strip() == "0"
     
     stmt = select(Branch).where(
         func.lower(Branch.ecosystem) == ecosystem.lower(),
         Branch.external_id == external_id
     )
     branch = (await db.execute(stmt)).scalar_one_or_none()
-    
-    is_inactive = (status == "0")
     
     if not branch:
         branch = Branch(
@@ -92,15 +114,17 @@ async def upsert_branch_payload(db: AsyncSession, data: Union[Dict[str, Any], Li
         branches = []
         for item in data:
             if isinstance(item, dict):
-                branches.append(await _upsert_single_branch(db, item))
+                try:
+                    branches.append(await _upsert_single_branch(db, item))
+                except Exception as e:
+                    logger.warning(f"Skipping malformed branch record in list payload: {e}")
         return branches
     return await _upsert_single_branch(db, data)
 
 async def delete_branch_payload(db: AsyncSession, branch_id: Any, ecosystem: Optional[str] = None):
     """Soft delete a branch record."""
-    try:
-        external_id = int(branch_id)
-    except (ValueError, TypeError):
+    external_id = parse_cis_int(branch_id)
+    if external_id is None:
         return
     stmt = select(Branch).where(Branch.external_id == external_id)
     if ecosystem:
@@ -116,13 +140,9 @@ async def _upsert_single_doctor(db: AsyncSession, data: Dict[str, Any]) -> User:
         raise ValueError(f"Invalid doctor data: expected dict, got {type(data).__name__}")
         
     raw_id = data.get("id") or data.get("cis_id") or data.get("doctor_cis_id")
-    if raw_id is None:
-        raise ValueError("Missing doctor id in payload")
-        
-    try:
-        cis_id = int(raw_id)
-    except (ValueError, TypeError):
-        raise ValueError(f"Invalid doctor id: '{raw_id}' must be an integer")
+    cis_id = parse_cis_int(raw_id)
+    if cis_id is None:
+        raise ValueError(f"Invalid or missing doctor id in payload: '{raw_id}' must be an integer")
         
     name = str(data.get("name") or "")
     raw_email = data.get("email")
@@ -142,12 +162,11 @@ async def _upsert_single_doctor(db: AsyncSession, data: Dict[str, Any]) -> User:
     dr_type = data.get("user_type_name") or data.get("dr_type")
     user_type_code = str(data.get("user_type")) if data.get("user_type") is not None else None
     ecosystem = data.get("ecosystem", "Erha")
-    status = str(data.get("status", "1"))
+    raw_status = data.get("status", 1)
+    is_inactive = str(raw_status).strip() == "0"
     
     stmt = select(User).where(User.cis_id == cis_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
-    
-    is_inactive = (status == "0")
     
     if not user:
         user = User(
@@ -188,7 +207,6 @@ async def _upsert_single_doctor(db: AsyncSession, data: Dict[str, Any]) -> User:
                 continue
             b_raw_id = item.get("branch_id") or item.get("id")
             b_code = item.get("branch_code") or item.get("code")
-            b_status = str(item.get("status", "1"))
             
             dedup_key = (str(b_raw_id) if b_raw_id is not None else None, str(b_code) if b_code else None)
             if dedup_key in seen_branches:
@@ -204,15 +222,13 @@ async def _upsert_single_doctor(db: AsyncSession, data: Dict[str, Any]) -> User:
                 branch = (await db.execute(b_stmt)).scalar_one_or_none()
             
             if not branch and b_raw_id is not None:
-                try:
-                    b_ext_id = int(b_raw_id)
+                b_ext_id = parse_cis_int(b_raw_id)
+                if b_ext_id is not None:
                     b_stmt = select(Branch).where(
                         func.lower(Branch.ecosystem) == user.ecosystem.lower(),
                         Branch.external_id == b_ext_id
                     )
                     branch = (await db.execute(b_stmt)).scalar_one_or_none()
-                except (ValueError, TypeError):
-                    pass
 
             if not branch:
                 logger.warning(f"Branch not found for doctor branch mapping: {item}")
@@ -221,10 +237,7 @@ async def _upsert_single_doctor(db: AsyncSession, data: Dict[str, Any]) -> User:
             ub_stmt = select(UserBranch).where(UserBranch.user_id == user.id, UserBranch.branch_id == branch.id)
             ub = (await db.execute(ub_stmt)).scalar_one_or_none()
             
-            try:
-                status_val = int(b_status)
-            except (ValueError, TypeError):
-                status_val = 1
+            status_val = 0 if str(item.get("status", 1)).strip() == "0" else 1
 
             if not ub:
                 ub = UserBranch(user_id=user.id, branch_id=branch.id, status=status_val)
@@ -248,14 +261,19 @@ async def upsert_doctor_payload(db: AsyncSession, data: Union[Dict[str, Any], Li
         doctors = []
         for item in data:
             if isinstance(item, dict):
-                doctors.append(await _upsert_single_doctor(db, item))
+                try:
+                    doctors.append(await _upsert_single_doctor(db, item))
+                except Exception as e:
+                    logger.warning(f"Skipping malformed doctor record in list payload: {e}")
         return doctors
     return await _upsert_single_doctor(db, data)
 
-async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str, Any]]):
+async def upsert_user_branch_payload(db: AsyncSession, data_list: Union[Dict[str, Any], List[Dict[str, Any]]]):
     """Process a list of user-branch association updates."""
     if isinstance(data_list, dict):
         data_list = [data_list]
+    elif not isinstance(data_list, list):
+        data_list = []
         
     seen_mappings = set()
     for item in data_list:
@@ -264,7 +282,6 @@ async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str,
         raw_user_id = item.get("user_id") or item.get("doctor_id") or item.get("cis_id")
         raw_branch_id = item.get("branch_id")
         branch_code = item.get("branch_code") or item.get("code")
-        status = str(item.get("status", "1"))
         
         if raw_user_id is None or (raw_branch_id is None and not branch_code):
             logger.warning(f"Skipping user_branch mapping, missing user_id or branch info: {item}")
@@ -275,9 +292,9 @@ async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str,
             continue
         seen_mappings.add(dedup_key)
             
-        try:
-            user_cis_id = int(raw_user_id)
-        except (ValueError, TypeError):
+        user_cis_id = parse_cis_int(raw_user_id)
+        if user_cis_id is None:
+            logger.warning(f"Skipping user_branch mapping, invalid user_id: {raw_user_id}")
             continue
         
         u_stmt = select(User).where(User.cis_id == user_cis_id)
@@ -296,15 +313,13 @@ async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str,
             branch = (await db.execute(b_stmt)).scalar_one_or_none()
             
         if not branch and raw_branch_id is not None:
-            try:
-                branch_external_id = int(raw_branch_id)
+            branch_external_id = parse_cis_int(raw_branch_id)
+            if branch_external_id is not None:
                 b_stmt = select(Branch).where(
                     func.lower(Branch.ecosystem) == user.ecosystem.lower(),
                     Branch.external_id == branch_external_id
                 )
                 branch = (await db.execute(b_stmt)).scalar_one_or_none()
-            except (ValueError, TypeError):
-                pass
         
         if not branch:
             logger.warning(f"Skipping user_branch mapping, branch not found for user ({user_cis_id}): {item}")
@@ -313,10 +328,7 @@ async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str,
         ub_stmt = select(UserBranch).where(UserBranch.user_id == user.id, UserBranch.branch_id == branch.id)
         ub = (await db.execute(ub_stmt)).scalar_one_or_none()
         
-        try:
-            status_val = int(status)
-        except (ValueError, TypeError):
-            status_val = 1
+        status_val = 0 if str(item.get("status", 1)).strip() == "0" else 1
             
         if not ub:
             ub = UserBranch(user_id=user.id, branch_id=branch.id, status=status_val)
@@ -334,9 +346,8 @@ async def upsert_user_branch_payload(db: AsyncSession, data_list: List[Dict[str,
 
 async def delete_doctor_payload(db: AsyncSession, cis_id: Any):
     """Soft delete a doctor record."""
-    try:
-        doctor_cis_id = int(cis_id)
-    except (ValueError, TypeError):
+    doctor_cis_id = parse_cis_int(cis_id)
+    if doctor_cis_id is None:
         return
     stmt = select(User).where(User.cis_id == doctor_cis_id, User.type == UserType.DOCTOR)
     user = (await db.execute(stmt)).scalar_one_or_none()
@@ -356,6 +367,7 @@ async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]) -> Dict[str,
     Safety guards:
     - Pruning (soft-deleting local omitted records) is ONLY triggered if 'prune_omitted' is True.
     - Pruning is strictly scoped to the ecosystems present in the incoming payload.
+    - Individual malformed records are safely skipped with a warning to protect the batch.
     """
     raw_branches = data.get("branches") or data.get("branch") or []
     branches_data = raw_branches if isinstance(raw_branches, list) else [raw_branches]
@@ -374,10 +386,13 @@ async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]) -> Dict[str,
     for b_data in branches_data:
         if not isinstance(b_data, dict):
             continue
-        branch = await _upsert_single_branch(db, b_data)
-        if branch.external_id is not None:
-            pulled_branch_keys.add((branch.ecosystem.lower(), branch.external_id))
-            pulled_branch_ecosystems.add(branch.ecosystem.lower())
+        try:
+            branch = await _upsert_single_branch(db, b_data)
+            if branch.external_id is not None:
+                pulled_branch_keys.add((branch.ecosystem.lower(), branch.external_id))
+                pulled_branch_ecosystems.add(branch.ecosystem.lower())
+        except Exception as e:
+            logger.warning(f"Skipping malformed branch record in bulk sync {b_data}: {e}")
         
     # Soft delete local branches omitted from full sync ONLY if explicitly requested
     if prune_omitted and pulled_branch_keys:
@@ -397,10 +412,13 @@ async def bulk_sync_payload(db: AsyncSession, data: Dict[str, Any]) -> Dict[str,
     for d_data in doctors_data:
         if not isinstance(d_data, dict):
             continue
-        doctor = await _upsert_single_doctor(db, d_data)
-        if doctor.cis_id is not None:
-            pulled_doc_cis_ids.add(doctor.cis_id)
-            pulled_doc_ecosystems.add(doctor.ecosystem.lower())
+        try:
+            doctor = await _upsert_single_doctor(db, d_data)
+            if doctor.cis_id is not None:
+                pulled_doc_cis_ids.add(doctor.cis_id)
+                pulled_doc_ecosystems.add(doctor.ecosystem.lower())
+        except Exception as e:
+            logger.warning(f"Skipping malformed doctor record in bulk sync {d_data}: {e}")
         
     # Soft delete local doctors omitted from full sync ONLY if explicitly requested
     if prune_omitted and pulled_doc_cis_ids:
