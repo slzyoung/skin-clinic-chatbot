@@ -130,28 +130,13 @@ export default function ChatHistoryDetailPage() {
 		}
 	}, [isOwner, isStaffOrAdmin, isGeneralChat, sessionId, router]);
 
-	const formattedDate = session?.created_at
-		? new Intl.DateTimeFormat("en-US", {
-				month: "short",
-				day: "numeric",
-				year: "numeric",
-				hour: "2-digit",
-				minute: "2-digit",
-		  }).format(new Date(session.created_at))
-		: null;
-
 	const sessionTitle = session?.user_name || session?.doctor || "Chat Session Details";
-	const sessionSubtitle = session?.branch
-		? `${session.branch}${formattedDate ? ` • ${formattedDate}` : ""}`
-		: formattedDate
-			? `General Assistant • ${formattedDate}`
-			: "Read-only conversation history";
 
 	return (
 		<div className="flex flex-col absolute inset-0 bg-white overflow-hidden">
 			{/* Header matching GeneralChatContent */}
-			<div className="flex items-center justify-between gap-4 p-4 border-b border-gray-200 shrink-0 bg-white z-10">
-				<div className="flex items-center gap-4 min-w-0">
+			<div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200 shrink-0 bg-white z-10">
+				<div className="flex items-center gap-3 min-w-0">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -163,12 +148,9 @@ export default function ChatHistoryDetailPage() {
 						<RiArrowLeftLine className="size-5" />
 					</Button>
 					<div className="min-w-0">
-						<h1 className="text-lg font-semibold text-gray-900 truncate">
+						<h1 className="text-base font-semibold text-gray-900 truncate">
 							{sessionTitle}
 						</h1>
-						<p className="text-sm text-gray-500 truncate">
-							{sessionSubtitle}
-						</p>
 					</div>
 				</div>
 

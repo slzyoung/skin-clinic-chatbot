@@ -58,8 +58,8 @@ function GeneralChatContent() {
 	return (
 		<div className="flex flex-col absolute inset-0">
 			{/* Header matching KnowledgeDetailPage */}
-			<div className="flex items-center justify-between gap-4 p-4 border-b border-gray-200 shrink-0 bg-white">
-				<div className="flex items-center gap-4">
+			<div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200 shrink-0 bg-white">
+				<div className="flex items-center gap-3">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -70,10 +70,7 @@ function GeneralChatContent() {
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>
-					<div>
-						<h1 className="text-lg font-semibold text-gray-900">General Knowledge Assistant</h1>
-						<p className="text-sm text-gray-500">Ask questions about your knowledge base</p>
-					</div>
+					<h1 className="text-base font-semibold text-gray-900">General Knowledge Assistant</h1>
 				</div>
 
 				<div className="flex items-center gap-2">

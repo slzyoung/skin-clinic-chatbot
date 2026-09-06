@@ -394,8 +394,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 	return (
 		<div className="flex flex-col h-full bg-white">
 			{/* Header matching Knowledge Detail with Edit & Delete buttons on right */}
-			<div className="flex items-center gap-4 p-4 border-b border-gray-200 shrink-0 bg-white justify-between">
-				<div className="flex items-center gap-4 min-w-0">
+			<div className="flex items-center gap-4 px-4 py-3 border-b border-gray-200 shrink-0 bg-white justify-between">
+				<div className="flex items-center gap-3 min-w-0">
 					<Button
 						variant="ghost"
 						size="icon"
@@ -407,8 +407,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 						<RiArrowLeftLine className="size-5" />
 					</Button>
 					<div className="min-w-0">
-						<h1 className="text-lg font-semibold text-gray-900 truncate">{project.name}</h1>
-						<p className="text-sm text-zinc-600">Project Workspace</p>
+						<h1 className="text-base font-semibold text-gray-900 truncate">{project.name}</h1>
 					</div>
 				</div>
 
