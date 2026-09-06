@@ -29,6 +29,27 @@ export interface DataTablePaginationProps {
 	showPageSize?: boolean;
 }
 
+function formatItemName(name: string, count: number): string {
+	if (count === 1) {
+		const lower = name.toLowerCase();
+		if (lower === "categories") return "category";
+		if (lower === "queries") return "query";
+		if (lower === "histories") return "history";
+		if (lower.endsWith("ies")) return name.slice(0, -3) + "y";
+		if (
+			lower.endsWith("ses") ||
+			lower.endsWith("shes") ||
+			lower.endsWith("ches") ||
+			lower.endsWith("xes")
+		) {
+			return name.slice(0, -2);
+		}
+		if (lower.endsWith("s") && !lower.endsWith("ss")) return name.slice(0, -1);
+		return name;
+	}
+	return name;
+}
+
 export function DataTablePagination({
 	page,
 	pageSize,
@@ -76,6 +97,44 @@ export function DataTablePagination({
 		return range;
 	}, [page, totalPages]);
 
+	const summaryContent = useMemo(() => {
+		const singleName = formatItemName(itemName, 1);
+		const pluralName = formatItemName(itemName, totalItems);
+
+		if (totalItems === 1) {
+			return (
+				<>
+					Showing <span className="font-semibold text-zinc-900">1</span> {singleName}
+				</>
+			);
+		}
+
+		if (startIndex === 1 && endIndex === totalItems) {
+			return (
+				<>
+					Showing all <span className="font-semibold text-zinc-900">{totalItems}</span> {pluralName}
+				</>
+			);
+		}
+
+		if (startIndex === endIndex) {
+			return (
+				<>
+					Showing <span className="font-semibold text-zinc-900">{startIndex}</span> of{" "}
+					<span className="font-semibold text-zinc-900">{totalItems}</span> {pluralName}
+				</>
+			);
+		}
+
+		return (
+			<>
+				Showing <span className="font-semibold text-zinc-900">{startIndex}</span>–
+				<span className="font-semibold text-zinc-900">{endIndex}</span> of{" "}
+				<span className="font-semibold text-zinc-900">{totalItems}</span> {pluralName}
+			</>
+		);
+	}, [startIndex, endIndex, totalItems, itemName]);
+
 	if (totalItems === 0) {
 		return null;
 	}
@@ -83,10 +142,8 @@ export function DataTablePagination({
 	return (
 		<div className="flex flex-col sm:flex-row items-center justify-between gap-4 py-3 px-1 text-sm text-zinc-600">
 			{/* Left: Summary text */}
-			<div className="text-xs text-zinc-500 order-2 sm:order-1">
-				Showing <span className="font-medium text-zinc-900">{startIndex}</span> to{" "}
-				<span className="font-medium text-zinc-900">{endIndex}</span> of{" "}
-				<span className="font-medium text-zinc-900">{totalItems}</span> {itemName}
+			<div className="text-xs text-zinc-500 order-2 sm:order-1 select-none">
+				{summaryContent}
 			</div>
 
 			{/* Right: Controls (Page size + Page buttons) */}
@@ -100,7 +157,7 @@ export function DataTablePagination({
 								if (val) onPageSizeChange(Number(val));
 							}}
 						>
-							<SelectTrigger className="h-8 w-18 px-2.5 text-xs bg-white border-gray-200 text-zinc-800 rounded-md">
+							<SelectTrigger className="h-8 w-18 px-2.5 text-xs bg-white border-gray-200 text-zinc-800 hover:border-blue-300 focus-visible:ring-blue-500 rounded-md transition-colors">
 								<SelectValue placeholder={String(pageSize)}>
 									{String(pageSize)}
 								</SelectValue>
@@ -124,7 +181,7 @@ export function DataTablePagination({
 						size="sm"
 						onClick={() => onPageChange(page - 1)}
 						disabled={page <= 1}
-						className="h-8 px-2.5 text-xs border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-none gap-1"
+						className="h-8 px-2.5 text-xs border-gray-200 bg-white text-zinc-700 hover:bg-blue-50/60 hover:text-blue-600 hover:border-blue-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-zinc-700 disabled:hover:border-gray-200 shadow-none gap-1"
 					>
 						<RiArrowLeftSLine className="size-4" />
 						<span className="hidden xs:inline">Prev</span>
@@ -153,10 +210,10 @@ export function DataTablePagination({
 									variant={isCurrent ? "default" : "ghost"}
 									size="icon"
 									onClick={() => onPageChange(item)}
-									className={`size-8 text-xs font-medium rounded-md shadow-none ${
+									className={`size-8 text-xs font-semibold rounded-md shadow-none transition-colors ${
 										isCurrent
-											? "bg-zinc-900 text-white hover:bg-zinc-800"
-											: "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+											? "bg-blue-600 text-white hover:bg-blue-700 shadow-xs"
+											: "text-zinc-600 hover:bg-blue-50 hover:text-blue-600"
 									}`}
 								>
 									{item}
@@ -166,7 +223,7 @@ export function DataTablePagination({
 					</div>
 
 					{/* Mobile Page Indicator */}
-					<span className="sm:hidden text-xs text-zinc-500 px-2 font-medium">
+					<span className="sm:hidden text-xs text-zinc-600 px-2 font-medium">
 						{page} / {totalPages}
 					</span>
 
@@ -177,7 +234,7 @@ export function DataTablePagination({
 						size="sm"
 						onClick={() => onPageChange(page + 1)}
 						disabled={page >= totalPages}
-						className="h-8 px-2.5 text-xs border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-none gap-1"
+						className="h-8 px-2.5 text-xs border-gray-200 bg-white text-zinc-700 hover:bg-blue-50/60 hover:text-blue-600 hover:border-blue-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-zinc-700 disabled:hover:border-gray-200 shadow-none gap-1"
 					>
 						<span className="hidden xs:inline">Next</span>
 						<RiArrowRightSLine className="size-4" />
