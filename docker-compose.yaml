@@ -48,6 +48,10 @@ services:
       - ./backend/.env
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/arya_noble
+      - PG_HOST=db
+      - PG_PORT=5432
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
     depends_on:
       db:
         condition: service_healthy

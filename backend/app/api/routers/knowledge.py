@@ -725,8 +725,33 @@ async def approve_batch_knowledge(
                 except Exception:
                     pass
 
+    # MinIO Staging Scan fallback for batch_id
+    try:
+        from app.services.storage import _get_client, _staging_bucket
+        s3 = _get_client()
+        if s3:
+            res_s3 = s3.list_objects_v2(Bucket=_staging_bucket())
+            for obj in res_s3.get("Contents", []):
+                k = obj["Key"]
+                if k.endswith(".json"):
+                    try:
+                        resp = s3.get_object(Bucket=_staging_bucket(), Key=k)
+                        data = json.loads(resp["Body"].read().decode("utf-8"))
+                        b_id = data.get("batch_id") or data.get("upload_batch_id")
+                        if not b_id and data.get("chunks"):
+                            b_id = data["chunks"][0].get("metadata", {}).get("batch_id") or data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                        if b_id == batch_id:
+                            k_id = data.get("knowledge_id") or k.replace(".json", "")
+                            if k_id:
+                                target_ids.add(str(k_id))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
     if not target_ids:
-        raise HTTPException(status_code=404, detail=f"No documents found for batch '{batch_id}'.")
+        # Fallback to batch_id directly so approve_document can expand it
+        target_ids.add(batch_id)
 
     # Read pending histories before approval moves/deletes files
     doc_histories = {}
@@ -744,8 +769,27 @@ async def approve_batch_knowledge(
     ids_param = ",".join(target_ids)
     res = await approve_document(ids_param, pipeline=pipeline, bm25=bm25)
 
-    # Sync DB statuses
+    # Sync DB statuses for all matched documents
     from sqlalchemy.orm.attributes import flag_modified
+    approved_ids = res.get("approved_ids", []) if isinstance(res, dict) else []
+    for aid in approved_ids:
+        try:
+            aid_uuid = uuid.UUID(aid)
+            stmt_u = select(Knowledge).where(Knowledge.id == aid_uuid)
+            res_u = await db.execute(stmt_u)
+            doc_u = res_u.scalar_one_or_none()
+            if doc_u:
+                doc_u.status = KnowledgeStatus.APPROVED
+                doc_u.approved_by = current_user.id
+                if aid in doc_histories:
+                    if doc_u.metadata_ is None:
+                        doc_u.metadata_ = {}
+                    doc_u.metadata_["history"] = doc_histories[aid]
+                    doc_u.metadata_["chat_history"] = doc_histories[aid]
+                    flag_modified(doc_u, "metadata_")
+        except Exception:
+            pass
+
     for doc in db_docs:
         doc.status = KnowledgeStatus.APPROVED
         doc.approved_by = current_user.id
@@ -1126,6 +1170,11 @@ async def edit_knowledge(
             }
             with open(a_file, "w", encoding="utf-8") as f:
                 json.dump(doc_data, f, indent=4, ensure_ascii=False)
+            try:
+                from app.services.storage import upload_approved_json
+                upload_approved_json(str(knowledge_id), doc_data)
+            except Exception:
+                pass
         else:
             p_file = os.path.join("data/pending", f"{knowledge_id}.json")
             os.makedirs("data/pending", exist_ok=True)
@@ -1147,6 +1196,11 @@ async def edit_knowledge(
             }
             with open(p_file, "w", encoding="utf-8") as f:
                 json.dump(doc_data, f, indent=4, ensure_ascii=False)
+            try:
+                from app.services.storage import upload_staging_json
+                upload_staging_json(str(knowledge_id), doc_data)
+            except Exception:
+                pass
 
     if p_file:
         res = await edit_pending_document(
@@ -1369,6 +1423,11 @@ async def refine_knowledge(
                 }
                 with open(a_file, "w", encoding="utf-8") as f:
                     json.dump(doc_data, f, indent=4, ensure_ascii=False)
+                try:
+                    from app.services.storage import upload_approved_json
+                    upload_approved_json(str(knowledge_id), doc_data)
+                except Exception:
+                    pass
             else:
                 p_file = os.path.join("data/pending", f"{knowledge_id}.json")
                 os.makedirs("data/pending", exist_ok=True)
@@ -1390,6 +1449,11 @@ async def refine_knowledge(
                 }
                 with open(p_file, "w", encoding="utf-8") as f:
                     json.dump(doc_data, f, indent=4, ensure_ascii=False)
+                try:
+                    from app.services.storage import upload_staging_json
+                    upload_staging_json(str(knowledge_id), doc_data)
+                except Exception:
+                    pass
 
     stmt_check = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
     res_check = await db.execute(stmt_check)
@@ -1704,6 +1768,14 @@ async def delete_knowledge(
                         logger.info(f"Purged staging/temp file for knowledge deletion: {f_path}")
                     except Exception as err:
                         logger.warning(f"Failed to remove file {f_path}: {err}")
+
+    # Purge staging & approved JSON in MinIO
+    try:
+        from app.services.storage import delete_staging_json, delete_approved_json
+        delete_staging_json(kid_str)
+        delete_approved_json(kid_str)
+    except Exception as s3_del_err:
+        logger.debug(f"MinIO delete note for {kid_str}: {s3_del_err}")
 
     # 4. Clean Vector Store Chunks (PGVector)
     vector_store = get_vector_store(request)

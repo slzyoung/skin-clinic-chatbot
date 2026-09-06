@@ -14,7 +14,7 @@ async def get_storage_asset(s3_key: str):
     """
     clean_key = s3_key.lstrip("/")
     
-    # 1. Try fetching from MinIO Object Storage
+    # 1. Try fetching from MinIO Object Storage or local storage helper
     try:
         content, ctype = get_s3_object_data(clean_key)
         if content:
@@ -27,34 +27,37 @@ async def get_storage_asset(s3_key: str):
                 }
             )
     except Exception as err:
-        logger.warning(f"Storage proxy fetch error from S3 for '{clean_key}': {err}")
+        logger.warning(f"Storage proxy fetch error for '{clean_key}': {err}")
 
-    # 2. Fallback: Check local disk storage (data/temp, data/uploads)
+    # 2. Direct fallback: Check local disk storage folders
+    clean_norm = os.path.normpath(clean_key)
     fname = os.path.basename(clean_key)
-    for folder in ["data/temp", "data/uploads"]:
-        local_path = os.path.join(folder, fname)
-        if os.path.exists(local_path) and os.path.isfile(local_path):
-            try:
-                with open(local_path, "rb") as f:
-                    file_bytes = f.read()
-                ext = os.path.splitext(fname)[1].lower()
-                mime_map = {
-                    ".png": "image/png",
-                    ".jpg": "image/jpeg",
-                    ".jpeg": "image/jpeg",
-                    ".webp": "image/webp",
-                    ".pdf": "application/pdf"
-                }
-                media_type = mime_map.get(ext, "application/octet-stream")
-                return Response(
-                    content=file_bytes,
-                    media_type=media_type,
-                    headers={
-                        "Cache-Control": "public, max-age=86400",
-                        "Content-Disposition": "inline"
+    for folder in ["data/temp", "data/images", "data/uploads", "data/documents", "data/storage"]:
+        for candidate in [clean_key, clean_norm, fname]:
+            local_path = os.path.normpath(os.path.join(folder, candidate))
+            if os.path.exists(local_path) and os.path.isfile(local_path):
+                try:
+                    with open(local_path, "rb") as f:
+                        file_bytes = f.read()
+                    ext = os.path.splitext(fname)[1].lower()
+                    mime_map = {
+                        ".png": "image/png",
+                        ".jpg": "image/jpeg",
+                        ".jpeg": "image/jpeg",
+                        ".webp": "image/webp",
+                        ".pdf": "application/pdf",
+                        ".json": "application/json"
                     }
-                )
-            except Exception:
-                pass
+                    media_type = mime_map.get(ext, "application/octet-stream")
+                    return Response(
+                        content=file_bytes,
+                        media_type=media_type,
+                        headers={
+                            "Cache-Control": "public, max-age=86400",
+                            "Content-Disposition": "inline"
+                        }
+                    )
+                except Exception:
+                    pass
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Storage asset '{clean_key}' not found.")

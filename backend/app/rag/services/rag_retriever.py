@@ -400,7 +400,7 @@ class PromptContextBuilder:
                 image_url = metadata["image_urls"][0]
             text = hit.get("text", "")
             if not image_url:
-                img_matches = re.findall(r'!\[.*?\]\((https?://[^\)]+)\)', text)
+                img_matches = re.findall(r'!\[.*?\]\(([^\)]+)\)', text)
                 if img_matches:
                     image_url = img_matches[0]
 
