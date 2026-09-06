@@ -326,7 +326,9 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
     Synchronously uploads image binary content to images bucket (PUBLIC-READ).
     Falls back cleanly to local disk storage if MinIO is unavailable.
     """
-    s3_key = f"images/{uuid.uuid4().hex}_{filename}"
+    clean_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', str(filename or "image.png"))
+    clean_filename = re.sub(r'_+', '_', clean_filename)
+    s3_key = f"images/{uuid.uuid4().hex}_{clean_filename}"
     browser_url = _format_browser_url(None, s3_key)
     bucket_name = _images_bucket()
 

@@ -1267,6 +1267,8 @@ async def refine_knowledge(
     history = []
     file_attachment: Optional[UploadFile] = None
 
+    logger.info(f"Incoming refine request for knowledge_id='{knowledge_id}', Content-Type='{content_type}'")
+
     if "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
         form = await request.form()
         prompt = str(form.get("prompt", "") or "")
@@ -1288,9 +1290,22 @@ async def refine_knowledge(
                 for m in history_raw
             ]
             
-        file_obj = form.get("file")
-        if isinstance(file_obj, UploadFile):
-            file_attachment = file_obj
+        # Check all possible form keys and duck typing for UploadFile (Starlette creates starlette.datastructures.UploadFile)
+        for key in ["file", "attached_file", "files"]:
+            val = form.get(key)
+            if val and hasattr(val, "filename") and val.filename and hasattr(val, "read"):
+                file_attachment = val
+                break
+        if not file_attachment:
+            for k, val in form.items():
+                if hasattr(val, "filename") and val.filename and hasattr(val, "read"):
+                    file_attachment = val
+                    break
+
+        if file_attachment:
+            logger.info(f"📎 Attached file successfully extracted: '{file_attachment.filename}' (type={type(file_attachment)})")
+        else:
+            logger.info(f"Form received without valid file attachment (form keys: {list(form.keys())})")
     else:
         try:
             body = await request.json()
@@ -1312,7 +1327,10 @@ async def refine_knowledge(
         try:
             temp_dir = "data/temp"
             os.makedirs(temp_dir, exist_ok=True)
-            attached_file_name = getattr(file_attachment, "filename", "attached_doc")
+            raw_attached_name = getattr(file_attachment, "filename", "attached_doc")
+            clean_attached_name = re.sub(r'[^a-zA-Z0-9._-]', '_', str(raw_attached_name or "attached_doc"))
+            clean_attached_name = re.sub(r'_+', '_', clean_attached_name)
+            attached_file_name = clean_attached_name
             temp_file_path = os.path.join(temp_dir, f"refine_supp_{knowledge_id}_{attached_file_name}")
             content_bytes = await file_attachment.read()
             try:
@@ -1357,13 +1375,19 @@ async def refine_knowledge(
                     content_snippet = content_snippet[:10000] + "\n\n... [KONTEN FILE TERLAMPIR DIPOTONG KARENA PANJANG] ..."
 
                 media_note = ""
+                replace_guidance = ""
                 if all_attached_images:
                     media_lines = [f"![Asset Gambar {i+1}]({url})" for i, url in enumerate(all_attached_images)]
                     media_note = f"\n\n### Asset Media dari File Terlampir:\n" + "\n\n".join(media_lines) + "\n"
+                    primary_img = all_attached_images[0]
+                    replace_guidance = (
+                        f"\n[INSTRUCTION FOR IMAGE REPLACEMENT: If the admin instruction asks to change, swap, or update an image for a product or section, "
+                        f"you MUST embed the EXACT URL '{primary_img}' in that product's table cell or heading. DO NOT output placeholder text like 'URL_GAMBAR' or 'new_image'.]\n"
+                    )
 
                 file_note = (
                     f"\n\n[SUPPLEMENTARY ATTACHED FILE CONTENT: '{attached_file_name}']\n"
-                    f"{content_snippet}{media_note}\n"
+                    f"{content_snippet}{media_note}{replace_guidance}\n"
                     f"[END OF ATTACHED FILE CONTENT]"
                 )
                 payload.prompt = f"{payload.prompt}\n{file_note}" if payload.prompt else file_note
