@@ -1,30 +1,29 @@
-import React from "react";
+import React, { useState } from "react";
 import { RiImageLine } from "@remixicon/react";
 import type { Components } from "react-markdown";
 import { extractNodeText, isValidImageUrl, resolveImageUrl } from "./utils";
+import { ImagePreviewDialog } from "../image-preview-dialog";
 
-export const defaultMarkdownComponents: Components = {
-	img: ({ src, alt, ...props }) => {
-		const strSrc = typeof src === "string" ? src.trim() : "";
-		if (!isValidImageUrl(strSrc)) {
-			return null;
-		}
+function MarkdownImage({ src, alt, ...props }: React.ComponentProps<"img">) {
+	const [isOpen, setIsOpen] = useState(false);
+	const strSrc = typeof src === "string" ? src.trim() : "";
+	if (!isValidImageUrl(strSrc)) {
+		return null;
+	}
 
-		const resolvedSrc = resolveImageUrl(strSrc);
+	const resolvedSrc = resolveImageUrl(strSrc);
+	const altText = typeof alt === "string" ? alt : "Document Image";
 
-		return (
+	return (
+		<>
 			<span className="my-1.5 inline-flex flex-col max-w-full rounded-lg border border-zinc-200 bg-zinc-50/50 overflow-hidden align-top min-w-16 min-h-16">
 				{/* eslint-disable-next-line @next/next/no-img-element */}
 				<img
 					src={resolvedSrc}
-					alt={typeof alt === "string" ? alt : "Document Image"}
+					alt={altText}
 					className="max-h-60 sm:max-h-64 w-auto max-w-full object-contain cursor-pointer transition hover:opacity-90 block"
 					loading="lazy"
-					onClick={() => {
-						if (resolvedSrc) {
-							window.open(resolvedSrc, "_blank", "noopener,noreferrer");
-						}
-					}}
+					onClick={() => setIsOpen(true)}
 					onError={(e) => {
 						e.currentTarget.style.display = "none";
 						const fallback = e.currentTarget.nextElementSibling as HTMLElement;
@@ -45,8 +44,19 @@ export const defaultMarkdownComponents: Components = {
 					</span>
 				)}
 			</span>
-		);
-	},
+
+			<ImagePreviewDialog
+				src={resolvedSrc}
+				alt={altText}
+				isOpen={isOpen}
+				onOpenChange={setIsOpen}
+			/>
+		</>
+	);
+}
+
+export const defaultMarkdownComponents: Components = {
+	img: MarkdownImage,
 	blockquote: ({ children }) => {
 		const textContent = extractNodeText(children).trim();
 
