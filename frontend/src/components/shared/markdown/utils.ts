@@ -84,10 +84,60 @@ export function extractNodeText(node: React.ReactNode): string {
 	return "";
 }
 
+export function cleanMessageTurn(
+	rawContent: string,
+	currentAttachmentName?: string,
+	currentAttachmentNames?: string[],
+) {
+	let content = rawContent || "";
+	let attachmentName = currentAttachmentName;
+	const names = currentAttachmentNames ? [...currentAttachmentNames] : [];
+
+	// 1. Pattern: [SUPPLEMENTARY ATTACHED FILE CONTENT: 'filename'] ... [END OF ATTACHED FILE CONTENT]
+	const suppMatch = content.match(
+		/\[SUPPLEMENTARY ATTACHED FILE CONTENT:\s*['"]?([^'"\n]+)['"]?\]([\s\S]*?)\[END OF ATTACHED FILE CONTENT\]/i,
+	);
+	if (suppMatch) {
+		const extractedName = suppMatch[1].trim();
+		if (!attachmentName) attachmentName = extractedName;
+		if (!names.includes(extractedName)) names.push(extractedName);
+		content = content.replace(suppMatch[0], "").trim();
+	}
+
+	// 2. Pattern: --- NEWLY ATTACHED SUPPLEMENTARY FILE: 'filename' --- ... --- END OF ATTACHED FILE CONTENT ---
+	const newlyMatch = content.match(
+		/---\s*NEWLY ATTACHED SUPPLEMENTARY FILE:\s*['"]?([^'"\n]+)['"]?\s*---([\s\S]*?)---\s*END OF ATTACHED FILE CONTENT\s*---/i,
+	);
+	if (newlyMatch) {
+		const extractedName = newlyMatch[1].trim();
+		if (!attachmentName) attachmentName = extractedName;
+		if (!names.includes(extractedName)) names.push(extractedName);
+		content = content.replace(newlyMatch[0], "").trim();
+	}
+
+	return {
+		content: content.trim(),
+		attachmentName: attachmentName || undefined,
+		attachmentNames: names.length > 0 ? names : attachmentName ? [attachmentName] : undefined,
+	};
+}
+
 export function stripInternalMetadata(text?: string | null): string {
 	if (!text) return "";
+	let cleaned = text;
+
+	// Strip supplementary attached file content blocks
+	cleaned = cleaned.replace(
+		/\[SUPPLEMENTARY ATTACHED FILE CONTENT:\s*['"]?[^'"\n]+['"]?\][\s\S]*?\[END OF ATTACHED FILE CONTENT\]/gi,
+		"",
+	);
+	cleaned = cleaned.replace(
+		/---\s*NEWLY ATTACHED SUPPLEMENTARY FILE:\s*['"]?[^'"\n]+['"]?\s*---[\s\S]*?---\s*END OF ATTACHED FILE CONTENT\s*---/gi,
+		"",
+	);
+
 	// Normalize unencoded spaces in markdown image links ![alt](url) -> ![alt](encodedUrl)
-	let cleaned = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawUrl) => {
+	cleaned = cleaned.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, rawUrl) => {
 		const trimmedUrl = rawUrl.trim();
 		if (trimmedUrl.includes(" ")) {
 			const encoded = trimmedUrl.replace(/ /g, "%20");

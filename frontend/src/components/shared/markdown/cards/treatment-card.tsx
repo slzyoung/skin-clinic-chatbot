@@ -55,14 +55,14 @@ export function TreatmentCard({ data }: { data: CardData }) {
 			{cleanImgUrl ? (
 				<>
 					<div
-						className="size-24 sm:size-28 shrink-0 bg-zinc-50 rounded-lg border border-zinc-200/80 p-1.5 flex items-center justify-center overflow-hidden relative group cursor-pointer"
+						className="size-28 sm:size-32 shrink-0 bg-zinc-50 rounded-lg border border-zinc-200/80 p-2 flex items-center justify-center overflow-hidden relative group cursor-pointer"
 						onClick={() => setIsPreviewOpen(true)}
 					>
 						{/* eslint-disable-next-line @next/next/no-img-element */}
 						<img
 							src={cleanImgUrl}
 							alt={imageAlt || treatmentName || "Treatment"}
-							className="size-full object-contain transition-transform duration-150 group-hover:scale-105"
+							className="size-full object-contain"
 							loading="lazy"
 							onError={(e) => {
 								e.currentTarget.style.display = "none";
@@ -83,10 +83,10 @@ export function TreatmentCard({ data }: { data: CardData }) {
 								e.stopPropagation();
 								setIsPreviewOpen(true);
 							}}
-							className="absolute bottom-1 right-1 p-1 rounded bg-white/90 text-zinc-600 border border-zinc-200/80 opacity-0 group-hover:opacity-100 transition-opacity"
+							className="absolute bottom-1.5 right-1.5 p-1 rounded-md bg-white/95 text-zinc-600 border border-zinc-200/80 opacity-0 group-hover:opacity-100 transition-opacity shadow-xs cursor-pointer"
 							title="View image"
 						>
-							<RiZoomInLine className="size-3" />
+							<RiZoomInLine className="size-3.5" />
 						</button>
 					</div>
 
@@ -98,7 +98,7 @@ export function TreatmentCard({ data }: { data: CardData }) {
 					/>
 				</>
 			) : (
-				<div className="size-24 sm:size-28 shrink-0 bg-zinc-50 rounded-lg border border-zinc-200/80 flex flex-col items-center justify-center text-zinc-400 p-2 select-none">
+				<div className="size-28 sm:size-32 shrink-0 bg-zinc-50 rounded-lg border border-zinc-200/80 flex flex-col items-center justify-center text-zinc-400 p-2 select-none">
 					<RiStethoscopeLine className="size-6 text-zinc-400 mb-1" />
 					<span className="text-xs text-zinc-400 font-medium">Treatment</span>
 				</div>

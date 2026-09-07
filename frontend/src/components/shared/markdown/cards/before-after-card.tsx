@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { RiImageLine } from "@remixicon/react";
+import { RiImageLine, RiZoomInLine } from "@remixicon/react";
 import type { BeforeAfterData } from "../types";
 import { ImagePreviewDialog } from "@/components/shared/image-preview-dialog";
 
@@ -17,15 +17,15 @@ export function BeforeAfterCard({ data }: { data: BeforeAfterData }) {
 
 	return (
 		<>
-			<div className="not-prose my-2.5 flex flex-col sm:flex-row gap-2.5 items-stretch w-full">
+			<div className="not-prose my-2.5 flex flex-col sm:flex-row gap-2.5 items-stretch w-full max-w-2xl">
 				{/* Left / Before Image */}
-				<span className="flex-1 min-w-35 max-w-full rounded-lg border border-zinc-200/80 bg-zinc-50/50 overflow-hidden align-top inline-flex flex-col">
-					<span className="h-44 sm:h-48 w-full p-1.5 flex items-center justify-center overflow-hidden relative group">
+				<span className="flex-1 min-w-35 max-w-full rounded-lg border border-zinc-200/80 bg-zinc-50/60 overflow-hidden align-top inline-flex flex-col shadow-none">
+					<span className="h-44 sm:h-48 w-full p-2 flex items-center justify-center overflow-hidden relative group cursor-pointer">
 						{/* eslint-disable-next-line @next/next/no-img-element */}
 						<img
 							src={beforeImage.url}
 							alt={beforeImage.alt || "Sebelum Perawatan"}
-							className="size-full object-contain cursor-pointer transition hover:opacity-90 block"
+							className="size-full object-contain block"
 							loading="lazy"
 							onClick={() => {
 								if (beforeImage.url) {
@@ -46,25 +46,42 @@ export function BeforeAfterCard({ data }: { data: BeforeAfterData }) {
 							style={{ display: "none" }}
 							className="size-full bg-zinc-100 items-center justify-center text-zinc-400 text-xs flex-col p-2 text-center select-none"
 						>
-							<RiImageLine className="size-6 text-zinc-400 mb-1" />
+							<RiImageLine className="size-5 text-zinc-400 mb-1" />
 							<span className="text-xs text-zinc-400 font-medium">Gambar Tidak Tersedia</span>
 						</span>
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								if (beforeImage.url) {
+									setPreviewState({
+										isOpen: true,
+										url: beforeImage.url,
+										alt: beforeImage.alt || "Sebelum Perawatan",
+									});
+								}
+							}}
+							className="absolute bottom-1.5 right-1.5 p-1 rounded-md bg-white/95 text-zinc-600 border border-zinc-200/80 opacity-0 group-hover:opacity-100 transition-opacity shadow-xs cursor-pointer"
+							title="View image"
+						>
+							<RiZoomInLine className="size-3.5" />
+						</button>
 					</span>
 					{beforeImage.alt && (
-						<span className="block px-2.5 py-1 text-xs text-zinc-600 font-medium bg-white border-t border-zinc-100 truncate w-full text-center">
+						<span className="block px-2.5 py-1.5 text-xs text-zinc-700 font-medium bg-white border-t border-zinc-200/70 truncate w-full text-center">
 							{beforeImage.alt}
 						</span>
 					)}
 				</span>
 
 				{/* Right / After Image */}
-				<span className="flex-1 min-w-35 max-w-full rounded-lg border border-zinc-200/80 bg-zinc-50/50 overflow-hidden align-top inline-flex flex-col">
-					<span className="h-44 sm:h-48 w-full p-1.5 flex items-center justify-center overflow-hidden relative group">
+				<span className="flex-1 min-w-35 max-w-full rounded-lg border border-zinc-200/80 bg-zinc-50/60 overflow-hidden align-top inline-flex flex-col shadow-none">
+					<span className="h-44 sm:h-48 w-full p-2 flex items-center justify-center overflow-hidden relative group cursor-pointer">
 						{/* eslint-disable-next-line @next/next/no-img-element */}
 						<img
 							src={afterImage.url}
 							alt={afterImage.alt || "Sesudah Perawatan"}
-							className="size-full object-contain cursor-pointer transition hover:opacity-90 block"
+							className="size-full object-contain block"
 							loading="lazy"
 							onClick={() => {
 								if (afterImage.url) {
@@ -85,12 +102,29 @@ export function BeforeAfterCard({ data }: { data: BeforeAfterData }) {
 							style={{ display: "none" }}
 							className="size-full bg-zinc-100 items-center justify-center text-zinc-400 text-xs flex-col p-2 text-center select-none"
 						>
-							<RiImageLine className="size-6 text-zinc-400 mb-1" />
+							<RiImageLine className="size-5 text-zinc-400 mb-1" />
 							<span className="text-xs text-zinc-400 font-medium">Gambar Tidak Tersedia</span>
 						</span>
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								if (afterImage.url) {
+									setPreviewState({
+										isOpen: true,
+										url: afterImage.url,
+										alt: afterImage.alt || "Sesudah Perawatan",
+									});
+								}
+							}}
+							className="absolute bottom-1.5 right-1.5 p-1 rounded-md bg-white/95 text-zinc-600 border border-zinc-200/80 opacity-0 group-hover:opacity-100 transition-opacity shadow-xs cursor-pointer"
+							title="View image"
+						>
+							<RiZoomInLine className="size-3.5" />
+						</button>
 					</span>
 					{afterImage.alt && (
-						<span className="block px-2.5 py-1 text-xs text-zinc-600 font-medium bg-white border-t border-zinc-100 truncate w-full text-center">
+						<span className="block px-2.5 py-1.5 text-xs text-zinc-700 font-medium bg-white border-t border-zinc-200/70 truncate w-full text-center">
 							{afterImage.alt}
 						</span>
 					)}

@@ -1,5 +1,7 @@
+"use client";
+
 import React, { useState } from "react";
-import { RiImageLine } from "@remixicon/react";
+import { RiImageLine, RiZoomInLine } from "@remixicon/react";
 import type { Components } from "react-markdown";
 import { extractNodeText, isValidImageUrl, resolveImageUrl } from "./utils";
 import { ImagePreviewDialog } from "../image-preview-dialog";
@@ -16,30 +18,47 @@ function MarkdownImage({ src, alt, ...props }: React.ComponentProps<"img">) {
 
 	return (
 		<>
-			<span className="my-1.5 inline-flex flex-col max-w-full rounded-lg border border-zinc-200 bg-zinc-50/50 overflow-hidden align-top min-w-16 min-h-16">
-				{/* eslint-disable-next-line @next/next/no-img-element */}
-				<img
-					src={resolvedSrc}
-					alt={altText}
-					className="max-h-60 sm:max-h-64 w-auto max-w-full object-contain cursor-pointer transition hover:opacity-90 block"
-					loading="lazy"
-					onClick={() => setIsOpen(true)}
-					onError={(e) => {
-						e.currentTarget.style.display = "none";
-						const fallback = e.currentTarget.nextElementSibling as HTMLElement;
-						if (fallback) fallback.style.display = "flex";
-					}}
-					{...props}
-				/>
+			<span
+				className="my-2 inline-flex flex-col w-64 sm:w-72 max-w-full rounded-lg border border-zinc-200/80 bg-zinc-50/60 overflow-hidden align-top shrink-0 relative group shadow-none"
+			>
 				<span
-					style={{ display: "none" }}
-					className="size-16 sm:size-20 bg-zinc-100 items-center justify-center text-zinc-400 text-xs flex-col p-1 text-center select-none"
+					className="h-40 sm:h-44 w-full p-2 flex items-center justify-center overflow-hidden relative cursor-pointer"
+					onClick={() => setIsOpen(true)}
 				>
-					<RiImageLine className="size-4 text-zinc-400 mb-0.5" />
-					<span className="text-xs text-zinc-400 font-medium">N/A</span>
+					{/* eslint-disable-next-line @next/next/no-img-element */}
+					<img
+						src={resolvedSrc}
+						alt={altText}
+						className="size-full object-contain block"
+						loading="lazy"
+						onError={(e) => {
+							e.currentTarget.style.display = "none";
+							const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+							if (fallback) fallback.style.display = "flex";
+						}}
+						{...props}
+					/>
+					<span
+						style={{ display: "none" }}
+						className="size-full bg-zinc-100 items-center justify-center text-zinc-400 text-xs flex-col p-2 text-center select-none"
+					>
+						<RiImageLine className="size-5 text-zinc-400 mb-1" />
+						<span className="text-xs text-zinc-400 font-medium">Gambar Tidak Tersedia</span>
+					</span>
+					<button
+						type="button"
+						onClick={(e) => {
+							e.stopPropagation();
+							setIsOpen(true);
+						}}
+						className="absolute bottom-1.5 right-1.5 p-1 rounded-md bg-white/95 text-zinc-600 border border-zinc-200/80 opacity-0 group-hover:opacity-100 transition-opacity shadow-xs cursor-pointer"
+						title="Zoom image"
+					>
+						<RiZoomInLine className="size-3.5" />
+					</button>
 				</span>
 				{alt && typeof alt === "string" && (
-					<span className="block px-2.5 py-1 text-xs text-zinc-600 font-normal bg-white border-t border-zinc-100 truncate max-w-full">
+					<span className="block px-2.5 py-1.5 text-xs text-zinc-700 font-medium bg-white border-t border-zinc-200/70 truncate w-full text-center">
 						{alt}
 					</span>
 				)}
