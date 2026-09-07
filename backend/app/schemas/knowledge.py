@@ -56,6 +56,8 @@ class GeneralChatMessageItem(BaseModel):
     role: str
     content: str
     action: Optional[str] = None
+    type: Optional[str] = None
+    operation_id: Optional[str] = None
     target_knowledge_id: Optional[str] = None
     total_found: Optional[int] = None
     attachments: Optional[Dict[str, Any]] = None

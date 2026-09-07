@@ -43,6 +43,8 @@ import {
 	KnowledgeResponse,
 } from "@/app/dashboard/knowledge/api/types";
 import {
+	useConfirmOperation,
+	useCancelOperation,
 	useGeneralChatSession,
 	useSendGeneralChatMessage,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
@@ -84,6 +86,8 @@ interface Message {
 	attachmentName?: string;
 	attachmentNames?: string[];
 	action?: string;
+	type?: string;
+	operation_id?: string | null;
 	target_knowledge_id?: string | null;
 	total_found?: number;
 }
@@ -212,6 +216,10 @@ export function ChatPreview({
 }: ChatPreviewProps) {
 	const { data: generalSession } = useGeneralChatSession(mode === "general" ? sessionId : null);
 	const sendGeneralMsg = useSendGeneralChatMessage(mode === "general" ? sessionId : null);
+	const confirmOp = useConfirmOperation();
+	const cancelOp = useCancelOperation();
+	const [activeOpId, setActiveOpId] = useState<string | null>(null);
+	const [completedOps, setCompletedOps] = useState<Record<string, "confirmed" | "cancelled">>({});
 
 	const [prevScopeId, setPrevScopeId] = useState(`${knowledgeId}-${sessionId}`);
 	const [chatTurns, setChatTurns] = useState<Message[]>([]);
@@ -274,6 +282,8 @@ export function ChatPreview({
 						attachmentName: cleaned.attachmentName,
 						attachmentNames: cleaned.attachmentNames,
 						action: m.action || undefined,
+						type: m.type || (m.attachments?.type as string) || undefined,
+						operation_id: m.operation_id || (m.attachments?.operation_id as string) || undefined,
 						target_knowledge_id: m.target_knowledge_id || undefined,
 						total_found: m.total_found ?? undefined,
 					};
@@ -282,6 +292,8 @@ export function ChatPreview({
 					role: m.role as "user" | "assistant",
 					content: m.content,
 					action: m.action || undefined,
+					type: m.type || (m.attachments?.type as string) || undefined,
+					operation_id: m.operation_id || (m.attachments?.operation_id as string) || undefined,
 					target_knowledge_id: m.target_knowledge_id || undefined,
 					total_found: m.total_found ?? undefined,
 				};
@@ -791,6 +803,8 @@ export function ChatPreview({
 							role: "assistant",
 							content: data.answer,
 							action: data.action,
+							type: data.type,
+							operation_id: data.operation_id,
 							target_knowledge_id: data.target_knowledge_id,
 							total_found: data.total_found,
 						},
@@ -871,6 +885,122 @@ export function ChatPreview({
 	const isLiveChat =
 		(mode === "general" && messages.length > 0) ||
 		(mode === "knowledge" && (chatTurns.length > 0 || optimisticUserMsg !== null));
+
+	const handleConfirmOperation = async (opId: string) => {
+		setActiveOpId(opId);
+		try {
+			const res = await confirmOp.mutateAsync({
+				operationId: opId,
+				sessionId: mode === "general" ? sessionId : null,
+			});
+			setCompletedOps((prev) => ({ ...prev, [opId]: "confirmed" }));
+			if (mode !== "general" || !sessionId) {
+				setChatTurns((prev) => [
+					...prev,
+					{
+						role: "assistant",
+						content: res.action.includes("delete") ? `🗑️ ${res.message}` : `✅ ${res.message}`,
+						action: res.action,
+					},
+				]);
+			}
+		} finally {
+			setActiveOpId(null);
+		}
+	};
+
+	const handleCancelOperation = async (opId: string) => {
+		setActiveOpId(opId);
+		try {
+			const res = await cancelOp.mutateAsync({
+				operationId: opId,
+				sessionId: mode === "general" ? sessionId : null,
+			});
+			setCompletedOps((prev) => ({ ...prev, [opId]: "cancelled" }));
+			if (mode !== "general" || !sessionId) {
+				setChatTurns((prev) => [
+					...prev,
+					{
+						role: "assistant",
+						content: `❌ ${res.message}`,
+						action: "cancelled",
+					},
+				]);
+			}
+		} finally {
+			setActiveOpId(null);
+		}
+	};
+
+	const renderOperationActions = (msg: Message) => {
+		if (!msg.operation_id || msg.role !== "assistant") return null;
+		const opId = msg.operation_id;
+		const status = completedOps[opId];
+		const isPending = activeOpId === opId;
+		const isDelete = msg.action?.toLowerCase().includes("delete");
+
+		if (status === "confirmed") {
+			return (
+				<div className="mt-3 pt-3 border-t border-emerald-100 flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50/50 p-2.5 rounded-md">
+					<RiCheckLine className="size-4 text-emerald-600 shrink-0" />
+					<span>Operasi telah berhasil dikonfirmasi dan diterapkan.</span>
+				</div>
+			);
+		}
+
+		if (status === "cancelled") {
+			return (
+				<div className="mt-3 pt-3 border-t border-zinc-200 flex items-center gap-2 text-xs font-medium text-zinc-600 bg-zinc-50 p-2.5 rounded-md">
+					<RiCloseLine className="size-4 text-zinc-500 shrink-0" />
+					<span>Operasi telah dibatalkan.</span>
+				</div>
+			);
+		}
+
+		return (
+			<div className="mt-3 pt-3 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-3 bg-zinc-50/80 p-3 rounded-md">
+				<div className="flex items-center gap-2 text-xs text-zinc-600">
+					<span className="font-semibold text-zinc-800">Tindakan Diperlukan:</span>
+					<span>Pilih konfirmasi untuk menerapkan perubahan</span>
+				</div>
+				<div className="flex items-center gap-2">
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						disabled={isPending || isProcessing}
+						onClick={() => handleCancelOperation(opId)}
+						className="text-xs h-8 px-3 border-zinc-300 hover:bg-zinc-100 text-zinc-700 font-medium"
+					>
+						{isPending ? (
+							<RiLoader4Line className="size-3.5 animate-spin mr-1.5" />
+						) : (
+							<RiCloseLine className="size-3.5 mr-1.5" />
+						)}
+						BATAL
+					</Button>
+					<Button
+						type="button"
+						size="sm"
+						disabled={isPending || isProcessing}
+						onClick={() => handleConfirmOperation(opId)}
+						className={`text-xs h-8 px-3 font-semibold shadow-sm transition-all ${
+							isDelete
+								? "bg-red-600 hover:bg-red-700 text-white focus:ring-red-500"
+								: "bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500"
+						}`}
+					>
+						{isPending ? (
+							<RiLoader4Line className="size-3.5 animate-spin mr-1.5" />
+						) : (
+							<RiCheckLine className="size-3.5 mr-1.5" />
+						)}
+						{isDelete ? "YA, HAPUS" : "YA, TERAPKAN"}
+					</Button>
+				</div>
+			</div>
+		);
+	};
 
 	const isInputDisabled =
 		mode === "general"
@@ -1125,6 +1255,7 @@ export function ChatPreview({
 														{0 === firstAssistantIndex && headerNode}
 														{0 === firstAssistantIndex && renderConfidenceScore()}
 														<MarkdownContent content={messages[0].content} />
+														{renderOperationActions(messages[0])}
 													</>
 												) : (
 													messages[0].content
@@ -1201,6 +1332,7 @@ export function ChatPreview({
 															{actualIndex === firstAssistantIndex && headerNode}
 															{actualIndex === firstAssistantIndex && renderConfidenceScore()}
 															<MarkdownContent content={msg.content} />
+															{renderOperationActions(msg)}
 														</>
 													) : (
 														msg.content

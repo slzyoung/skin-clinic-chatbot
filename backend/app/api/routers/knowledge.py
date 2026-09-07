@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
 from app.models.user import User, UserType
 from app.models.knowledge import Knowledge, KnowledgeStatus, KnowledgeType
+from app.models.pending_operation import PendingOperation
 from app.models.project import Project
 from app.models.chat import ChatSession, ChatMessage as DBChatMessage, ChatRole, ChatStatus
 from app.schemas.knowledge import (
@@ -190,6 +191,8 @@ async def get_general_chat_session(
             role=m.role.value.lower(),
             content=m.content,
             action=att.get("action"),
+            type=att.get("type"),
+            operation_id=att.get("operation_id"),
             target_knowledge_id=att.get("target_knowledge_id"),
             total_found=att.get("total_found"),
             attachments=att,
@@ -271,6 +274,8 @@ async def send_general_chat_message(
     # 3. Save Assistant Message in PostgreSQL with sequenced timestamp (+100ms) to ensure chronological consistency
     assistant_att = {
         "action": ai_res.action,
+        "type": ai_res.type,
+        "operation_id": ai_res.operation_id,
         "target_knowledge_id": ai_res.target_knowledge_id,
         "total_found": ai_res.total_found
     }
@@ -304,6 +309,223 @@ async def knowledge_query_general(
         vector_store=vector_store,
         bm25=bm25
     )
+
+@router.post("/operations/{operation_id}/confirm")
+@router.post("/operations/{operation_id}/confirm/")
+async def confirm_pending_operation(
+    operation_id: uuid.UUID,
+    session_id: Optional[uuid.UUID] = Query(None, description="Optional chat session to log confirmation"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:read")),
+    pipeline = Depends(get_generation_pipeline),
+    vector_store = Depends(get_vector_store),
+    bm25 = Depends(get_bm25_index)
+):
+    """
+    Explicitly confirm and execute a pending CRUD operation on the Knowledge Base.
+    Guarantees deterministic CRUD execution without relying on LLM decisions.
+    """
+    from app.rag.services.general_knowledge_service import GeneralKnowledgeService
+
+    stmt = select(PendingOperation).where(PendingOperation.id == operation_id)
+    res = await db.execute(stmt)
+    op = res.scalar_one_or_none()
+
+    if not op:
+        raise HTTPException(status_code=404, detail="Operasi tidak ditemukan atau telah kedaluwarsa.")
+
+    now_utc = datetime.now(timezone.utc)
+
+    if op.status == "confirmed":
+        return {
+            "type": "info",
+            "action": f"{op.action}_applied",
+            "operation_id": str(op.id),
+            "target_knowledge_id": op.knowledge_id,
+            "batch_id": op.batch_id,
+            "message": "Operasi ini sudah pernah dikonfirmasi sebelumnya."
+        }
+
+    if op.status == "cancelled":
+        return {
+            "type": "cancelled",
+            "action": "cancelled",
+            "operation_id": str(op.id),
+            "message": "Operasi ini telah dibatalkan sebelumnya."
+        }
+
+    if op.expires_at < now_utc:
+        op.status = "expired"
+        await db.commit()
+        return {
+            "type": "error",
+            "action": f"{op.action}_expired",
+            "operation_id": str(op.id),
+            "message": "Operasi telah kedaluwarsa (melebihi batas waktu 30 menit). Silakan ulangi instruksi Anda di chat."
+        }
+
+    affected_kids = (op.metadata_ or {}).get("affected_knowledge_ids") or [op.knowledge_id]
+
+    if op.action == "edit":
+        edit_results = []
+        for kid in affected_kids:
+            res = await GeneralKnowledgeService.apply_edit(
+                knowledge_id=kid,
+                field=op.field or "summary",
+                new_value=op.new_value or "",
+                vector_store=vector_store,
+                bm25_index=bm25,
+                pipeline=pipeline,
+                target_item=op.target_item,
+                db=db
+            )
+            edit_results.append(res)
+
+        any_success = any(r.get("success") for r in edit_results)
+        if any_success:
+            op.status = "confirmed"
+            op.confirmed_at = now_utc
+
+            if len(affected_kids) > 1:
+                success_msg = f"Perubahan pada '{op.target_item or op.knowledge_id}' berhasil diterapkan ke {len(affected_kids)} dokumen Knowledge Base."
+            else:
+                success_msg = edit_results[0].get("message") or f"Perubahan pada '{op.target_item or op.knowledge_id}' berhasil diterapkan ke Knowledge Base."
+
+            if session_id:
+                try:
+                    db.add(DBChatMessage(
+                        session_id=session_id,
+                        role=ChatRole.ASSISTANT,
+                        content=f"✅ {success_msg}",
+                        attachments={"action": "edit_applied", "operation_id": str(op.id), "target_knowledge_id": op.knowledge_id, "affected_knowledge_ids": affected_kids},
+                        created_at=now_utc + timedelta(milliseconds=100)
+                    ))
+                except Exception as e:
+                    logger.warning(f"[ConfirmOp] Could not log to session {session_id}: {e}")
+
+            await db.commit()
+            return {
+                "type": "success",
+                "action": "edit_applied",
+                "operation_id": str(op.id),
+                "target_knowledge_id": op.knowledge_id,
+                "affected_knowledge_ids": affected_kids,
+                "batch_id": op.batch_id,
+                "message": success_msg
+            }
+        else:
+            errors = [r.get("error", "Unknown error") for r in edit_results if not r.get("success")]
+            return {
+                "type": "error",
+                "action": "edit_failed",
+                "operation_id": str(op.id),
+                "message": f"Gagal menerapkan perubahan: {'; '.join(errors)}"
+            }
+
+    elif op.action == "delete":
+        del_results = []
+        for kid in affected_kids:
+            res = await GeneralKnowledgeService.apply_delete(
+                knowledge_id=kid,
+                target_item=op.target_item,
+                vector_store=vector_store,
+                bm25_index=bm25,
+                db=db
+            )
+            del_results.append(res)
+
+        any_success = any(r.get("success") for r in del_results)
+        if any_success:
+            op.status = "confirmed"
+            op.confirmed_at = now_utc
+
+            if len(affected_kids) > 1:
+                success_msg = f"Item '{op.target_item or op.knowledge_id}' berhasil dihapus dari {len(affected_kids)} dokumen Knowledge Base."
+            else:
+                success_msg = del_results[0].get("message") or f"Item/dokumen '{op.target_item or op.knowledge_id}' berhasil dihapus dari Knowledge Base."
+
+            if session_id:
+                try:
+                    db.add(DBChatMessage(
+                        session_id=session_id,
+                        role=ChatRole.ASSISTANT,
+                        content=f"🗑️ {success_msg}",
+                        attachments={"action": "delete_applied", "operation_id": str(op.id), "target_knowledge_id": op.knowledge_id, "affected_knowledge_ids": affected_kids},
+                        created_at=now_utc + timedelta(milliseconds=100)
+                    ))
+                except Exception as e:
+                    logger.warning(f"[ConfirmOp] Could not log to session {session_id}: {e}")
+
+            await db.commit()
+            return {
+                "type": "success",
+                "action": "delete_applied",
+                "operation_id": str(op.id),
+                "target_knowledge_id": op.knowledge_id,
+                "affected_knowledge_ids": affected_kids,
+                "batch_id": op.batch_id,
+                "message": success_msg
+            }
+        else:
+            errors = [r.get("error", "Unknown error") for r in del_results if not r.get("success")]
+            return {
+                "type": "error",
+                "action": "delete_failed",
+                "operation_id": str(op.id),
+                "message": f"Gagal menghapus item: {'; '.join(errors)}"
+            }
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Aksi operasi '{op.action}' tidak didukung.")
+
+@router.post("/operations/{operation_id}/cancel")
+@router.post("/operations/{operation_id}/cancel/")
+async def cancel_pending_operation(
+    operation_id: uuid.UUID,
+    session_id: Optional[uuid.UUID] = Query(None, description="Optional chat session to log cancellation"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:read"))
+):
+    """
+    Explicitly cancel a pending CRUD operation.
+    """
+    stmt = select(PendingOperation).where(PendingOperation.id == operation_id)
+    res = await db.execute(stmt)
+    op = res.scalar_one_or_none()
+
+    if not op:
+        raise HTTPException(status_code=404, detail="Operasi tidak ditemukan.")
+
+    if op.status == "confirmed":
+        return {
+            "type": "info",
+            "action": "already_confirmed",
+            "operation_id": str(op.id),
+            "message": "Operasi sudah terlanjur dikonfirmasi sebelumnya."
+        }
+
+    op.status = "cancelled"
+    now_utc = datetime.now(timezone.utc)
+
+    if session_id:
+        try:
+            db.add(DBChatMessage(
+                session_id=session_id,
+                role=ChatRole.ASSISTANT,
+                content="❌ Operasi dibatalkan. Tidak ada perubahan yang diterapkan pada Knowledge Base.",
+                attachments={"action": "cancelled", "operation_id": str(op.id)},
+                created_at=now_utc + timedelta(milliseconds=100)
+            ))
+        except Exception as e:
+            logger.warning(f"[CancelOp] Could not log to session {session_id}: {e}")
+
+    await db.commit()
+    return {
+        "type": "cancelled",
+        "action": "cancelled",
+        "operation_id": str(op.id),
+        "message": "Operasi berhasil dibatalkan. Tidak ada perubahan yang dilakukan pada Knowledge Base."
+    }
 
 from app.schemas.pagination import PaginatedResponse
 from typing import List, Optional, Union
@@ -1954,11 +2176,14 @@ async def delete_knowledge(
                     except Exception as err:
                         logger.warning(f"Failed to remove file {f_path}: {err}")
 
-    # Purge staging & approved JSON in MinIO
+    # Purge staging & approved JSON in MinIO along with all associated embedded images
     try:
-        from app.services.storage import delete_staging_json, delete_approved_json
-        delete_staging_json(kid_str)
-        delete_approved_json(kid_str)
+        from app.services.storage import delete_knowledge_images_and_assets
+        d_meta = knowledge.metadata_ if knowledge and isinstance(knowledge.metadata_, dict) else {}
+        delete_knowledge_images_and_assets(
+            kid_str,
+            doc_data={"summary": knowledge.ai_summary if knowledge else "", "metadata": d_meta, "image_urls": d_meta.get("image_urls", [])}
+        )
     except Exception as s3_del_err:
         logger.debug(f"MinIO delete note for {kid_str}: {s3_del_err}")
 

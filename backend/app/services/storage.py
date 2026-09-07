@@ -54,24 +54,20 @@ _cached_client = None
 _last_client_check_time = 0
 
 def _save_file_to_local_disk(content: bytes, filename: str, s3_key: str = None) -> None:
-    """Saves binary content to local disk fallback directory under both basename and s3_key subpaths."""
+    """Saves binary content to local disk fallback directory only when MinIO is unavailable."""
     if not content:
         return
-    targets = [filename]
-    if s3_key:
-        targets.append(s3_key)
     try:
-        for folder in ["data/temp", "data/images", "data/uploads", "data/storage"]:
-            for target in targets:
-                if not target:
-                    continue
-                clean_target = os.path.normpath(target.lstrip("/\\"))
-                local_path = os.path.normpath(os.path.join(folder, clean_target))
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                with open(local_path, "wb") as f:
-                    f.write(content)
-                base_path = os.path.normpath(os.path.join(folder, os.path.basename(clean_target)))
-                with open(base_path, "wb") as f:
+        folder = "data/storage"
+        os.makedirs(folder, exist_ok=True)
+        fname = os.path.basename(filename)
+        local_path = os.path.join(folder, fname)
+        with open(local_path, "wb") as f:
+            f.write(content)
+        if s3_key:
+            s3_fname = os.path.basename(s3_key)
+            if s3_fname != fname:
+                with open(os.path.join(folder, s3_fname), "wb") as f:
                     f.write(content)
     except Exception as e:
         logger.debug(f"Local disk fallback write exception for '{filename}': {e}")
@@ -128,7 +124,14 @@ def _get_client():
                 region_name=region,
             )
             client.list_buckets()
+            was_offline = (_cached_client is False)
             _cached_client = client
+            if was_offline:
+                logger.info("🟢 MinIO connection restored! Triggering auto-sync of fallback local files to MinIO...")
+                try:
+                    sync_existing_local_to_minio(client=client)
+                except Exception as sync_e:
+                    logger.warning(f"Error during auto-sync to MinIO: {sync_e}")
             return client
         except Exception:
             continue
@@ -363,7 +366,7 @@ def get_s3_object_data(s3_key: str) -> tuple:
 def upload_image(content: bytes, filename: str, content_type: str = "image/png") -> dict:
     """
     Synchronously uploads image binary content to images bucket (PUBLIC-READ).
-    Falls back cleanly to local disk storage if MinIO is unavailable.
+    Falls back cleanly to local disk storage ONLY if MinIO is unavailable.
     """
     clean_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', str(filename or "image.png"))
     clean_filename = re.sub(r'_+', '_', clean_filename)
@@ -371,11 +374,9 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
     browser_url = _format_browser_url(None, s3_key)
     bucket_name = _images_bucket()
 
-    # Always ensure local disk fallback copy exists
-    _save_file_to_local_disk(content, filename, s3_key=s3_key)
-
     client = _get_client()
     if not client:
+        _save_file_to_local_disk(content, filename, s3_key=s3_key)
         return {
             "s3_key": s3_key,
             "image_url": browser_url,
@@ -403,7 +404,8 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
             "status": "success"
         }
     except Exception as e:
-        logger.debug(f"MinIO upload note for '{filename}': {e}. Returning local proxy URL.")
+        logger.warning(f"MinIO upload error for '{filename}': {e}. Falling back to local disk.")
+        _save_file_to_local_disk(content, filename, s3_key=s3_key)
         return {
             "s3_key": s3_key,
             "image_url": browser_url,
@@ -415,7 +417,7 @@ def upload_image(content: bytes, filename: str, content_type: str = "image/png")
 def upload_images_parallel(images: list) -> list:
     """
     Upload multiple images to MinIO concurrently using ThreadPoolExecutor.
-    Falls back cleanly to local disk storage if MinIO is offline.
+    Falls back cleanly to local disk storage ONLY if MinIO is offline.
     """
     if not images:
         return []
@@ -423,15 +425,12 @@ def upload_images_parallel(images: list) -> list:
     client = _get_client()
     bucket_name = _images_bucket() if client else None
 
-    # Always save all images to local disk fallback storage
-    for img in images:
-        if img.get("content") and img.get("filename"):
-            _save_file_to_local_disk(img["content"], img["filename"])
-
     if not client:
         results = []
         for img in images:
             s3_key = f"images/{uuid.uuid4().hex}_{img['filename']}"
+            if img.get("content") and img.get("filename"):
+                _save_file_to_local_disk(img["content"], img["filename"], s3_key=s3_key)
             results.append({
                 "s3_key": s3_key,
                 "image_url": _format_browser_url(None, s3_key),
@@ -464,7 +463,8 @@ def upload_images_parallel(images: list) -> list:
                 "status": "success"
             }
         except Exception as e:
-            logger.warning(f"MinIO upload failed for '{fname}': {e}")
+            logger.warning(f"MinIO upload failed for '{fname}': {e}. Falling back to local disk.")
+            _save_file_to_local_disk(content, fname, s3_key=s3_key)
             return {
                 "s3_key": s3_key,
                 "image_url": browser_url,
@@ -540,10 +540,9 @@ def upload_document(
     s3_key = _build_document_s3_key(document_id, filename)
     bucket_name = _docs_bucket()
 
-    _save_file_to_local_disk(content, filename, s3_key=s3_key)
-
     client = _get_client()
     if not client:
+        _save_file_to_local_disk(content, filename, s3_key=s3_key)
         return {
             "s3_key": s3_key,
             "bucket": bucket_name,
@@ -575,7 +574,8 @@ def upload_document(
             "status": "success"
         }
     except Exception as e:
-        logger.debug(f"Document upload to MinIO note for '{filename}': {e}")
+        logger.warning(f"Document upload to MinIO failed for '{filename}': {e}. Falling back to local disk.")
+        _save_file_to_local_disk(content, filename, s3_key=s3_key)
         return {
             "s3_key": s3_key,
             "bucket": bucket_name,
@@ -840,20 +840,26 @@ def delete_approved_json(knowledge_id: str) -> None:
                 pass
 
 
-def sync_existing_local_to_minio() -> dict:
+def sync_existing_local_to_minio(client=None) -> dict:
     """
-    Initial sync: uploads any existing local files in 'data/pending' to 'staging' bucket
-    and 'data/output' to 'approved' bucket in MinIO so MinIO is immediately populated
-    as the Source of Truth.
+    Syncs any local files created while MinIO was offline back into MinIO:
+    1. Uploads files from 'data/pending' to MinIO 'staging' bucket.
+    2. Uploads files from 'data/output' to MinIO 'approved' bucket.
+    3. Uploads binary files from 'data/storage' to MinIO 'images' or 'knowledge-documents' buckets,
+       and automatically DELETES them from 'data/storage' upon successful upload so local disk remains 100% clean.
     """
     synced_staging = 0
     synced_approved = 0
-    client = _get_client()
+    synced_storage = 0
+    if client is None:
+        client = _get_client()
     if not client:
-        return {"staging": 0, "approved": 0, "status": "offline"}
+        return {"staging": 0, "approved": 0, "storage": 0, "status": "offline"}
 
     staging_bucket = _staging_bucket()
     approved_bucket = _approved_bucket()
+    images_bucket = _images_bucket()
+    docs_bucket = _docs_bucket()
 
     # 1. Sync data/pending -> staging
     if os.path.exists("data/pending"):
@@ -895,9 +901,53 @@ def sync_existing_local_to_minio() -> dict:
                 except Exception as e:
                     logger.debug(f"Sync approved file '{fname}' note: {e}")
 
-    if synced_staging > 0 or synced_approved > 0:
-        logger.info(f"🔄 Synced local files to MinIO: {synced_staging} staging, {synced_approved} approved.")
-    return {"staging": synced_staging, "approved": synced_approved, "status": "success"}
+    # 3. Sync and flush data/storage -> MinIO images & documents, then delete from local disk!
+    if os.path.exists("data/storage"):
+        for root, _, files in os.walk("data/storage"):
+            for fname in files:
+                full_path = os.path.join(root, fname)
+                ext = os.path.splitext(fname)[1].lower()
+                try:
+                    with open(full_path, "rb") as f:
+                        file_bytes = f.read()
+
+                    if not file_bytes:
+                        try:
+                            os.remove(full_path)
+                        except Exception:
+                            pass
+                        continue
+
+                    # Determine target bucket & S3 key
+                    if ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]:
+                        target_bucket = images_bucket
+                        target_key = f"images/{fname}" if not fname.startswith("images/") else fname
+                        content_type = f"image/{ext.lstrip('.')}" if ext != ".jpg" else "image/jpeg"
+                    else:
+                        target_bucket = docs_bucket
+                        target_key = f"originals/fallback/{fname}"
+                        content_type = "application/octet-stream"
+
+                    client.put_object(
+                        Bucket=target_bucket,
+                        Key=target_key,
+                        Body=file_bytes,
+                        ContentType=content_type
+                    )
+                    synced_storage += 1
+
+                    # Remove from local disk after successful upload!
+                    try:
+                        os.remove(full_path)
+                        logger.info(f"🔄 Migrated fallback file '{fname}' to MinIO '{target_bucket}/{target_key}' and removed from local disk.")
+                    except Exception as rm_e:
+                        logger.debug(f"Could not remove synced fallback file {full_path}: {rm_e}")
+                except Exception as upload_e:
+                    logger.warning(f"Failed to sync fallback file '{fname}' to MinIO: {upload_e}")
+
+    if synced_staging > 0 or synced_approved > 0 or synced_storage > 0:
+        logger.info(f"🔄 Synced local files to MinIO: {synced_staging} staging, {synced_approved} approved, {synced_storage} storage migrated.")
+    return {"staging": synced_staging, "approved": synced_approved, "storage": synced_storage, "status": "success"}
 
 
 def get_document_presigned_url(s3_key: str, expires: int = 3600) -> str:
@@ -961,5 +1011,190 @@ def clear_all_buckets() -> dict:
     except Exception as e:
         logger.error(f"clear_all_buckets failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def extract_image_keys_from_doc_data(doc_data: dict) -> set:
+    """Extracts all image filenames and S3 keys referenced in a document dictionary."""
+    if not isinstance(doc_data, dict):
+        return set()
+
+    found_keys = set()
+    
+    # 1. Direct image_urls list
+    for u in doc_data.get("image_urls", []) or []:
+        if isinstance(u, str) and u.strip():
+            found_keys.add(u.strip())
+            
+    # 2. Metadata images / image_urls
+    meta = doc_data.get("metadata", {})
+    if isinstance(meta, dict):
+        for u in meta.get("image_urls", []) or []:
+            if isinstance(u, str) and u.strip():
+                found_keys.add(u.strip())
+        for img in meta.get("images", []) or []:
+            if isinstance(img, dict):
+                u = img.get("url") or img.get("image_url") or img.get("s3_key")
+                if u and isinstance(u, str):
+                    found_keys.add(u.strip())
+            elif isinstance(img, str) and img.strip():
+                found_keys.add(img.strip())
+        if meta.get("s3_key"):
+            found_keys.add(str(meta["s3_key"]).strip())
+
+    # 3. Summary markdown images
+    summary = str(doc_data.get("summary", "") or "")
+    if summary:
+        import re
+        for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', summary):
+            if m and isinstance(m, str):
+                found_keys.add(m.strip())
+
+    # 4. Chunks text & metadata
+    for chunk in doc_data.get("chunks", []) or []:
+        if not isinstance(chunk, dict):
+            continue
+        c_text = str(chunk.get("text", "") or "")
+        if c_text:
+            import re
+            for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', c_text):
+                if m and isinstance(m, str):
+                    found_keys.add(m.strip())
+        c_meta = chunk.get("metadata", {})
+        if isinstance(c_meta, dict):
+            for k in ["image_url", "image_urls", "s3_key", "image_reference"]:
+                val = c_meta.get(k)
+                if isinstance(val, list):
+                    for v in val:
+                        if isinstance(v, str) and v.strip():
+                            found_keys.add(v.strip())
+                elif isinstance(val, str) and val.strip():
+                    found_keys.add(val.strip())
+
+    return found_keys
+
+
+def delete_knowledge_images_and_assets(knowledge_id: str, doc_data: Optional[dict] = None) -> dict:
+    """
+    Comprehensively deletes all MinIO objects and local fallback files associated with a knowledge document:
+    1. All embedded images in MinIO 'images' bucket.
+    2. All original documents and canonical JSON in MinIO 'knowledge-documents' bucket.
+    3. Staging and approved JSONs in MinIO 'staging' and 'approved' buckets.
+    4. Local disk fallback files in data/images, data/storage, data/temp, data/uploads.
+    """
+    kid_str = str(knowledge_id).strip()
+    client = _get_client()
+    images_bucket = _images_bucket()
+    docs_bucket = _docs_bucket()
+
+    all_image_refs = set()
+    if doc_data and isinstance(doc_data, dict):
+        all_image_refs.update(extract_image_keys_from_doc_data(doc_data))
+
+    # Also check staging and approved JSON from MinIO or disk if doc_data wasn't fully populated
+    for getter in [get_staging_json, get_approved_json]:
+        try:
+            m_doc = getter(kid_str)
+            if m_doc and isinstance(m_doc, dict):
+                all_image_refs.update(extract_image_keys_from_doc_data(m_doc))
+        except Exception:
+            pass
+
+    # Check local JSON cache if doc_data wasn't fully populated
+    for folder in ["data/output", "data/pending", "data/temp"]:
+        for cand in [f"{kid_str}.json", f"{kid_str}_parsed.json"]:
+            cand_path = os.path.join(folder, cand)
+            if os.path.exists(cand_path):
+                try:
+                    with open(cand_path, "r", encoding="utf-8") as fp:
+                        cached_doc = json.load(fp)
+                    if isinstance(cached_doc, dict):
+                        all_image_refs.update(extract_image_keys_from_doc_data(cached_doc))
+                except Exception:
+                    pass
+
+    deleted_images = []
+
+    # Helper to sanitize and delete single image reference
+    def _purge_image_ref(raw_ref: str):
+        if not raw_ref:
+            return
+        clean = raw_ref.strip()
+        # Strip URL prefix if present
+        if "/api/storage/" in clean:
+            clean = clean.split("/api/storage/")[-1]
+        elif "/storage/" in clean:
+            clean = clean.split("/storage/")[-1]
+        elif "://" in clean:
+            from urllib.parse import urlparse
+            clean = urlparse(clean).path.lstrip("/")
+            if clean.startswith(f"{images_bucket}/"):
+                clean = clean[len(images_bucket) + 1:]
+
+        clean = clean.lstrip("/")
+        fname = os.path.basename(clean)
+
+        if not fname or len(fname) < 4:
+            return
+
+        # Delete from MinIO images bucket
+        if client:
+            for s3_candidate in [f"images/{fname}", clean, fname]:
+                try:
+                    client.delete_object(Bucket=images_bucket, Key=s3_candidate)
+                except Exception as e:
+                    logger.debug(f"MinIO delete image '{s3_candidate}' note: {e}")
+            deleted_images.append(fname)
+            logger.info(f"🗑️ Deleted MinIO image '{fname}' for doc '{kid_str}'")
+
+        # Delete from local disk fallback storage
+        for folder in ["data/images", "data/storage/images", "data/temp", "data/uploads", "data/storage"]:
+            for candidate in [fname, f"images/{fname}"]:
+                local_f = os.path.normpath(os.path.join(folder, candidate))
+                if os.path.exists(local_f) and os.path.isfile(local_f):
+                    try:
+                        os.remove(local_f)
+                        logger.debug(f"Removed local disk fallback image: {local_f}")
+                    except Exception:
+                        pass
+
+    for ref in all_image_refs:
+        _purge_image_ref(ref)
+
+    # Clean MinIO knowledge-documents bucket (originals & canonical)
+    if client and kid_str:
+        try:
+            # 1. Delete canonical JSON
+            client.delete_object(Bucket=docs_bucket, Key=f"canonical/{kid_str}/document.json")
+        except Exception:
+            pass
+
+        try:
+            # 2. Delete original upload files in originals/.../{kid_str}/...
+            paginator = client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=docs_bucket, Prefix="originals/"):
+                for obj in page.get('Contents', []):
+                    key = obj.get('Key', '')
+                    if f"/{kid_str}/" in key:
+                        try:
+                            client.delete_object(Bucket=docs_bucket, Key=key)
+                            logger.info(f"🗑️ Deleted original document '{key}' from MinIO '{docs_bucket}'")
+                        except Exception as err:
+                            logger.debug(f"Could not delete original document '{key}': {err}")
+        except Exception as e:
+            logger.debug(f"Error purging originals for '{kid_str}': {e}")
+
+    # Clean staging & approved JSON in MinIO
+    try:
+        delete_staging_json(kid_str)
+        delete_approved_json(kid_str)
+    except Exception:
+        pass
+
+    return {
+        "knowledge_id": kid_str,
+        "deleted_images_count": len(set(deleted_images)),
+        "deleted_images": list(set(deleted_images))
+    }
+
 
 

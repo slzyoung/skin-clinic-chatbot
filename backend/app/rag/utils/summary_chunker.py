@@ -539,7 +539,7 @@ def chunk_summary_markdown(
                     # Under a Before & After section, assign clinical photos, never device image
                     meta["image_url"] = before_img or after_img
                     meta["role"] = "CLINICAL_BEFORE" if before_img else "CLINICAL_AFTER"
-                elif default_image_url:
+                elif default_image_url and doc_type != "PRODUCT":
                     meta["image_url"] = default_image_url
 
             # Extract SKU
