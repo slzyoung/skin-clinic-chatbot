@@ -26,7 +26,7 @@ from app.rag.schemas import (
 )
 from app.rag.services.rag_pipeline import IngestionPipeline
 from app.rag.services.rag_retriever import HybridRetriever, BM25Index
-from app.rag.services.rag_generator import GenerationPipeline
+from app.rag.services.rag_generator import GenerationPipeline, _extract_specific_treatment_or_product_name
 from app.rag.services.evaluation import RAGEvaluator
 from app.rag.services.guardrails import GuardrailsPipeline
 from app.rag.config import settings
@@ -5056,21 +5056,8 @@ async def query_general_endpoint(
             if ("pptx_img_1_" in img_filename or "pptx_img_2_" in img_filename or "cover" in img_filename) and not any(k in img_filename for k in ["before", "after", "spot", "wash", "s4_img"]):
                 continue
 
-            section_name = meta.get("section") or meta.get("heading") or meta.get("product_name") or ""
-            if section_name and section_name not in ("General", "unknown", "ERHA Product List"):
-                target_match = section_name
-            else:
-                if "spot_gel" in img_filename or "spot" in img_filename:
-                    target_match = "ERHA Acneact Acne Spot Gel"
-                elif "witch_hazel" in img_filename or ("wash" in img_filename and "gentle" in img_filename):
-                    target_match = "ERHA Acneact Witch Hazel & BHA Gentle Acne Facial Wash"
-                elif "truwhite" in img_filename:
-                    target_match = "ERHA Truwhite Brightening Facial Wash"
-                elif "moisturizer" in img_filename:
-                    target_match = "ERHA Acneact Gentle Acne Moisturizer"
-                else:
-                    target_match = ""
-
+            chunk_content = hit.get("content") or hit.get("text") or ""
+            target_match = _extract_specific_treatment_or_product_name(meta, chunk_text=chunk_content)
             display_label = target_match
 
             if not target_match or str(img) in injected_imgs:

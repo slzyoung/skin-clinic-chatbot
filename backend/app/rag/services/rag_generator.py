@@ -363,6 +363,27 @@ def _extract_specific_treatment_or_product_name(meta: Dict[str, Any], chunk_text
                     c_val = f"{c_val} Treatment"
                 return c_val
 
+    # A2. Check embedded image assets in metadata
+    img_url_target = meta.get("image_url") or meta.get("image") or ""
+    images = meta.get("images") or meta.get("image_assets") or []
+    if isinstance(images, list):
+        for img_obj in images:
+            if isinstance(img_obj, dict):
+                if not img_url_target or img_obj.get("url") == img_url_target or len(images) == 1:
+                    p_name = img_obj.get("product_name") or img_obj.get("caption") or img_obj.get("title")
+                    if p_name and isinstance(p_name, str):
+                        c_val = _clean_item_name(p_name)
+                        if c_val and not _is_generic_name(c_val):
+                            return c_val
+
+    # A3. Direct caption/title in metadata
+    for key in ["caption", "image_caption", "title", "document_title"]:
+        val = meta.get(key)
+        if val and isinstance(val, str):
+            c_val = _clean_item_name(val)
+            if c_val and not _is_generic_name(c_val):
+                return c_val
+
     # B. Check explicit key-value lines in chunk text
     if chunk_text:
         t_match = re.search(r'(?:-\s*)?\*\*(?:Jenis|Nama)\s+Treatment\*\*\s*[:=]\s*([^\n\r\|]+)', chunk_text, re.IGNORECASE)
@@ -410,17 +431,34 @@ def _extract_specific_treatment_or_product_name(meta: Dict[str, Any], chunk_text
                 return c_val
             elif any(k in c_val.lower() for k in ["erha", "gel", "wash", "moisturizer", "serum", "cream", "sunscreen"]):
                 return c_val
+            else:
+                return c_val
 
-    # D. Check filename for known product/treatment patterns
+    # D. Check filename for known product/treatment patterns or dynamic fallback
     img_fn = os.path.basename(str(meta.get("image_url") or meta.get("image") or "")).lower()
-    if "spot_gel" in img_fn or "spot" in img_fn:
-        return "ERHA Acneact Acne Spot Gel"
-    elif "witch_hazel" in img_fn or ("wash" in img_fn and "gentle" in img_fn):
-        return "ERHA Acneact Witch Hazel & BHA Gentle Acne Facial Wash"
-    elif "truwhite" in img_fn:
-        return "ERHA Truwhite Brightening Facial Wash"
-    elif "moisturizer" in img_fn:
-        return "ERHA Acneact Gentle Acne Moisturizer"
+    if img_fn:
+        if "spot_gel" in img_fn or "spot" in img_fn:
+            return "ERHA Acneact Acne Spot Gel"
+        elif "witch_hazel" in img_fn or ("wash" in img_fn and "gentle" in img_fn):
+            return "ERHA Acneact Witch Hazel & BHA Gentle Acne Facial Wash"
+        elif "truwhite" in img_fn:
+            return "ERHA Truwhite Brightening Facial Wash"
+        elif "moisturizer" in img_fn:
+            return "ERHA Acneact Gentle Acne Moisturizer"
+
+        # D2. Generic dynamic extraction from filename for any product / brand
+        clean_fn = re.sub(r'^(?:docx_img_\d+_|pptx_img_\d+_|excel_img_\d+_|s\d+_img_\d+_\w+_|img_\w+_)', '', img_fn)
+        clean_fn = re.sub(r'\.(?:png|jpg|jpeg|webp|gif|bmp)$', '', clean_fn, flags=re.IGNORECASE)
+        clean_fn = clean_fn.replace("_", " ").replace("-", " ")
+        clean_fn = _clean_item_name(clean_fn)
+        if clean_fn and not _is_generic_name(clean_fn) and len(clean_fn) >= 3:
+            return clean_fn.title()
+
+    # E. Final fallback to document title if specific and non-generic
+    if doc_title:
+        c_doc = _clean_item_name(doc_title)
+        if c_doc and not _is_generic_name(c_doc):
+            return c_doc
 
     return ""
 
