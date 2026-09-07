@@ -8,6 +8,8 @@ from typing import List, Optional, Dict, Any
 import uuid
 import json
 import os
+import mimetypes
+import re
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, RequireAccess
@@ -53,6 +55,33 @@ from app.rag.schemas import (
 )
 
 router = APIRouter(tags=["Knowledge"])
+
+async def sanitize_knowledge_categories(db: AsyncSession, categories: Optional[List[Any]]) -> List[str]:
+    """
+    Safely sanitizes category lists against active database categories.
+    Excludes any soft-deleted categories (Category.deleted_at is not None).
+    """
+    if not categories:
+        return []
+    try:
+        stmt = select(Category.name).where(Category.deleted_at.is_(None))
+        res = await db.execute(stmt)
+        active_cats = {c.strip().lower(): c for c in res.scalars().all() if c}
+
+        cleaned = []
+        for cat in categories:
+            if isinstance(cat, dict):
+                c_name = str(cat.get("name") or "").strip()
+            else:
+                c_name = str(cat).strip()
+            if c_name and c_name.lower() in active_cats:
+                cleaned.append(active_cats[c_name.lower()])
+        return cleaned
+    except Exception as err:
+        logger.warning(f"Error sanitizing knowledge categories: {err}")
+        # Fallback to normalized strings if DB check fails
+        return [str(c.get("name") if isinstance(c, dict) else c).strip() for c in categories if c]
+
 
 @router.get("/quota")
 async def get_ingestion_quota_endpoint(
@@ -387,6 +416,28 @@ async def list_knowledge(
 
     all_items = db_responses + staged_responses
 
+    # Sanitize categories across all returned items to exclude soft-deleted records
+    try:
+        cat_stmt = select(Category.name).where(Category.deleted_at.is_(None))
+        cat_res = await db.execute(cat_stmt)
+        active_cat_set = {c.strip().lower(): c for c in cat_res.scalars().all() if c}
+        for item in all_items:
+            if isinstance(item.metadata_, dict):
+                if "categories" in item.metadata_ and isinstance(item.metadata_["categories"], list):
+                    item.metadata_["categories"] = [
+                        active_cat_set[str(c.get("name") if isinstance(c, dict) else c).strip().lower()]
+                        for c in item.metadata_["categories"]
+                        if str(c.get("name") if isinstance(c, dict) else c).strip().lower() in active_cat_set
+                    ]
+                if "suggested_categories" in item.metadata_ and isinstance(item.metadata_["suggested_categories"], list):
+                    item.metadata_["suggested_categories"] = [
+                        active_cat_set[str(c.get("name") if isinstance(c, dict) else c).strip().lower()]
+                        for c in item.metadata_["suggested_categories"]
+                        if str(c.get("name") if isinstance(c, dict) else c).strip().lower() in active_cat_set
+                    ]
+    except Exception as err:
+        logger.warning(f"Error sanitizing categories in list_knowledge: {err}")
+
     if status and status != "ALL":
         all_items = [item for item in all_items if item.status == status]
 
@@ -475,6 +526,10 @@ async def get_knowledge(
                                 merged_meta["initial_summary"] = knowledge.metadata_["initial_summary"]
                             if "initial_prompt" not in merged_meta and "initial_prompt" in knowledge.metadata_:
                                 merged_meta["initial_prompt"] = knowledge.metadata_["initial_prompt"]
+                    if "categories" in merged_meta:
+                        merged_meta["categories"] = await sanitize_knowledge_categories(db, merged_meta.get("categories"))
+                    if "suggested_categories" in merged_meta:
+                        merged_meta["suggested_categories"] = await sanitize_knowledge_categories(db, merged_meta.get("suggested_categories"))
                     knowledge.metadata_ = merged_meta
         except Exception as e:
             logger.warning(f"Error loading RAG JSON: {e}")
@@ -497,6 +552,10 @@ async def get_knowledge(
                 data = json.load(f)
             doc_status = KnowledgeStatus.APPROVED if "output" in target_file else KnowledgeStatus.PENDING
             if isinstance(data, dict):
+                if "categories" in data:
+                    data["categories"] = await sanitize_knowledge_categories(db, data.get("categories"))
+                if "suggested_categories" in data:
+                    data["suggested_categories"] = await sanitize_knowledge_categories(db, data.get("suggested_categories"))
                 file_name = data.get("file_name", "document.pdf")
                 title = data.get("title", file_name)
                 summary = data.get("summary", "")
@@ -862,6 +921,7 @@ ALLOWED_MIME_TYPES = {
     "text/plain",
     "text/csv",
     "image/jpeg",
+    "image/jpg",
     "image/png",
     "image/webp"
 }
@@ -880,8 +940,14 @@ async def upload_knowledge_file(
 ):
     upload_list = file if isinstance(file, list) else [file]
     for target_file in upload_list:
-        if target_file.content_type not in ALLOWED_MIME_TYPES:
-            raise HTTPException(status_code=400, detail=f"File type {target_file.content_type} not allowed for file {target_file.filename}")
+        raw_ctype = (target_file.content_type or "").lower().strip()
+        if raw_ctype not in ALLOWED_MIME_TYPES:
+            guessed_type, _ = mimetypes.guess_type(target_file.filename or "")
+            if not guessed_type or guessed_type.lower().strip() not in ALLOWED_MIME_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File type '{target_file.content_type}' not allowed for file '{target_file.filename}'. Allowed types: PDF, Word, Excel, PowerPoint, Text, CSV, and Images."
+                )
         
     # Check monthly ingestion quota (soft warning / notice model)
     allowed, quota_info = await check_ingestion_quota(db)
@@ -1228,19 +1294,32 @@ async def edit_knowledge(
             
         if k_entry.metadata_ is None:
             k_entry.metadata_ = {}
+
+        existing_meta = dict(k_entry.metadata_) if isinstance(k_entry.metadata_, dict) else {}
             
         if payload.categories is not None:
-            k_entry.metadata_["categories"] = payload.categories
+            sanitized_cats = await sanitize_knowledge_categories(db, payload.categories)
+            k_entry.metadata_["categories"] = sanitized_cats
             
         if payload.visibility_settings is not None:
             k_entry.metadata_["visibility_settings"] = payload.visibility_settings.model_dump()
             
-        # Ensure batch_id and audit keys from res are preserved
+        # Ensure batch_id, chunks, images, and image_urls from res are preserved
         if isinstance(res, dict):
             if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
                 k_entry.metadata_["batch_id"] = res["batch_id"]
             if res.get("chunks"):
                 k_entry.metadata_["chunks"] = res["chunks"]
+            if res.get("image_urls") and "image_urls" not in k_entry.metadata_:
+                k_entry.metadata_["image_urls"] = res["image_urls"]
+            if res.get("images") and "images" not in k_entry.metadata_:
+                k_entry.metadata_["images"] = res["images"]
+
+        # Ensure existing images array with granular role metadata and image_urls in DB metadata are never lost
+        if "images" not in k_entry.metadata_ and "images" in existing_meta:
+            k_entry.metadata_["images"] = existing_meta["images"]
+        if "image_urls" not in k_entry.metadata_ and "image_urls" in existing_meta:
+            k_entry.metadata_["image_urls"] = existing_meta["image_urls"]
 
         # Ensure SQLAlchemy sees the mutation in the JSON column
         from sqlalchemy.orm.attributes import flag_modified
@@ -1409,6 +1488,14 @@ async def refine_knowledge(
                                 jdata["image_url"] = all_attached_images[0]
                             with open(target_json_file, "w", encoding="utf-8") as jf:
                                 json.dump(jdata, jf, indent=4, ensure_ascii=False)
+                            try:
+                                from app.services.storage import upload_staging_json, upload_approved_json
+                                if "pending" in target_json_file:
+                                    upload_staging_json(str(knowledge_id), jdata)
+                                elif "output" in target_json_file:
+                                    upload_approved_json(str(knowledge_id), jdata)
+                            except Exception:
+                                pass
                         except Exception as update_err:
                             logger.debug(f"Could not pre-update image_urls in {target_json_file}: {update_err}")
 
@@ -1515,9 +1602,10 @@ async def refine_knowledge(
             if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
                 k_entry.metadata_["batch_id"] = res.get("batch_id")
             if res.get("categories") is not None:
-                k_entry.metadata_["categories"] = res.get("categories")
+                k_entry.metadata_["categories"] = await sanitize_knowledge_categories(db, res.get("categories"))
             elif res.get("suggested_categories") is not None:
-                k_entry.metadata_["categories"] = [c.get("name") if isinstance(c, dict) else str(c) for c in res.get("suggested_categories", [])]
+                raw_cats = [c.get("name") if isinstance(c, dict) else str(c) for c in res.get("suggested_categories", [])]
+                k_entry.metadata_["categories"] = await sanitize_knowledge_categories(db, raw_cats)
             if res.get("visibility_settings") is not None:
                 k_entry.metadata_["visibility_settings"] = res.get("visibility_settings")
             if res.get("chunks") is not None:

@@ -2,6 +2,21 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.8] - 2026-09-07
+
+### Fullstack Risk Analysis & Defect Remediation
+- **Database Soft-Deleted Category Sanitation (`app/api/routers/knowledge.py`)**:
+  - Implemented `sanitize_knowledge_categories(db, categories)` helper that queries active database records (`Category.deleted_at.is_(None)`) and prunes soft-deleted category names from knowledge metadata.
+  - Integrated sanitation into `get_knowledge` and `edit_knowledge` endpoints.
+- **Image Role & URL Metadata Preservation (`app/api/routers/knowledge.py`)**:
+  - In `edit_knowledge`, ensured granular image role metadata (`metadata_["images"]` with roles like `CLINICAL_BEFORE`, `TREATMENT_PROCEDURE`, captions) and `metadata_["image_urls"]` are deeply preserved during title, summary, or category updates.
+- **CIS Alphanumeric & Numeric Identifier Parsing Safety (`app/services/cis_sync.py`, `app/api/dependencies.py`)**:
+  - Standardized all external CIS ID parsing with `parse_cis_int` across auth dependencies and webhook bulk synchronization payloads.
+- **Storage Proxy Streaming & Multi-Folder Fallback (`app/api/routers/storage.py`)**:
+  - Verified `StreamingResponse` for S3 object delivery and multi-tier local folder search hierarchy (`data/temp/images`, `data/output/images`, `data/images`, `data/documents`, `data/storage`).
+
+---
+
 ## [1.2.7] - 2026-09-04
 
 ### DOCX Embedded Table & Inline Image Parser Enhancement
