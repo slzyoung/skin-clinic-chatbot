@@ -57,9 +57,23 @@ export const useKnowledgeBatch = (batchId: string) => {
 		enabled: !!batchId,
 		refetchInterval: (query) => {
 			const data = query.state.data;
-			if (data?.some((item) => item.status === "PROCESSING")) {
-				return 2000;
+			if (!data || data.length === 0) return false;
+
+			// 1. Continue polling if any document is still PROCESSING
+			const isAnyProcessing = data.some((item) => item.status === "PROCESSING");
+			if (isAnyProcessing) {
+				return 1500;
 			}
+
+			// 2. If multi-document batch (>= 2) and any non-rejected doc is missing batch_summary,
+			// continue polling to allow the background/coordinator summary synthesis to complete and update
+			const hasMissingSummary = data.some(
+				(item) => item.status !== "REJECTED" && !(item.metadata as Record<string, unknown>)?.batch_summary,
+			);
+			if (data.length >= 2 && hasMissingSummary) {
+				return 1500;
+			}
+
 			return false;
 		},
 	});

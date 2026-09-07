@@ -47,6 +47,7 @@ import {
 	useSendGeneralChatMessage,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { MarkdownContent } from "@/components/shared/markdown-content";
+import { cleanMessageTurn } from "@/components/shared/markdown/utils";
 import { toast } from "sonner";
 import { CategorySettings } from "./category-settings";
 import { ApprovalActions } from "./approval-actions";
@@ -136,27 +137,40 @@ function getInitialMessages(
 	}
 
 	if (Array.isArray(history) && history.length > 0) {
+		const mapTurn = (m: {
+			role: "user" | "assistant";
+			content: string;
+			attachmentName?: string;
+			attachmentNames?: string[];
+		}): Message => {
+			if (m.role === "user") {
+				const cleaned = cleanMessageTurn(m.content, m.attachmentName, m.attachmentNames);
+				return {
+					role: "user",
+					content: cleaned.content,
+					attachmentName: cleaned.attachmentName,
+					attachmentNames: cleaned.attachmentNames,
+				};
+			}
+			return {
+				role: "assistant",
+				content: m.content,
+				attachmentName: m.attachmentName,
+				attachmentNames: m.attachmentNames,
+			};
+		};
+
 		const startsWithTurn0 =
 			(effectivePrompt && history[0]?.role === "user" && history[0]?.content === effectivePrompt) ||
 			(!effectivePrompt && history[0]?.role === "assistant");
 
 		if (startsWithTurn0) {
-			return history.map((m) => ({
-				role: m.role,
-				content: m.content,
-				attachmentName: m.attachmentName,
-				attachmentNames: m.attachmentNames,
-			}));
+			return history.map(mapTurn);
 		}
 
 		return [
 			...turn0,
-			...history.map((m) => ({
-				role: m.role,
-				content: m.content,
-				attachmentName: m.attachmentName,
-				attachmentNames: m.attachmentNames,
-			})),
+			...history.map(mapTurn),
 		];
 	}
 
@@ -251,13 +265,27 @@ export function ChatPreview({
 	const sessionMessages = generalSession?.messages;
 	const dbMessages: Message[] = useMemo(() => {
 		if (mode === "general" && sessionMessages) {
-			return sessionMessages.map((m) => ({
-				role: m.role as "user" | "assistant",
-				content: m.content,
-				action: m.action || undefined,
-				target_knowledge_id: m.target_knowledge_id || undefined,
-				total_found: m.total_found ?? undefined,
-			}));
+			return sessionMessages.map((m) => {
+				if (m.role === "user") {
+					const cleaned = cleanMessageTurn(m.content);
+					return {
+						role: "user",
+						content: cleaned.content,
+						attachmentName: cleaned.attachmentName,
+						attachmentNames: cleaned.attachmentNames,
+						action: m.action || undefined,
+						target_knowledge_id: m.target_knowledge_id || undefined,
+						total_found: m.total_found ?? undefined,
+					};
+				}
+				return {
+					role: m.role as "user" | "assistant",
+					content: m.content,
+					action: m.action || undefined,
+					target_knowledge_id: m.target_knowledge_id || undefined,
+					total_found: m.total_found ?? undefined,
+				};
+			});
 		}
 		return [];
 	}, [mode, sessionMessages]);

@@ -366,18 +366,18 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 									return (
 										<Attachment
 											key={tabDoc.id}
-											className="bg-white border border-zinc-200 shadow-none p-1.5 w-fit min-w-40 max-w-xs rounded-lg shrink-0"
+											className="bg-white border border-zinc-200/90 shadow-none p-1.5 w-48 sm:w-56 shrink-0 rounded-lg flex items-center"
 										>
 											<AttachmentMedia
-												className={`${bgColor} ${textColor} shrink-0 rounded-lg p-2`}
+												className={`${bgColor} ${textColor} shrink-0 rounded-md p-2`}
 											>
-												<Icon className="size-5" />
+												<Icon className="size-4" />
 											</AttachmentMedia>
-											<AttachmentContent className="overflow-hidden min-w-0 pr-2">
-												<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
+											<AttachmentContent className="overflow-hidden min-w-0 pr-1.5">
+												<AttachmentTitle className="text-[12px] font-medium text-zinc-950 truncate block">
 													{fileName}
 												</AttachmentTitle>
-												<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+												<AttachmentDescription className="text-[10px] text-zinc-500 uppercase font-mono">
 													{fileName.split(".").pop() || "FILE"}
 												</AttachmentDescription>
 											</AttachmentContent>
