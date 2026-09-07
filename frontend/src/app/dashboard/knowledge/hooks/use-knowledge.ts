@@ -302,13 +302,98 @@ export interface QueryGeneralPayload {
 }
 
 export interface QueryGeneralResult {
+	type?: "answer" | "confirmation" | "success" | "cancelled" | "error" | string;
+	message?: string;
+	operation_id?: string | null;
 	prompt: string;
 	answer: string;
-	action: "read" | "edit_applied" | "delete_applied" | string;
+	action: "read" | "edit_preview" | "delete_preview" | "edit_applied" | "delete_applied" | string;
 	target_knowledge_id?: string | null;
 	total_found: number;
 	results: Array<Record<string, unknown>>;
 }
+
+export interface OperationResult {
+	type: "success" | "cancelled" | "info" | "error" | string;
+	action: string;
+	operation_id?: string;
+	target_knowledge_id?: string;
+	batch_id?: string;
+	message: string;
+}
+
+export const useConfirmOperation = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({
+			operationId,
+			sessionId,
+		}: {
+			operationId: string;
+			sessionId?: string | null;
+		}): Promise<OperationResult> => {
+			const url = sessionId
+				? `/knowledge/operations/${operationId}/confirm?session_id=${sessionId}`
+				: `/knowledge/operations/${operationId}/confirm`;
+			const response = await api.post(url);
+			return response.data;
+		},
+		onSuccess: (data, variables) => {
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+			if (data.batch_id) {
+				queryClient.invalidateQueries({ queryKey: ["knowledge-batch", data.batch_id] });
+			}
+			if (data.target_knowledge_id) {
+				queryClient.invalidateQueries({
+					queryKey: knowledgeKeys.detail(data.target_knowledge_id),
+				});
+			}
+			if (variables.sessionId) {
+				queryClient.invalidateQueries({ queryKey: ["general-session", variables.sessionId] });
+				queryClient.invalidateQueries({ queryKey: chatHistoryKeys.detail(variables.sessionId) });
+				queryClient.invalidateQueries({ queryKey: ["chat-messages", variables.sessionId] });
+			}
+			toast.success(data.message || "Operasi berhasil diterapkan!");
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Gagal mengonfirmasi operasi."));
+		},
+	});
+};
+
+export const useCancelOperation = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({
+			operationId,
+			sessionId,
+		}: {
+			operationId: string;
+			sessionId?: string | null;
+		}): Promise<OperationResult> => {
+			const url = sessionId
+				? `/knowledge/operations/${operationId}/cancel?session_id=${sessionId}`
+				: `/knowledge/operations/${operationId}/cancel`;
+			const response = await api.post(url);
+			return response.data;
+		},
+		onSuccess: (data, variables) => {
+			if (variables.sessionId) {
+				queryClient.invalidateQueries({ queryKey: ["general-session", variables.sessionId] });
+				queryClient.invalidateQueries({ queryKey: chatHistoryKeys.detail(variables.sessionId) });
+				queryClient.invalidateQueries({ queryKey: ["chat-messages", variables.sessionId] });
+			}
+			toast.info(data.message || "Operasi dibatalkan.");
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Gagal membatalkan operasi."));
+		},
+	});
+};
 
 export const useQueryGeneral = () => {
 	const queryClient = useQueryClient();
@@ -341,6 +426,8 @@ export interface GeneralChatMessageItem {
 	role: string;
 	content: string;
 	action?: string | null;
+	type?: string | null;
+	operation_id?: string | null;
 	target_knowledge_id?: string | null;
 	total_found?: number | null;
 	attachments?: Record<string, unknown> | null;

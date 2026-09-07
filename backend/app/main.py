@@ -1,4 +1,5 @@
 import os
+import asyncio
 from fastapi import FastAPI, Request, HTTPException, status
 from contextlib import asynccontextmanager
 from loguru import logger
@@ -84,7 +85,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"MinIO bucket initialization failed (non-fatal): {e}")
 
+    # Start periodic MinIO auto-sync worker to flush any local fallback files once MinIO is online
+    async def _minio_background_sync_worker():
+        while True:
+            try:
+                await asyncio.sleep(20)
+                if os.path.exists("data/storage") and os.listdir("data/storage"):
+                    from app.services.storage import _get_client, sync_existing_local_to_minio
+                    client = _get_client()
+                    if client:
+                        await asyncio.to_thread(sync_existing_local_to_minio, client)
+            except asyncio.CancelledError:
+                break
+            except Exception as w_err:
+                logger.debug(f"MinIO background sync worker note: {w_err}")
+
+    sync_worker_task = asyncio.create_task(_minio_background_sync_worker())
+
     yield
+
+    sync_worker_task.cancel()
+    try:
+        await sync_worker_task
+    except asyncio.CancelledError:
+        pass
 
 from fastapi.middleware.cors import CORSMiddleware
 

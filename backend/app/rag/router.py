@@ -41,6 +41,7 @@ from app.rag.deps import (
     get_medical_agent
 )
 from app.rag.services.interfaces import BaseLLMAdapter, BaseVectorStoreAdapter
+from app.rag.services.general_knowledge_service import GeneralKnowledgeService
 
 
 def safe_json_loads(json_str: str) -> dict:
@@ -1473,6 +1474,14 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
             f"  - DB Staging Stage     : {timing_metrics['database_insert_ms']} ms\n"
             f"  - Total Ingestion Time : {timing_metrics['total_ingestion_ms']} ms\n"
         )
+
+        # Cleanup temporary uploaded raw file on success
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                logger.debug(f"🧹 Cleaned up temporary ingestion file: {file_path}")
+        except Exception:
+            pass
 
     except Exception as e:
         err_msg = str(e)
@@ -3977,6 +3986,7 @@ async def delete_document_endpoint(
 
     pending_dir = "data/pending"
     approved_dir = "data/output"
+    total_images_deleted = 0
 
     for k_id in raw_targets:
         was_deleted = False
@@ -3995,12 +4005,31 @@ async def delete_document_endpoint(
                             f_no_ext = f.replace(".json", "").replace("_parsed", "")
 
                             if k_id in (doc_id, doc_name, f_no_ext, f):
-                                os.remove(f_path)
+                                # Purge associated images in MinIO 'images' bucket and documents
+                                try:
+                                    from app.services.storage import delete_knowledge_images_and_assets
+                                    img_res = delete_knowledge_images_and_assets(doc_id or k_id, doc_data=f_data)
+                                    total_images_deleted += img_res.get("deleted_images_count", 0)
+                                    logger.info(f"Purged {img_res.get('deleted_images_count', 0)} image(s) from MinIO for doc '{k_id}'")
+                                except Exception as img_del_err:
+                                    logger.warning(f"Error purging MinIO images for '{k_id}': {img_del_err}")
+
+                                if os.path.exists(f_path):
+                                    try:
+                                        os.remove(f_path)
+                                    except Exception as rm_e:
+                                        logger.debug(f"Could not remove {f_path}: {rm_e}")
                                 if target_store:
-                                    target_store.delete_document(doc_id or f_no_ext)
+                                    try:
+                                        target_store.delete_document(doc_id or f_no_ext)
+                                    except Exception as ts_e:
+                                        logger.debug(f"Vector store delete note: {ts_e}")
                                 if bm25:
-                                    bm25.remove_file_chunks(doc_id or f_no_ext)
-                                    bm25.save(settings.bm25_index_path)
+                                    try:
+                                        bm25.remove_file_chunks(doc_id or f_no_ext)
+                                        bm25.save(settings.bm25_index_path)
+                                    except Exception as bm_e:
+                                        logger.debug(f"BM25 remove note: {bm_e}")
                                 was_deleted = True
                                 logger.info(f"Deleted JSON file and vectors for '{k_id}' ({f_path})")
                         except Exception as file_err:
@@ -4035,6 +4064,18 @@ async def delete_document_endpoint(
                 db_docs = res.scalars().all()
 
                 for d_doc in db_docs:
+                    # Clean up MinIO images referenced in DB record
+                    try:
+                        from app.services.storage import delete_knowledge_images_and_assets
+                        d_meta = d_doc.metadata_ if isinstance(d_doc.metadata_, dict) else {}
+                        img_res = delete_knowledge_images_and_assets(
+                            str(d_doc.id),
+                            doc_data={"summary": d_doc.ai_summary, "metadata": d_meta, "image_urls": d_meta.get("image_urls", [])}
+                        )
+                        total_images_deleted += img_res.get("deleted_images_count", 0)
+                    except Exception as s3_db_err:
+                        logger.debug(f"DB image purge note: {s3_db_err}")
+
                     d_doc.deleted_at = func.now()
                 if db_docs:
                     await session.commit()
@@ -4043,10 +4084,38 @@ async def delete_document_endpoint(
         except Exception as db_err:
             logger.warning(f"Could not soft-delete Knowledge DB record for '{k_id}': {db_err}")
 
+        # 3. Final MinIO purge attempt for target ID
+        try:
+            from app.services.storage import delete_knowledge_images_and_assets
+            img_res = delete_knowledge_images_and_assets(k_id)
+            total_images_deleted += img_res.get("deleted_images_count", 0)
+            if img_res.get("deleted_images_count", 0) > 0:
+                was_deleted = True
+        except Exception:
+            pass
+
+        # 4. Ensure vector store and BM25 remove any lingering chunks for this ID
+        if target_store:
+            try:
+                target_store.delete_document(k_id)
+            except Exception:
+                pass
+        if bm25:
+            try:
+                bm25.remove_file_chunks(k_id)
+                bm25.save(settings.bm25_index_path)
+            except Exception:
+                pass
+
         if was_deleted:
             deleted_ids.append(k_id)
 
-    return {"status": "success", "message": f"Successfully deleted {len(deleted_ids)} document(s).", "deleted_ids": deleted_ids}
+    return {
+        "status": "success",
+        "message": f"Successfully deleted {len(deleted_ids)} document(s) and {total_images_deleted} associated MinIO image(s).",
+        "deleted_ids": deleted_ids,
+        "deleted_images_count": total_images_deleted
+    }
 
 
 
@@ -4180,15 +4249,20 @@ async def run_chat_pipeline(
         ctx_text = response.get("context", "") if isinstance(response, dict) else response.context
         agent_used_flag = response.get("agent_used", False) if isinstance(response, dict) else response.agent_used
 
+        # Narrow guard: only wipe answer when retrieval genuinely found nothing
+        # AND the LLM echoed the default unavailable phrase.
+        # DO NOT wipe valid grounded answers that happen to contain negative words
+        # like "tidak tercantum", "tidak ditemukan" — these are legitimate factual responses.
         if (
             "untuk saat ini informasi tersebut belum tersedia" in ans_text.lower()
-            or not res_list 
-            or not ctx_text 
-            or ctx_text in ("Maaf, saya tidak menemukan informasi.", "No relevant context found.")
-            or (any(p in ans_text.lower() for p in ["belum ada data", "tidak ada informasi", "belum tercantum", "tidak tercantum", "tidak ditemukan", "belum ditemukan", "belum tersedia", "tidak tersedia"]) and not any(kw in ans_text.lower() for kw in ["rp ", "kandungan", "manfaat", "downtime", "indikasi"]))
+            and (not res_list or not ctx_text or ctx_text in ("Maaf, saya tidak menemukan informasi.", "No relevant context found."))
         ):
             ans_text = "Untuk saat ini informasi tersebut belum tersedia."
             res_list = []
+
+        # Sanitize invisible action HTML comments from answer text for clean UI rendering
+        import re as _re_clean
+        ans_text = _re_clean.sub(r'<!--\s*action:\s*\{[^>]+?\}\s*-->', '', ans_text).strip()
 
         return ChatResponse(
             query=query,
@@ -4391,22 +4465,45 @@ class QueryGeneralRequest(BaseModel):
         return values
 
 class QueryGeneralResponse(BaseModel):
-    """Response schema for Query General endpoint."""
+    """Response schema for Query General endpoint (Operation-Based Pipeline)."""
+    type: str = Field("answer", description="Tipe respons: 'answer', 'confirmation', 'success', 'cancelled', 'error'")
+    message: str = Field("", description="Pesan utama respons")
+    operation_id: Optional[str] = Field(None, description="UUID operasi jika respons membutuhkan konfirmasi")
     prompt: str = Field(..., description="Prompt yang dikirimkan user")
     answer: str = Field(..., description="Jawaban dan konfirmasi dari AI")
-    action: str = Field("read", description="Aksi yang dijalankan: 'read', 'edit_applied', 'delete_applied'")
+    action: str = Field("read", description="Aksi yang dijalankan: 'read', 'edit_preview', 'delete_preview', 'edit_executed', 'delete_executed', 'cancelled'")
     target_knowledge_id: Optional[str] = Field(None, description="ID dokumen yang diproses (jika ada update/delete)")
     total_found: int = Field(0, description="Jumlah data relevan yang ditemukan di KB")
     results: List[Dict[str, Any]] = Field(default=[], description="Potongan knowledge base yang ditemukan")
 
-def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
+def _extract_kb_action(llm_answer: Union[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
     Parses the LLM response or conversation history to extract a JSON action block.
     Supports 2-step action lifecycle: edit_preview, edit_execute, delete_preview, delete_execute, edit, delete, cancel.
-    Resilient to fenced JSON, raw JSON, invisible HTML comment signatures, and structured text fallbacks.
+    Resilient to dict messages, fenced JSON, raw JSON, invisible HTML comment signatures, and structured text fallbacks.
     """
     if not llm_answer:
         return None
+
+    if isinstance(llm_answer, dict):
+        if "action" in llm_answer and llm_answer["action"] in ("edit_preview", "edit_execute", "edit", "delete_preview", "delete_execute", "delete", "cancel"):
+            return {
+                "action": llm_answer["action"],
+                "knowledge_id": llm_answer.get("target_knowledge_id") or llm_answer.get("knowledge_id"),
+                "field": llm_answer.get("field", "summary"),
+                "new_value": llm_answer.get("new_value", ""),
+                "target_item": llm_answer.get("target_item")
+            }
+        att = llm_answer.get("attachments")
+        if isinstance(att, dict) and "action" in att:
+            return {
+                "action": att["action"],
+                "knowledge_id": att.get("target_knowledge_id") or att.get("knowledge_id"),
+                "field": att.get("field", "summary"),
+                "new_value": att.get("new_value", ""),
+                "target_item": att.get("target_item")
+            }
+        llm_answer = str(llm_answer.get("content", ""))
 
     import re as _re
 
@@ -4454,391 +4551,72 @@ def _extract_kb_action(llm_answer: str) -> Optional[Dict[str, Any]]:
         kid_match = _re.search(r'(?:id dokumen|id|knowledge_id|dokumen id)\s*[:=]\s*[`"]?([a-zA-Z0-9\-_]+)[`"]?', llm_answer, _re.IGNORECASE)
         field_match = _re.search(r'(?:bagian yang diubah|field|bagian|kolom)\s*[:=]\s*[`"]?([a-zA-Z0-9\-_]+)[`"]?', llm_answer, _re.IGNORECASE)
         val_match = _re.search(r'(?:nilai baru|new value|menjadi)\s*[:=]\s*[`"]?([^\n\r`"]+)[`"]?', llm_answer, _re.IGNORECASE)
+        item_match = _re.search(r'(?:produk target|target item|nama produk|item)\s*[:=]\s*[`"]?([^\n\r`"]+)[`"]?', llm_answer, _re.IGNORECASE)
         if kid_match:
-            return {
+            result = {
                 "action": "edit_preview",
                 "knowledge_id": kid_match.group(1).strip(),
                 "field": field_match.group(1).strip() if field_match else "summary",
                 "new_value": val_match.group(1).strip() if val_match else ""
             }
+            if item_match:
+                result["target_item"] = item_match.group(1).strip()
+            return result
 
     # 6. Natural Language Text Fallback for Delete Preview
-    if "konfirmasi penghapusan" in lower_ans or "apakah anda yakin ingin menghapus dokumen ini" in lower_ans:
+    if "konfirmasi penghapusan" in lower_ans or "apakah anda yakin ingin menghapus" in lower_ans:
         kid_match = _re.search(r'(?:id dokumen|id|knowledge_id|dokumen id)\s*[:=]\s*[`"]?([a-zA-Z0-9\-_]+)[`"]?', llm_answer, _re.IGNORECASE)
+        item_match = _re.search(r'(?:produk target|target item|nama produk|item yang dihapus)\s*[:=]\s*[`"]?([^\n\r`"]+)[`"]?', llm_answer, _re.IGNORECASE)
         if kid_match:
-            return {
+            result = {
                 "action": "delete_preview",
                 "knowledge_id": kid_match.group(1).strip()
             }
+            if item_match:
+                result["target_item"] = item_match.group(1).strip()
+            return result
 
     return None
 
 
-def _apply_kb_edit(
+async def _apply_kb_edit(
     knowledge_id: str,
     field: str,
     new_value: str,
     vector_store,
     bm25_index,
-    pipeline=None
+    pipeline=None,
+    target_item: Optional[str] = None,
+    db=None
 ) -> Dict[str, Any]:
-    """
-    Applies a dynamic sentence-level edit for ANY topic/field to an approved KB document and re-indexes.
-    Preserves all other fields, metadata, and document summaries 100% intact.
-    Uses LLM for targeted sentence-level precision without destroying surrounding text.
-    """
-    approved_file = resolve_approved_file(knowledge_id)
-    if not approved_file:
-        return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di approved KB."}
+    """Delegates edit to Dedicated CRUD Service."""
+    return await GeneralKnowledgeService.apply_edit(
+        knowledge_id=knowledge_id,
+        field=field,
+        new_value=new_value,
+        vector_store=vector_store,
+        bm25_index=bm25_index,
+        pipeline=pipeline,
+        target_item=target_item,
+        db=db
+    )
 
-    try:
-        with open(approved_file, "r", encoding="utf-8") as f:
-            existing_doc = json.load(f)
 
-        doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
-        old_value = None
-        clean_field = (field or "").strip().lower()
-        formatted_val = str(new_value).strip()
-
-        # Update root document JSON fields while preserving summary & other attributes
-        if clean_field in ("price", "harga", "biaya"):
-            old_value = existing_doc.get("price") or existing_doc.get("metadata", {}).get("price")
-            existing_doc["price"] = formatted_val
-            if "metadata" not in existing_doc or not isinstance(existing_doc["metadata"], dict):
-                existing_doc["metadata"] = {}
-            existing_doc["metadata"]["price"] = formatted_val
-
-            # Surgically update price inside summary so dashboard preview immediately reflects the change without losing other sections or images
-            curr_summary = existing_doc.get("summary", "")
-            if curr_summary:
-                import re as _re_inline
-                price_pattern = r'(\*{0,2}(?:Harga|Price|Biaya)\*{0,2}\s*:\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
-                if _re_inline.search(price_pattern, curr_summary, _re_inline.IGNORECASE):
-                    existing_doc["summary"] = _re_inline.sub(price_pattern, rf'\g<1>Rp {formatted_val}', curr_summary, flags=_re_inline.IGNORECASE)
-                elif "harga" in curr_summary.lower():
-                    existing_doc["summary"] = _re_inline.sub(r'(Rp\.?\s*)[\d\.\,\-]+', rf'Rp {formatted_val}', curr_summary, count=1)
-                else:
-                    existing_doc["summary"] = curr_summary.strip() + f"\n\n- **Harga**: Rp {formatted_val}"
-
-        elif clean_field in ("summary", "deskripsi", "ringkasan"):
-            # Protect summary: Do not overwrite summary with AI chatbot conversational confirmation text
-            conv_phrases = ["berhasil diubah", "berhasil diperbarui", "telah diubah", "telah diperbarui", "berhasil diterapkan", "berhasil dihapus"]
-            if any(phrase in formatted_val.lower() for phrase in conv_phrases):
-                logger.warning(f"[QUERY-GENERAL] Rejected chatbot conversational response as summary value: {formatted_val}")
-                return {"success": False, "error": "Value summary tidak boleh berupa kalimat konfirmasi percakapan chatbot."}
-            old_value = existing_doc.get("summary", "")
-            existing_doc["summary"] = formatted_val
-
-        elif clean_field in ("title", "nama", "nama_produk"):
-            old_value = existing_doc.get("title", existing_doc.get("file_name", ""))
-            existing_doc["title"] = formatted_val
-            curr_summary = existing_doc.get("summary", "")
-            if curr_summary:
-                import re as _re_inline
-                if _re_inline.search(r'^(#+\s*)(.+)$', curr_summary, _re_inline.MULTILINE):
-                    existing_doc["summary"] = _re_inline.sub(r'^(#+\s*)(.+)$', rf'\g<1>{formatted_val}', curr_summary, count=1, flags=_re_inline.MULTILINE)
-
-        elif clean_field in ("valid_until", "expiry_date", "end_date", "periode", "masa_berlaku"):
-            old_value = existing_doc.get("valid_until")
-            existing_doc["valid_until"] = formatted_val
-
-        elif clean_field in ("valid_from", "start_date"):
-            old_value = existing_doc.get("valid_from")
-            existing_doc["valid_from"] = formatted_val
-
-        elif clean_field in ("document_type", "tipe", "jenis_dokumen"):
-            old_value = existing_doc.get("document_type")
-            existing_doc["document_type"] = formatted_val
-
-        elif clean_field in ("categories", "kategori"):
-            old_value = existing_doc.get("categories", [])
-            try:
-                parsed_cats = json.loads(new_value) if isinstance(new_value, str) else new_value
-                if isinstance(parsed_cats, list):
-                    existing_doc["categories"] = parsed_cats
-                else:
-                    existing_doc["categories"] = [str(parsed_cats)]
-            except (json.JSONDecodeError, ValueError):
-                existing_doc["categories"] = [formatted_val]
-
-        else:
-            # Universal fallback for ANY custom topic/field requested by admin/dept functional
-            old_value = existing_doc.get(clean_field) or existing_doc.get("metadata", {}).get(clean_field)
-            existing_doc[clean_field] = formatted_val
-            if "metadata" not in existing_doc or not isinstance(existing_doc["metadata"], dict):
-                existing_doc["metadata"] = {}
-            existing_doc["metadata"][clean_field] = formatted_val
-
-        chunks = existing_doc.get("chunks", [])
-        primary_cat = existing_doc.get("categories", [None])[0] if existing_doc.get("categories") else None
-        import re as _re
-
-        for chunk in chunks:
-            if isinstance(chunk, dict):
-                if "metadata" not in chunk:
-                    chunk["metadata"] = {}
-                chunk["metadata"]["knowledge_id"] = doc_kid
-
-                # Universal metadata assignment for the target field
-                chunk["metadata"][clean_field] = formatted_val
-
-                # Sentence-level chunk text updates using LLM if available, fallback to regex
-                chunk_text = chunk.get("text", "")
-                if chunk_text:
-                    if pipeline and hasattr(pipeline, "llm_adapter") and pipeline.llm_adapter:
-                        try:
-                            edit_prompt = (
-                                "Kamu adalah Editor Dokumen Presisi. Tugasmu adalah merevisi TEKS DOKUMEN di bawah ini "
-                                f"sesuai instruksi admin: ubah/perbarui '{clean_field}' menjadi '{formatted_val}'.\n"
-                                "ATURAN KETAT:\n"
-                                "1. REVISI HANYA KALIMAT / ANGKA / INFORMASI TARGET yang diminta.\n"
-                                "2. DILARANG KERAS merusak, mengubah, atau menghapus kalimat, paragraf, deskripsi, atau format markdown lainnya.\n"
-                                "3. Kembalikan teks lengkap dokumen yang sudah direvisi tanpa tambahan komentar percakapan.\n\n"
-                                f"TEKS DOKUMEN ASLI:\n{chunk_text}\n\n"
-                                "TEKS DOKUMEN REVISI:"
-                            )
-                            revised_text = pipeline.llm_adapter.generate(edit_prompt)
-                            if revised_text and len(revised_text.strip()) > 10:
-                                chunk["text"] = revised_text.strip()
-                        except Exception as llm_edit_err:
-                            logger.warning(f"[QUERY-GENERAL] LLM chunk edit error: {llm_edit_err}")
-
-                    if clean_field in ("price", "harga", "biaya"):
-                        price_pattern = r'(\*{0,2}(?:Harga|Price|Biaya)\*{0,2}\s*:\s*)(?:Rp\.?\s*)?[\d\.\,\-]+'
-                        if _re.search(price_pattern, chunk.get("text", ""), _re.IGNORECASE):
-                            chunk["text"] = _re.sub(price_pattern, rf'\g<1>Rp {formatted_val}', chunk["text"], flags=_re.IGNORECASE)
-                        elif "Harga" not in chunk.get("text", ""):
-                            chunk["text"] = chunk.get("text", "").strip() + f"\n- **Harga**: Rp {formatted_val}"
-
-                    elif clean_field in ("title", "nama", "nama_produk"):
-                        chunk["metadata"]["source_file"] = formatted_val
-                        chunk["metadata"]["title"] = formatted_val
-                        chunk["metadata"]["product_name"] = formatted_val
-                        if _re.search(r'^(#+\s*)(.+)$', chunk.get("text", ""), _re.MULTILINE):
-                            chunk["text"] = _re.sub(r'^(#+\s*)(.+)$', rf'\g<1>{formatted_val}', chunk["text"], count=1, flags=_re.MULTILINE)
-
-                if primary_cat:
-                    chunk["metadata"]["category"] = primary_cat
-                if existing_doc.get("categories"):
-                    chunk["metadata"]["categories"] = existing_doc["categories"]
-
-        with open(approved_file, "w", encoding="utf-8") as f:
-            json.dump(existing_doc, f, indent=4, ensure_ascii=False)
-
-        if vector_store:
-            logger.info(f"[QUERY-GENERAL] Re-indexing PGVector for '{doc_kid}'...")
-            vector_store.delete_document(doc_kid)
-            vector_store.insert_chunks(chunks)
-
-        if bm25_index:
-            logger.info(f"[QUERY-GENERAL] Re-indexing BM25 for '{doc_kid}'...")
-            bm25_index.remove_file_chunks(doc_kid)
-            bm25_index.add_chunks(chunks)
-            bm25_index.save(settings.bm25_index_path)
-
-        if vector_store and hasattr(vector_store, "upsert_knowledge_category"):
-            vector_store.upsert_knowledge_category(
-                knowledge_id=doc_kid,
-                file_name=existing_doc.get("title", existing_doc.get("file_name", doc_kid)),
-                categories=existing_doc.get("categories", []),
-                summary=existing_doc.get("summary", "")
-            )
-
-        # Synchronize PostgreSQL DB Knowledge table record for instant review visibility
-        try:
-            from app.core.database import AsyncSessionLocal
-            from app.models.knowledge import Knowledge
-            from sqlalchemy import select
-            import asyncio
-
-            async def _sync_db_record():
-                try:
-                    async with AsyncSessionLocal() as db:
-                        import uuid as _uuid
-                        try:
-                            kid_uuid = _uuid.UUID(doc_kid)
-                            stmt = select(Knowledge).where(Knowledge.id == kid_uuid)
-                            res = await db.execute(stmt)
-                            k_obj = res.scalar_one_or_none()
-                            if k_obj:
-                                k_obj.title = existing_doc.get("title", k_obj.title)
-                                k_obj.ai_summary = existing_doc.get("summary", k_obj.ai_summary)
-                                meta = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
-                                meta.update(existing_doc.get("metadata", {}))
-                                if "price" in existing_doc:
-                                    meta["price"] = existing_doc["price"]
-                                k_obj.metadata_ = meta
-                                await db.commit()
-                                logger.info(f"[QUERY-GENERAL] Synced PostgreSQL Knowledge DB record for '{doc_kid}'")
-                        except Exception as db_parse_err:
-                            logger.debug(f"[QUERY-GENERAL] DB UUID sync bypass for non-UUID id: {db_parse_err}")
-                except Exception as sync_inner_err:
-                    logger.warning(f"[QUERY-GENERAL] DB sync inner warning: {sync_inner_err}")
-
-            asyncio.create_task(_sync_db_record())
-        except Exception as sync_err:
-            logger.warning(f"[QUERY-GENERAL] DB sync task launch warning: {sync_err}")
-
-        logger.info(f"[QUERY-GENERAL] Successfully edited approved '{doc_kid}' field='{field}'")
-        return {
-            "success": True,
-            "knowledge_id": doc_kid,
-            "field": field,
-            "old_value": str(old_value)[:200] if old_value else None,
-            "new_value": str(new_value)[:200]
-        }
-
-    except Exception as e:
-        logger.error(f"[QUERY-GENERAL] Failed to apply edit for '{knowledge_id}': {e}")
-        return {"success": False, "error": str(e)}
-
-def _apply_kb_delete(
+async def _apply_kb_delete(
     knowledge_id: str,
     vector_store,
-    bm25_index
+    bm25_index,
+    target_item: Optional[str] = None,
+    db=None
 ) -> Dict[str, Any]:
-    """
-    Deletes a KB document (approved or pending), removes JSON files, clears PGVector & BM25 indices,
-    soft-deletes PostgreSQL DB record, and cleans MinIO files.
-    """
-    pending_dir = "data/pending"
-    approved_dir = "data/output"
-    was_deleted = False
-    deleted_title = None
-    target_kid = knowledge_id
-
-    clean_target = (knowledge_id or "").strip().lower()
-
-    # 1. Batch Delete Expired Promos if requested
-    if clean_target in ("expired", "expired_promos", "promo_expired", "promo expired", "promo bulan lalu", "semua promo expired", "promo yang sudah expired"):
-        from datetime import datetime, timezone
-        from app.rag.services.rag_retriever import parse_date_safely
-        today = datetime.now(timezone.utc).date()
-        deleted_items = []
-
-        for folder in [pending_dir, approved_dir]:
-            if os.path.exists(folder):
-                for f in os.listdir(folder):
-                    if f.endswith(".json") and f != "bm25_index.pkl":
-                        f_path = os.path.join(folder, f)
-                        try:
-                            with open(f_path, "r", encoding="utf-8") as fp:
-                                f_data = json.load(fp)
-                            is_expired = False
-                            vu = f_data.get("valid_until") or f_data.get("expiry_date")
-                            if vu:
-                                parsed_vu = parse_date_safely(vu)
-                                if parsed_vu and parsed_vu < today:
-                                    is_expired = True
-
-                            if is_expired:
-                                doc_id = str(f_data.get("knowledge_id", f.replace(".json", "")))
-                                doc_title = str(f_data.get("title", f_data.get("file_name", doc_id)))
-                                os.remove(f_path)
-                                if vector_store:
-                                    vector_store.delete_document(doc_id)
-                                if bm25_index:
-                                    bm25_index.remove_file_chunks(doc_id)
-                                deleted_items.append(f"{doc_title} (expired: {vu})")
-                                was_deleted = True
-                                logger.info(f"[QUERY-GENERAL] Deleted expired promo file: {doc_title} ({f_path})")
-                        except Exception as err:
-                            logger.warning(f"[QUERY-GENERAL] Error checking file {f} for expiry deletion: {err}")
-
-        if bm25_index and deleted_items:
-            bm25_index.save(settings.bm25_index_path)
-
-        if deleted_items:
-            return {
-                "success": True,
-                "knowledge_id": "expired_promos",
-                "title": f"{len(deleted_items)} Promo Expired Dihapus: {'; '.join(deleted_items)}"
-            }
-        else:
-            return {
-                "success": True,
-                "knowledge_id": "none",
-                "title": "Tidak ada dokumen promo expired yang ditemukan di basis pengetahuan."
-            }
-
-    # 2. Regular Single/Specific Document Deletion (Search pending and approved)
-    for folder in [pending_dir, approved_dir]:
-        if os.path.exists(folder):
-            for f in os.listdir(folder):
-                if f.endswith(".json") and f != "bm25_index.pkl":
-                    f_path = os.path.join(folder, f)
-                    try:
-                        with open(f_path, "r", encoding="utf-8") as fp:
-                            f_data = json.load(fp)
-                        doc_id = str(f_data.get("knowledge_id", "")).strip().lower() if isinstance(f_data, dict) else ""
-                        doc_title = str(f_data.get("title", f_data.get("file_name", ""))) if isinstance(f_data, dict) else ""
-                        f_no_ext = f.replace(".json", "").replace("_parsed", "").lower()
-
-                        if clean_target in (doc_id, f_no_ext, f.lower(), doc_title.lower()) or (doc_title and clean_target in doc_title.lower()):
-                            os.remove(f_path)
-                            was_deleted = True
-                            deleted_title = doc_title or f
-                            target_kid = f_data.get("knowledge_id") or knowledge_id
-                            logger.info(f"[QUERY-GENERAL] Deleted JSON file {f_path} for knowledge_id='{target_kid}'")
-                    except Exception as err:
-                        logger.warning(f"[QUERY-GENERAL] Error checking file {f}: {err}")
-
-    if vector_store:
-        try:
-            vector_store.delete_document(target_kid)
-            logger.info(f"[QUERY-GENERAL] Deleted PGVector embeddings for '{target_kid}'")
-        except Exception as e:
-            logger.warning(f"[QUERY-GENERAL] Vector store delete error for '{target_kid}': {e}")
-
-    if bm25_index:
-        try:
-            bm25_index.remove_file_chunks(target_kid)
-            bm25_index.save(settings.bm25_index_path)
-            logger.info(f"[QUERY-GENERAL] Removed BM25 chunks for '{target_kid}'")
-        except Exception as e:
-            logger.warning(f"[QUERY-GENERAL] BM25 delete error for '{target_kid}': {e}")
-
-    # 5. Soft-delete PostgreSQL Knowledge DB record
-    try:
-        from app.core.database import AsyncSessionLocal
-        from app.models.knowledge import Knowledge
-        from sqlalchemy import select, func
-        import uuid as _uuid
-        import asyncio
-
-        async def _soft_delete_db():
-            async with AsyncSessionLocal() as session:
-                custom_uuid = None
-                try:
-                    custom_uuid = _uuid.UUID(target_kid)
-                except ValueError:
-                    pass
-                k_rec = None
-                if custom_uuid:
-                    k_rec = await session.get(Knowledge, custom_uuid)
-                else:
-                    res = await session.execute(select(Knowledge).where(Knowledge.file_name == target_kid).order_by(Knowledge.created_at.desc()))
-                    k_rec = res.scalars().first()
-
-                if k_rec:
-                    k_rec.deleted_at = func.now()
-                    await session.commit()
-                    logger.info(f"[QUERY-GENERAL] Soft-deleted Knowledge DB record '{target_kid}'")
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(_soft_delete_db())
-            else:
-                loop.run_until_complete(_soft_delete_db())
-        except Exception:
-            asyncio.run(_soft_delete_db())
-    except Exception as db_err:
-        logger.warning(f"[QUERY-GENERAL] DB soft delete error for '{target_kid}': {db_err}")
-
-    if was_deleted:
-        return {"success": True, "knowledge_id": target_kid, "title": deleted_title}
-    return {"success": False, "error": f"Dokumen dengan ID/Nama '{knowledge_id}' tidak ditemukan di database."}
+    """Delegates delete to Dedicated CRUD Service."""
+    return await GeneralKnowledgeService.apply_delete(
+        knowledge_id=knowledge_id,
+        vector_store=vector_store,
+        bm25_index=bm25_index,
+        target_item=target_item,
+        db=db
+    )
 
 
 
@@ -4872,21 +4650,298 @@ async def query_general_endpoint(
 ):
     """
     Interactively explores, edits, or deletes knowledge base documents using natural language prompt instructions.
+    Follows a 4-Phase AI Orchestrator pattern:
+    - Phase 1: Confirmation Lifecycle (Executing pending edit/delete operations deterministically)
+    - Phase 2: Mutation Intent Classifier (Deterministic operation discovery & preview generation)
+    - Phase 3: Dedicated RAG Pipeline (Strictly grounded factual question answering)
+    - Phase 4: Output Sanitization & Entity-Isolated MinIO Image Injection
     """
     if not pipeline:
         raise HTTPException(status_code=500, detail="Generation pipeline is not initialized.")
 
     try:
         user_prompt = request.prompt
+        clean_user_prompt = user_prompt.strip().lower()
 
-        # 0. Resolve system prompt from DB (or fallback)
-        from app.core.database import AsyncSessionLocal
-        async with AsyncSessionLocal() as db_session:
-            system_prompt = await _resolve_query_general_prompt(db_session)
+        target_vs = (pipeline.retriever.vector_store if pipeline.retriever and hasattr(pipeline.retriever, 'vector_store') else vector_store)
+        target_bm25 = (pipeline.retriever.bm25_index if pipeline.retriever and hasattr(pipeline.retriever, 'bm25_index') else bm25)
 
-        # 1. Retrieve from KB without filters (admin/user sees all approved data, including expired promos for exploration)
-        import re as _re
-        uuid_matches = _re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', user_prompt)
+        # -------------------------------------------------------------
+        # PHASE 1 & 2: Operation Intent Classifier (EDIT / DELETE Pending Operations)
+        # -------------------------------------------------------------
+        # Check if user explicitly requests DELETE
+        # Check if user explicitly requests DELETE
+        is_delete_cmd = (
+            bool(re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:hapus|delete|hilangkan)\b', clean_user_prompt))
+            or bool(re.search(r'\b(?:hapus|delete)\s+(?:dokumen|produk|item|bagian|tahapan|parameter|indikator|data|knowledge)\b', clean_user_prompt))
+        ) and not bool(re.search(r'\b(apakah|bagaimana|mengapa|kenapa|bisa kah|kapan)\b', clean_user_prompt))
+
+        if is_delete_cmd:
+            matched_res = GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+            if not matched_res:
+                return QueryGeneralResponse(
+                    type="answer",
+                    message="Untuk saat ini informasi tersebut belum tersedia.",
+                    prompt=user_prompt,
+                    answer="Untuk saat ini informasi tersebut belum tersedia.",
+                    action="read",
+                    target_knowledge_id=None,
+                    total_found=0,
+                    results=[]
+                )
+            target_item, matched_docs = matched_res
+            top_doc = matched_docs[0]
+            target_kid = top_doc["knowledge_id"]
+            doc_data = top_doc["doc_data"]
+            doc_title = top_doc.get("title") or top_doc.get("file_name") or target_kid
+            batch_id = top_doc.get("batch_id")
+            context_label = doc_data.get("_matched_context_label") or target_item or doc_title
+
+            affected_kids = [d["knowledge_id"] for d in matched_docs]
+            metadata_payload = {
+                "affected_knowledge_ids": affected_kids,
+                "affected_docs": [
+                    {
+                        "knowledge_id": d["knowledge_id"],
+                        "title": d.get("title") or d.get("file_name"),
+                        "batch_id": d.get("batch_id"),
+                        "match_type": d.get("match_type"),
+                        "target_item": d.get("target_item") or target_item
+                    }
+                    for d in matched_docs
+                ]
+            }
+
+            from app.models.pending_operation import PendingOperation
+            from app.core.database import AsyncSessionLocal
+            import uuid as _uuid
+            op_id = _uuid.uuid4()
+            async with AsyncSessionLocal() as session:
+                op = PendingOperation(
+                    id=op_id,
+                    action="delete",
+                    knowledge_id=target_kid,
+                    target_item=target_item,
+                    context_label=context_label,
+                    batch_id=batch_id,
+                    status="pending",
+                    metadata_=metadata_payload
+                )
+                session.add(op)
+                await session.commit()
+
+            if len(matched_docs) > 1:
+                doc_list_items = []
+                for idx, d in enumerate(matched_docs, 1):
+                    kid = d["knowledge_id"]
+                    t = d.get("title") or d.get("file_name") or kid
+                    b_id = d.get("batch_id")
+                    link = f"[{kid}](/dashboard/knowledge/batch/{b_id})" if b_id else f"[{kid}](/dashboard/knowledge/{kid})"
+                    badge = " *(Dokumen Utama)*" if d.get("match_type") == "dedicated_document" else " *(Katalog Produk)*"
+                    doc_list_items.append(f"{idx}. {link} — *{t}*{badge}")
+                doc_list_str = "\n".join(doc_list_items)
+
+                preview_text = (
+                    f"⚠️ **Konfirmasi Penghapusan Data Knowledge Base**\n\n"
+                    f"Berikut adalah rincian data yang akan dihapus:\n\n"
+                    + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else f"- **Item Target**: **{context_label}**\n") +
+                    f"- **Dokumen Terdampak ({len(matched_docs)} Dokumen)**:\n{doc_list_str}\n\n"
+                    f"- **Dampak**: Data entitas ini akan dihapus dari seluruh dokumen terkait di Knowledge Base dan indeks pencarian.\n\n"
+                    f"Apakah Anda yakin ingin menghapus data ini dari Knowledge Base ERHA? Silakan klik tombol konfirmasi di bawah."
+                )
+            elif target_item:
+                batch_link = f"[{target_kid}](/dashboard/knowledge/batch/{batch_id})" if batch_id else f"[{target_kid}](/dashboard/knowledge/{target_kid})"
+                preview_text = (
+                    f"⚠️ **Konfirmasi Penghapusan Data Knowledge Base**\n\n"
+                    f"Berikut adalah rincian data yang akan dihapus:\n\n"
+                    f"- **Target Entitas / Item**: **{target_item}**\n"
+                    f"- **ID Dokumen**: {batch_link} — *{doc_title}*\n"
+                    f"- **Dampak**: Hanya item ini yang akan dihapus dari Knowledge Base dan indeks pencarian. Bagian lain dalam dokumen tetap aman tersimpan.\n\n"
+                    f"Apakah Anda yakin ingin menghapus data ini dari Knowledge Base ERHA? Silakan klik tombol konfirmasi di bawah."
+                )
+            else:
+                batch_link = f"[{target_kid}](/dashboard/knowledge/batch/{batch_id})" if batch_id else f"[{target_kid}](/dashboard/knowledge/{target_kid})"
+                preview_text = (
+                    f"⚠️ **Konfirmasi Penghapusan Data Knowledge Base**\n\n"
+                    f"Berikut adalah rincian data yang akan dihapus:\n\n"
+                    f"- **ID Dokumen**: {batch_link}\n"
+                    f"- **Judul Dokumen**: {doc_title}\n"
+                    f"- **Status**: Menunggu konfirmasi admin\n\n"
+                    f"Apakah Anda yakin ingin menghapus seluruh dokumen ini dari Knowledge Base ERHA? Silakan klik tombol konfirmasi di bawah."
+                )
+
+            return QueryGeneralResponse(
+                type="confirmation",
+                message=preview_text,
+                operation_id=str(op_id),
+                prompt=user_prompt,
+                answer=preview_text,
+                action="delete_preview",
+                target_knowledge_id=target_kid,
+                total_found=len(matched_docs),
+                results=[]
+            )
+
+        # Check if user explicitly requests EDIT
+        is_edit_cmd = (
+            bool(re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:ubah|ganti|edit|update|perbarui|revisi)\b', clean_user_prompt))
+            or (
+                bool(re.search(r'\b(?:ubah|ganti|edit|update|perbarui|revisi)\b', clean_user_prompt))
+                and bool(re.search(r'\b(?:menjadi|ke|sebagai)\b', clean_user_prompt))
+            )
+        ) and not bool(re.search(r'\b(apakah|bagaimana|mengapa|kenapa|bisa kah|kapan)\b', clean_user_prompt))
+
+        if is_edit_cmd:
+            matched_res = GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+            if matched_res:
+                target_item, matched_docs = matched_res
+                top_doc = matched_docs[0]
+                target_kid = top_doc["knowledge_id"]
+                doc_data = top_doc["doc_data"]
+                doc_title = top_doc.get("title") or top_doc.get("file_name") or target_kid
+                batch_id = top_doc.get("batch_id")
+                context_label = doc_data.get("_matched_context_label") or target_item or doc_title
+
+                # Extract new value
+                val_m = re.search(r'\b(?:menjadi|ke|sebagai)\s+[`"]?([^\n\r`"]+)[`"]?', user_prompt, re.IGNORECASE)
+                new_val = val_m.group(1).strip() if val_m else ""
+
+                # Extract field name dynamically
+                field = None
+                field_keywords = [
+                    ("ukuran", ["ukuran", "size", "berat", "netto", "volume", "weight"]),
+                    ("harga", ["harga", "price", "tarif", "biaya"]),
+                    ("sku", ["sku", "kode produk", "kode", "kode sku"]),
+                    ("kategori", ["kategori", "category", "jenis"]),
+                    ("deskripsi", ["deskripsi", "description", "keterangan", "detail"]),
+                    ("nama", ["nama", "nama produk", "judul", "title"]),
+                    ("indikasi", ["indikasi", "kegunaan", "manfaat", "fungsi"]),
+                    ("cara_pakai", ["cara pakai", "aturan pakai", "cara penggunaan", "aturan penggunaan", "instruksi", "dosis"]),
+                    ("periode", ["periode", "masa berlaku", "periode promo", "valid until"]),
+                    ("brand", ["brand", "merek", "merk"])
+                ]
+
+                for canonical_name, aliases in field_keywords:
+                    for alias in aliases:
+                        if re.search(rf'\b{re.escape(alias)}\b', clean_user_prompt):
+                            field = canonical_name
+                            break
+                    if field:
+                        break
+
+                if not field:
+                    field_match = re.search(r'\b(?:ubah|ganti|edit|update|perbarui|revisi)\s+([a-zA-Z_]+)\b', clean_user_prompt)
+                    if field_match:
+                        candidate_field = field_match.group(1).lower()
+                        if candidate_field not in ("data", "informasi", "dokumen", "item", "produk", "ke", "menjadi", "sebagai"):
+                            field = candidate_field
+
+                if not field:
+                    field = "summary"
+
+                field_display_names = {
+                    "ukuran": "Ukuran",
+                    "harga": "Harga",
+                    "price": "Harga",
+                    "sku": "SKU",
+                    "kategori": "Kategori",
+                    "deskripsi": "Deskripsi",
+                    "nama": "Nama Produk / Judul",
+                    "product_name": "Nama Produk",
+                    "indikasi": "Indikasi",
+                    "cara_pakai": "Cara Pakai / Aturan Pakai",
+                    "usage_instruction": "Instruksi Penggunaan",
+                    "periode": "Periode Promo / Masa Berlaku",
+                    "brand": "Brand",
+                    "summary": "Ringkasan Dokumen"
+                }
+                field_display = field_display_names.get(field.lower(), field.capitalize())
+
+                if new_val:
+                    affected_kids = [d["knowledge_id"] for d in matched_docs]
+                    metadata_payload = {
+                        "affected_knowledge_ids": affected_kids,
+                        "affected_docs": [
+                            {
+                                "knowledge_id": d["knowledge_id"],
+                                "title": d.get("title") or d.get("file_name"),
+                                "batch_id": d.get("batch_id"),
+                                "match_type": d.get("match_type"),
+                                "target_item": d.get("target_item") or target_item
+                            }
+                            for d in matched_docs
+                        ]
+                    }
+
+                    from app.models.pending_operation import PendingOperation
+                    from app.core.database import AsyncSessionLocal
+                    import uuid as _uuid
+                    op_id = _uuid.uuid4()
+                    async with AsyncSessionLocal() as session:
+                        op = PendingOperation(
+                            id=op_id,
+                            action="edit",
+                            knowledge_id=target_kid,
+                            target_item=target_item,
+                            context_label=context_label,
+                            field=field,
+                            new_value=new_val,
+                            batch_id=batch_id,
+                            status="pending",
+                            metadata_=metadata_payload
+                        )
+                        session.add(op)
+                        await session.commit()
+
+                    if len(matched_docs) > 1:
+                        doc_list_items = []
+                        for idx, d in enumerate(matched_docs, 1):
+                            kid = d["knowledge_id"]
+                            t = d.get("title") or d.get("file_name") or kid
+                            b_id = d.get("batch_id")
+                            link = f"[{kid}](/dashboard/knowledge/batch/{b_id})" if b_id else f"[{kid}](/dashboard/knowledge/{kid})"
+                            badge = " *(Dokumen Utama)*" if d.get("match_type") == "dedicated_document" else " *(Katalog Produk)*"
+                            doc_list_items.append(f"{idx}. {link} — *{t}*{badge}")
+                        doc_list_str = "\n".join(doc_list_items)
+
+                        preview_text = (
+                            f"📋 **Pratinjau Perubahan Data Knowledge Base**\n\n"
+                            f"Berikut adalah rincian perubahan yang akan diterapkan:\n\n"
+                            + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else "") +
+                            f"- **Bagian yang Diperbarui**: {field_display}\n"
+                            f"- **Nilai Baru**: {new_val}\n"
+                            f"- **Dokumen Terdampak ({len(matched_docs)} Dokumen)**:\n{doc_list_str}\n\n"
+                            f"Apakah Anda yakin ingin menerapkan perubahan ini? Silakan klik tombol konfirmasi di bawah."
+                        )
+                    else:
+                        batch_link = f"[{target_kid}](/dashboard/knowledge/batch/{batch_id})" if batch_id else f"[{target_kid}](/dashboard/knowledge/{target_kid})"
+                        preview_text = (
+                            f"📋 **Pratinjau Perubahan Data Knowledge Base**\n\n"
+                            f"Berikut adalah rincian perubahan yang akan diterapkan:\n\n"
+                            + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else "") +
+                            f"- **ID Dokumen**: {batch_link} — *{doc_title}*\n"
+                            f"- **Bagian yang Diperbarui**: {field_display}\n"
+                            f"- **Nilai Baru**: {new_val}\n\n"
+                            f"Apakah Anda yakin ingin menerapkan perubahan ini? Silakan klik tombol konfirmasi di bawah."
+                        )
+
+                    return QueryGeneralResponse(
+                        type="confirmation",
+                        message=preview_text,
+                        operation_id=str(op_id),
+                        prompt=user_prompt,
+                        answer=preview_text,
+                        action="edit_preview",
+                        target_knowledge_id=target_kid,
+                        total_found=len(matched_docs),
+                        results=[]
+                    )
+
+        # -------------------------------------------------------------
+        # PHASE 3: Dedicated RAG Pipeline (READ)
+        # -------------------------------------------------------------
+        # 3.1 Validate explicit UUIDs in prompt
+        uuid_matches = re.findall(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', user_prompt)
         if uuid_matches:
             for requested_uuid in uuid_matches:
                 if not resolve_approved_file(requested_uuid):
@@ -4900,8 +4955,13 @@ async def query_general_endpoint(
                         results=[]
                     )
 
-        search_query = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
+        # 3.2 Resolve system prompt from DB (or hardcoded fallback with 7 strict rules)
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db_session:
+            system_prompt = await _resolve_query_general_prompt(db_session)
 
+        # 3.3 Contextualize query and retrieve approved knowledge
+        search_query = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
         retrieval_response = pipeline.retriever.retrieve(
             query=search_query,
             top_k=10,
@@ -4919,127 +4979,52 @@ async def query_general_endpoint(
             or len(context.strip()) == 0
         )
 
+        if is_context_empty and not request.history:
+            logger.info(f"[QUERY-GENERAL] No approved knowledge found for: '{user_prompt}'")
+            return QueryGeneralResponse(
+                prompt=user_prompt,
+                answer="Untuk saat ini informasi tersebut belum tersedia.",
+                action="read",
+                target_knowledge_id=None,
+                total_found=0,
+                results=[]
+            )
+
         context_for_prompt = context if not is_context_empty else "(Tidak ada dokumen yang ditemukan di Knowledge Base untuk kueri ini.)"
 
-        # 2. Check for Pending Confirmation from Previous Conversation History
-        target_vs = (pipeline.retriever.vector_store if pipeline.retriever and hasattr(pipeline.retriever, 'vector_store') else vector_store)
-        target_bm25 = (pipeline.retriever.bm25_index if pipeline.retriever and hasattr(pipeline.retriever, 'bm25_index') else bm25)
-
-        clean_user_prompt = user_prompt.strip().lower()
-        last_preview_action = None
+        history_str = ""
         if request.history:
-            for msg in reversed(request.history):
+            for msg in request.history:
+                role = "User" if msg.get("role") == "user" else "Assistant"
                 content = msg.get("content", "")
-                act = _extract_kb_action(content)
-                if act and act.get("action") in ("edit_preview", "delete_preview", "edit", "delete"):
-                    last_preview_action = act
-                    break
+                history_str += f"{role}: {content}\n"
+        else:
+            history_str = "No previous conversation.\n"
 
-        is_affirmative = bool(_re.search(
-            r"\b(ya|setuju|ok|oke|lanjut|lanjutkan|terapkan|eksekusi|hapus|ya hapus|ya, hapus|setuju hapus|konfirmasi)\b",
-            clean_user_prompt
-        ))
-        is_negative = bool(_re.search(
-            r"\b(batal|batalkan|tidak|cancel|jangan|ngga|gak|nggak)\b",
-            clean_user_prompt
-        ))
+        full_prompt = (
+            f"{system_prompt}\n\n"
+            f"--- DATA KNOWLEDGE BASE YANG DITEMUKAN ---\n"
+            f"{context_for_prompt}\n\n"
+            f"--- RIWAYAT PERCAKAPAN ---\n"
+            f"{history_str}\n"
+            f"User: {user_prompt}\n"
+            f"Assistant:"
+        )
+
+        import asyncio
+        answer = await asyncio.to_thread(pipeline.llm_adapter.generate, full_prompt)
+
+        from app.rag.services.guardrails import OutputGuard
+        answer = OutputGuard.redact_pii(answer)
+        answer = OutputGuard.strip_patient_disclaimers(answer)
 
         action_type = "read"
         target_kid = None
-        answer = ""
-
-        # CASE A: Confirmation for pending EDIT_PREVIEW
-        if last_preview_action and last_preview_action.get("action") in ("edit_preview", "edit") and (is_affirmative or is_negative):
-            kid = last_preview_action.get("knowledge_id")
-            field = last_preview_action.get("field", "summary")
-            new_val = last_preview_action.get("new_value", "")
-
-            if is_affirmative and not is_negative:
-                edit_res = _apply_kb_edit(kid, field, new_val, target_vs, target_bm25, pipeline=pipeline)
-                if edit_res.get("success"):
-                    action_type = "edit_executed"
-                    target_kid = kid
-                    answer = (
-                        f"📝 **Perubahan Berhasil Diterapkan!**\n\n"
-                        f"Perubahan pada dokumen telah berhasil disimpan dan diindeks secara resmi ke dalam **Basis Data Pengetahuan ERHA**.\n\n"
-                        f"- **Dokumen ID**: `{kid}`\n"
-                        f"- **Bagian yang Diperbarui**: {field}\n"
-                        f"- **Nilai Baru**: {new_val}\n"
-                        f"- **Status**: Aktif & Terpublikasi (Siap Diretrieve)"
-                    )
-                else:
-                    action_type = "edit_failed"
-                    answer = f"⚠️ **Gagal menerapkan perubahan pada dokumen**: {edit_res.get('error', 'Terjadi kesalahan sistem.')}"
-            else:
-                action_type = "cancelled"
-                answer = "😊 Baik, perubahan dokumen telah dibatalkan atas permintaan Anda. Tidak ada data yang diubah."
-
-        # CASE B: Confirmation for pending DELETE_PREVIEW
-        elif last_preview_action and last_preview_action.get("action") in ("delete_preview", "delete") and (is_affirmative or is_negative):
-            kid = last_preview_action.get("knowledge_id")
-
-            if is_affirmative and not is_negative:
-                del_res = _apply_kb_delete(kid, target_vs, target_bm25)
-                if del_res.get("success"):
-                    action_type = "delete_executed"
-                    target_kid = kid
-                    answer = (
-                        f"🗑️ **Dokumen Berhasil Dihapus!**\n\n"
-                        f"Dokumen dengan ID `{kid}` telah berhasil dihapus secara permanen dari **Basis Data Pengetahuan ERHA**.\n\n"
-                        f"- **Dokumen ID**: `{kid}`\n"
-                        f"- **Status**: Terhapus Bersih (Dokumen, Foto, dan Indikator Pencarian)"
-                    )
-                else:
-                    action_type = "delete_failed"
-                    answer = f"⚠️ **Gagal menghapus dokumen**: {del_res.get('error', 'Dokumen tidak ditemukan.')}"
-            else:
-                action_type = "cancelled"
-                answer = "😊 Baik, penghapusan dokumen telah dibatalkan atas permintaan Anda. Dokumen tetap aman tersimpan."
-
-        # CASE C: Normal Prompt Processing via LLM
-        else:
-            if is_context_empty and not request.history:
-                logger.info(f"[QUERY-GENERAL] No approved knowledge found for: '{user_prompt}'")
-                return QueryGeneralResponse(
-                    prompt=user_prompt,
-                    answer="Untuk saat ini informasi tersebut belum tersedia.",
-                    action="read",
-                    target_knowledge_id=None,
-                    total_found=0,
-                    results=[]
-                )
-
-            history_str = ""
-            if request.history:
-                for msg in request.history:
-                    role = "User" if msg.get("role") == "user" else "Assistant"
-                    content = msg.get("content", "")
-                    history_str += f"{role}: {content}\n"
-            else:
-                history_str = "No previous conversation.\n"
-
-            full_prompt = (
-                f"{system_prompt}\n\n"
-                f"--- DATA KNOWLEDGE BASE YANG DITEMUKAN ---\n"
-                f"{context_for_prompt}\n\n"
-                f"--- RIWAYAT PERCAKAPAN ---\n"
-                f"{history_str}\n"
-                f"User: {user_prompt}\n"
-                f"Assistant:"
-            )
-
-            import asyncio
-            answer = await asyncio.to_thread(pipeline.llm_adapter.generate, full_prompt)
-
-            from app.rag.services.guardrails import OutputGuard
-            answer = OutputGuard.redact_pii(answer)
-            answer = OutputGuard.strip_patient_disclaimers(answer)
-
-            action_data = _extract_kb_action(answer)
-            if action_data:
-                act = action_data.get("action")
-                kid = action_data.get("knowledge_id")
-
+        action_data = _extract_kb_action(answer)
+        if action_data:
+            act = action_data.get("action")
+            kid = action_data.get("knowledge_id")
+            if kid and resolve_approved_file(kid):
                 if act in ("edit_preview", "edit"):
                     action_type = "edit_preview"
                     target_kid = kid
@@ -5048,17 +5033,14 @@ async def query_general_endpoint(
                     target_kid = kid
                 elif act == "cancel":
                     action_type = "cancelled"
-                elif act in ("edit_execute", "edit_applied"):
-                    action_type = "edit_executed"
-                    target_kid = kid
-                elif act in ("delete_execute", "delete_applied"):
-                    action_type = "delete_executed"
-                    target_kid = kid
+            else:
+                action_data = None
 
-        # Clean raw technical JSON action block from final AI answer text for Admin UI display
-        import re as _re
-        clean_answer = _re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
-        clean_answer = _re.sub(r'\{"action":\s*"[^"]+",\s*"knowledge_id":\s*"[^"]+".*?\}', '', clean_answer, flags=_re.DOTALL).strip()
+        # -------------------------------------------------------------
+        # PHASE 4: Output Sanitization & Entity-Isolated Image Injection
+        # -------------------------------------------------------------
+        clean_answer = re.sub(r'```json\s*\n?\s*\{[^`]+?\}\s*\n?\s*```', '', answer).strip()
+        clean_answer = re.sub(r'\{"action":\s*"[^"]+",\s*"knowledge_id":\s*"[^"]+".*?\}', '', clean_answer, flags=re.DOTALL).strip()
 
         # Inject authentic approved MinIO images (Entity Isolated)
         injected_imgs = set()
@@ -5095,25 +5077,42 @@ async def query_general_endpoint(
                 continue
 
             if target_match.lower() in clean_answer.lower() and str(img) not in clean_answer:
-                pattern = _re.compile(rf'(?:\n|^)(\*\*(?:ERHA|Erha)[^\*\n]*{_re.escape(target_match)}[^\*\n]*\*\*|###\s*[^\n]*{_re.escape(target_match)})', _re.IGNORECASE)
+                pattern = re.compile(rf'(?:\n|^)([^\n]*{re.escape(target_match)}[^\n]*)', re.IGNORECASE)
                 if pattern.search(clean_answer):
-                    clean_answer = pattern.sub(rf'\n![{display_label}]({img})\n\1', clean_answer, count=1)
+                    clean_answer = pattern.sub(rf'\1\n\n![{display_label}]({img})\n\n', clean_answer, count=1)
                     injected_imgs.add(str(img))
 
-        from app.rag.services.guardrails import OutputGuard
         clean_answer = OutputGuard.strip_patient_disclaimers(clean_answer)
 
-        # Normalize missing/unavailable responses from LLM
+        # Strip any "Gambar:" or "• Gambar:" text labels per user requirement
+        clean_answer = re.sub(r'^[|\-\*]?\s*(?:Gambar|Foto|Foto Produk)\s*:\s*', '', clean_answer, flags=re.MULTILINE | re.IGNORECASE)
+
+        # Ensure introductory phrases like "Berikut ...:" have a blank line after them
+        clean_answer = re.sub(r'^(Berikut [^\n:]+:)[ \t]*\n(?!\n)', r'\1\n\n', clean_answer, flags=re.MULTILINE | re.IGNORECASE)
+
+        # Ensure all markdown images have double newlines before and after for clean block rendering
+        clean_answer = re.sub(r'([^\n])\n?(!\[.*?\]\([^\)]+\))', r'\1\n\n\2', clean_answer)
+        clean_answer = re.sub(r'(!\[.*?\]\([^\)]+\))\n?([^\n])', r'\1\n\n\2', clean_answer)
+
+        # Ensure any unbolded title line directly preceding an image becomes bolded
+        clean_answer = re.sub(r'(?:\n|^)(?!#|\*|-|\d\.)([A-Za-z0-9][^\n]{3,80})\n\n(!\[.*?\]\([^\)]+\))', r'\n\n**\1**\n\n\2', clean_answer)
+
+        # Normalize excessive consecutive newlines (max 2)
+        clean_answer = re.sub(r'\n{3,}', '\n\n', clean_answer).strip()
+
+        # Strip redundant trailing disclaimer if answer already contains valid factual content
+        disclaimer_phrase = "Untuk saat ini informasi tersebut belum tersedia."
+        if len(clean_answer.strip()) > len(disclaimer_phrase) + 30 and clean_answer.strip().endswith(disclaimer_phrase):
+            clean_answer = clean_answer.strip()[:-len(disclaimer_phrase)].rstrip()
+
+        # Normalize missing/unavailable responses from LLM — narrow guard
         if (
             "untuk saat ini informasi tersebut belum tersedia" in clean_answer.lower()
-            or (action_type == "read" and any(p in clean_answer.lower() for p in ["belum ada data", "tidak ada informasi", "belum tercantum", "tidak tercantum", "tidak ditemukan", "belum ditemukan", "tidak tersedia", "belum tersedia di dalam basis", "belum tersedia di basis"]) and not any(kw in clean_answer.lower() for kw in ["rp ", "kandungan", "manfaat", "downtime", "indikasi"]))
+            and action_type == "read"
+            and (not results or is_context_empty)
         ):
             clean_answer = "Untuk saat ini informasi tersebut belum tersedia."
             results = []
-
-        # Preserve action in invisible HTML comment so subsequent turns can reliably confirm/cancel
-        if action_type in ("edit_preview", "delete_preview") and action_data:
-            clean_answer += f"\n\n<!-- action:{json.dumps(action_data)} -->"
 
         logger.info(
             f"[QUERY-GENERAL] prompt='{user_prompt}' | "
@@ -5121,6 +5120,8 @@ async def query_general_endpoint(
         )
 
         return QueryGeneralResponse(
+            type="answer",
+            message=clean_answer,
             prompt=user_prompt,
             answer=clean_answer,
             action=action_type,
@@ -5132,6 +5133,7 @@ async def query_general_endpoint(
     except Exception as e:
         logger.error(f"Query General endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
