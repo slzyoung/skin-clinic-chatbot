@@ -2506,13 +2506,18 @@ EDITING GUIDELINES:
      * Treatment procedure / application photos: Place inside the usage section (under `## Cara Pemakaian` or `## Prosedur Tindakan`).
    - Format images cleanly on their own lines with descriptive alt text and blank lines before and after:
      ![Deskripsi Gambar](URL_GAMBAR)
-3. **STRICT CATEGORIES RULE**:
+3. **DELETION OF SECTIONS, PRODUCTS & IMAGES RULE**:
+   - If the admin instructs to delete or remove a specific product, treatment, or section (e.g. "hapus produk X", "hilangkan section Y", "hapus tabel ini"):
+     * You MUST completely delete that product/section's headings, text, tables, AND all associated markdown image tags `![...](url)` belonging to that product/section.
+     * Do NOT retain, move, or dump that deleted product's images under other remaining sections or titles.
+     * Keep all other untouched products and sections intact with their respective images.
+4. **STRICT CATEGORIES RULE**:
    - Select suggested_categories ONLY from the "Available Categories from Database" list above.
    - NEVER invent or create new categories. NEVER output placeholder text like "category_name" or "category_id".
    - If NO category from the list genuinely matches this document, you MUST return an empty array: []!
-4. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
-5. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
-6. **FEEDBACK**: Write 1 short, polite Indonesian sentence explaining what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
+5. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
+6. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
+7. **FEEDBACK**: Write 1 short, polite Indonesian sentence explaining what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
 
 Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
 {{
@@ -2567,33 +2572,46 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             updated_data["sku"] = refined_sku
             updated_data["feedback"] = f"Nomor SKU berhasil diperbarui menjadi {refined_sku}."
 
-        # Collect and embed all image URLs
-        all_imgs = []
-        if staged_data.get("image_urls") and isinstance(staged_data["image_urls"], list):
-            for u in staged_data["image_urls"]:
-                if u and u not in all_imgs:
-                    all_imgs.append(u)
+        # Embed newly attached image assets if uploaded in this turn and omitted by LLM
         if "all_attached_images" in locals() and all_attached_images:
-            for u in all_attached_images:
-                if u and u not in all_imgs:
-                    all_imgs.append(u)
-        if staged_data.get("image_url") and staged_data["image_url"] not in all_imgs:
-            all_imgs.append(staged_data["image_url"])
+            missing_new_imgs = [u for u in all_attached_images if u and u not in updated_data.get("summary", "")]
+            if missing_new_imgs:
+                updated_data["summary"] = auto_embed_images_in_summary(
+                    updated_data.get("summary", ""),
+                    missing_new_imgs,
+                    title=cur_title or "Knowledge Image"
+                )
 
-        # Normalized Image Assets
-        structured_images = normalize_image_assets(
-            existing_images=staged_data.get("images"),
-            image_urls=all_imgs,
-            default_product_name=cur_title
-        )
+        # Dynamically synchronize image_urls from the updated summary (Single Source of Truth)
+        # Any image of a deleted product/section will naturally not be in the summary and thus cleanly excluded.
+        actual_summary = updated_data.get("summary", "")
+        active_imgs = []
+        for img_match in re.finditer(r'!\[([^\]]*)\]\(([^\)]+)\)', actual_summary):
+            u = img_match.group(2).strip()
+            if u and u not in active_imgs:
+                active_imgs.append(u)
 
-        # Smart contextual topic-based image embedding if omitted by LLM
-        if all_imgs:
-            updated_data["summary"] = auto_embed_images_in_summary(
-                updated_data.get("summary", ""),
-                structured_images or all_imgs,
-                title=cur_title or "Knowledge Image"
-            )
+        updated_data["image_urls"] = active_imgs
+        updated_data["image_url"] = active_imgs[0] if active_imgs else None
+
+        # Filter structured images metadata to only retain active images
+        existing_imgs = staged_data.get("images") or []
+        updated_images = []
+        for img_obj in existing_imgs:
+            if isinstance(img_obj, dict) and img_obj.get("url") in active_imgs:
+                updated_images.append(img_obj)
+        existing_urls = {img_obj.get("url") for img_obj in updated_images if isinstance(img_obj, dict)}
+        for u in active_imgs:
+            if u not in existing_urls:
+                updated_images.append({
+                    "id": f"img_{uuid.uuid4().hex[:8]}",
+                    "url": u,
+                    "s3_key": "",
+                    "role": "PRODUCT_PACKAGING",
+                    "product_name": cur_title,
+                    "caption": cur_title
+                })
+        updated_data["images"] = updated_images
 
         # Strict Category validation against database
         raw_cats = updated_data.get("suggested_categories", staged_data.get("suggested_categories", []))
@@ -2628,7 +2646,7 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
         updated_data["history"] = new_hist
 
         vis_settings = updated_data.get("visibility_settings") or staged_data.get("visibility_settings", {})
-        doc_img_url = all_imgs[0] if all_imgs else (staged_data.get("image_url") or updated_data.get("image_url"))
+        doc_img_url = active_imgs[0] if active_imgs else (updated_data.get("image_url") or staged_data.get("image_url"))
         doc_file_hash = updated_data.get("file_hash") or staged_data.get("file_hash")
         doc_batch_id = updated_data.get("batch_id") or staged_data.get("batch_id")
         doc_file_name = updated_data.get("file_name") or staged_data.get("file_name", k_id)
