@@ -24,6 +24,60 @@ import {
 	AttachmentActions,
 	AttachmentAction,
 } from "@/components/ui/attachment";
+import { toast } from "sonner";
+
+const ACCEPTED_FILE_EXTENSIONS = [
+	".docx",
+	".pptx",
+	".xlsx",
+	".pdf",
+	".txt",
+	".csv",
+	".png",
+	".jpg",
+	".jpeg",
+	".webp",
+];
+const ACCEPT_STRING = ACCEPTED_FILE_EXTENSIONS.join(",");
+
+function validateAndFilterFiles(files: File[]): File[] {
+	const validFiles: File[] = [];
+	for (const file of files) {
+		const lowerName = file.name.toLowerCase();
+		if (lowerName.endsWith(".doc") || lowerName.endsWith(".ppt") || lowerName.endsWith(".xls")) {
+			toast.error(
+				`Legacy format detected in "${file.name}". Please save as .docx, .pptx, or .xlsx before uploading.`,
+			);
+			continue;
+		}
+		const isSupportedExt = ACCEPTED_FILE_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+		const isImageMime = file.type.startsWith("image/");
+		const isDocMime =
+			file.type === "application/pdf" ||
+			file.type === "text/plain" ||
+			file.type === "text/csv" ||
+			file.type.includes("openxmlformats");
+
+		if (!isSupportedExt && !isImageMime && !isDocMime) {
+			toast.error(
+				`Unsupported file format: "${file.name}". Supported formats: .docx, .pptx, .xlsx, .pdf, .txt, .csv, and images.`,
+			);
+			continue;
+		}
+
+		// If pasted from clipboard without proper extension, normalize filename
+		if (isImageMime && !isSupportedExt) {
+			const ext = file.type.split("/")[1] || "png";
+			const normalizedFile = new File([file], `pasted_image_${Date.now()}.${ext}`, {
+				type: file.type,
+			});
+			validFiles.push(normalizedFile);
+		} else {
+			validFiles.push(file);
+		}
+	}
+	return validFiles;
+}
 
 export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
 	onSend?: (value: string, category: string | undefined, files: File[]) => boolean | void;
@@ -68,7 +122,10 @@ export function PromptInput({
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		const files = e.target.files;
 		if (files && files.length > 0) {
-			setAttachedFiles((prev) => [...prev, ...Array.from(files)]);
+			const filtered = validateAndFilterFiles(Array.from(files));
+			if (filtered.length > 0) {
+				setAttachedFiles((prev) => [...prev, ...filtered]);
+			}
 		}
 	};
 
@@ -114,7 +171,10 @@ export function PromptInput({
 		setIsDragging(false);
 
 		if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-			setAttachedFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)]);
+			const filtered = validateAndFilterFiles(Array.from(e.dataTransfer.files));
+			if (filtered.length > 0) {
+				setAttachedFiles((prev) => [...prev, ...filtered]);
+			}
 		}
 	};
 
@@ -122,7 +182,10 @@ export function PromptInput({
 		if (disabled) return;
 		if (e.clipboardData.files && e.clipboardData.files.length > 0) {
 			e.preventDefault();
-			setAttachedFiles((prev) => [...prev, ...Array.from(e.clipboardData.files)]);
+			const filtered = validateAndFilterFiles(Array.from(e.clipboardData.files));
+			if (filtered.length > 0) {
+				setAttachedFiles((prev) => [...prev, ...filtered]);
+			}
 		}
 	};
 
@@ -312,6 +375,7 @@ export function PromptInput({
 							<input
 								id="file-upload"
 								type="file"
+								accept={ACCEPT_STRING}
 								disabled={disabled}
 								className="sr-only"
 								onChange={handleFileChange}
