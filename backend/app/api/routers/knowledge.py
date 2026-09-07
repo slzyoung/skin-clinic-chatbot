@@ -82,6 +82,44 @@ async def sanitize_knowledge_categories(db: AsyncSession, categories: Optional[L
         # Fallback to normalized strings if DB check fails
         return [str(c.get("name") if isinstance(c, dict) else c).strip() for c in categories if c]
 
+def sanitize_history_turns(history_list: Optional[List[Any]], default_attachment: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Clean internal supplementary attachment tags and preserve attachmentName on user turns."""
+    if not history_list or not isinstance(history_list, list):
+        return []
+    clean_list = []
+    for item in history_list:
+        if not isinstance(item, dict):
+            clean_list.append(item)
+            continue
+        turn = dict(item)
+        content = turn.get("content", "")
+        if turn.get("role") == "user" and content and isinstance(content, str):
+            supp_match = re.search(r"\[SUPPLEMENTARY ATTACHED FILE CONTENT:\s*['\"]?([^'\"\n]+)['\"]?\][\s\S]*?\[END OF ATTACHED FILE CONTENT\]", content, flags=re.IGNORECASE)
+            if supp_match:
+                att_name = supp_match.group(1).strip()
+                if not turn.get("attachmentName"):
+                    turn["attachmentName"] = att_name
+                if not turn.get("attachmentNames"):
+                    turn["attachmentNames"] = [att_name]
+                content = content.replace(supp_match.group(0), "").strip()
+
+            newly_match = re.search(r"---\s*NEWLY ATTACHED SUPPLEMENTARY FILE:\s*['\"]?([^'\"\n]+)['\"]?\s*---[\s\S]*?---\s*END OF ATTACHED FILE CONTENT\s*---", content, flags=re.IGNORECASE)
+            if newly_match:
+                att_name = newly_match.group(1).strip()
+                if not turn.get("attachmentName"):
+                    turn["attachmentName"] = att_name
+                if not turn.get("attachmentNames"):
+                    turn["attachmentNames"] = [att_name]
+                content = content.replace(newly_match.group(0), "").strip()
+
+            if default_attachment and not turn.get("attachmentName"):
+                turn["attachmentName"] = default_attachment
+                turn["attachmentNames"] = [default_attachment]
+
+            turn["content"] = content
+        clean_list.append(turn)
+    return clean_list
+
 
 @router.get("/quota")
 async def get_ingestion_quota_endpoint(
@@ -511,7 +549,7 @@ async def get_knowledge(
                         merged_meta["chat_history"] = []
                         db_edit_hist = knowledge.metadata_.get("edit_history") if isinstance(knowledge.metadata_, dict) else []
                         file_edit_hist = data.get("edit_history") if isinstance(data, dict) else []
-                        merged_meta["edit_history"] = db_edit_hist if len(db_edit_hist or []) >= len(file_edit_hist or []) else file_edit_hist
+                        merged_meta["edit_history"] = sanitize_history_turns(db_edit_hist if len(db_edit_hist or []) >= len(file_edit_hist or []) else file_edit_hist)
 
                         db_stage_hist = knowledge.metadata_.get("staging_history") if isinstance(knowledge.metadata_, dict) else []
                         file_stage_hist = data.get("staging_history") if isinstance(data, dict) else []
@@ -519,7 +557,7 @@ async def get_knowledge(
                     else:
                         db_hist = knowledge.metadata_.get("history") if isinstance(knowledge.metadata_, dict) else []
                         file_hist = data.get("history") if isinstance(data, dict) else []
-                        merged_meta["history"] = db_hist if len(db_hist or []) >= len(file_hist or []) else file_hist
+                        merged_meta["history"] = sanitize_history_turns(db_hist if len(db_hist or []) >= len(file_hist or []) else file_hist)
                         merged_meta["chat_history"] = merged_meta["history"]
                         if isinstance(knowledge.metadata_, dict):
                             if "initial_summary" not in merged_meta and "initial_summary" in knowledge.metadata_:
@@ -649,7 +687,17 @@ async def get_knowledge_batch(
                 knowledge_dict = KnowledgeResponse.model_validate(knowledge).model_dump(by_alias=False)
                 # Merge existing DB metadata with JSON data, JSON takes precedence for RAG fields
                 db_meta = knowledge_dict.get("metadata_") or {}
-                knowledge_dict["metadata_"] = {**db_meta, **data}
+                merged_meta = {**db_meta, **data}
+                if "history" in merged_meta:
+                    merged_meta["history"] = sanitize_history_turns(merged_meta["history"])
+                    merged_meta["chat_history"] = merged_meta["history"]
+                if "edit_history" in merged_meta:
+                    merged_meta["edit_history"] = sanitize_history_turns(merged_meta["edit_history"])
+                knowledge_dict["metadata_"] = merged_meta
+                # Sync status from pending/output files
+                new_status = KnowledgeStatus.APPROVED if "output" in target_file else KnowledgeStatus.PENDING
+                if knowledge_dict.get("status") != new_status and knowledge_dict.get("status") != KnowledgeStatus.APPROVED:
+                    knowledge_dict["status"] = new_status
                 enriched_docs.append(knowledge_dict)
             else:
                 enriched_docs.append(knowledge)
@@ -693,6 +741,12 @@ async def get_knowledge_batch(
 
                                     doc_status = KnowledgeStatus.APPROVED if "output" in folder else KnowledgeStatus.PENDING
 
+                                    if "history" in data:
+                                        data["history"] = sanitize_history_turns(data["history"])
+                                        data["chat_history"] = data["history"]
+                                    if "edit_history" in data:
+                                        data["edit_history"] = sanitize_history_turns(data["edit_history"])
+
                                     enriched_docs.append(KnowledgeResponse(
                                         id=k_uuid,
                                         title=title,
@@ -714,13 +768,21 @@ async def get_knowledge_batch(
                     except Exception:
                         pass
 
-    # Synthesize unified batch executive summary if multiple documents and not yet generated
-    if len(enriched_docs) >= 2 and llm:
-        has_batch_summary = any(
-            (doc.get("metadata_") if isinstance(doc, dict) else (doc.metadata_ or {})).get("batch_summary")
+    # Check if ANY document in batch is still actively PROCESSING
+    is_any_processing = any(
+        (doc.get("status") if isinstance(doc, dict) else getattr(doc, "status", None)) == KnowledgeStatus.PROCESSING
+        for doc in enriched_docs
+    )
+
+    # Synthesize unified batch executive summary if multiple documents and NOT ANY doc is still processing
+    if len(enriched_docs) >= 2 and not is_any_processing and llm:
+        # Check if ALL non-failed documents already have a consistent batch summary
+        has_full_batch_summary = all(
+            bool((doc.get("metadata_") if isinstance(doc, dict) else (doc.metadata_ or {})).get("batch_summary"))
             for doc in enriched_docs
+            if (doc.get("status") if isinstance(doc, dict) else getattr(doc, "status", None)) != KnowledgeStatus.REJECTED
         )
-        if not has_batch_summary:
+        if not has_full_batch_summary:
             try:
                 gen_summary = await synthesize_batch_executive_summary(batch_id, llm)
                 if gen_summary:
@@ -1617,9 +1679,10 @@ async def refine_knowledge(
             if res.get("images"):
                 k_entry.metadata_["images"] = res.get("images")
 
-            prompt_str = prompt or getattr(payload, "prompt", None) or (payload.get("prompt") if isinstance(payload, dict) else str(payload))
+            prompt_str = prompt or (payload.get("prompt") if isinstance(payload, dict) else getattr(payload, "prompt", ""))
             initial_prompt = k_entry.metadata_.get("initial_prompt")
             initial_summary = k_entry.metadata_.get("initial_summary") or k_entry.ai_summary
+            active_attached_file_name = clean_attached_name if file_attachment else None
 
             # Persist chat turns in metadata
             if k_entry.status == KnowledgeStatus.APPROVED:
@@ -1644,11 +1707,15 @@ async def refine_knowledge(
                         })
 
                 if prompt_str:
-                    full_edit_hist.append({
+                    user_turn: Dict[str, Any] = {
                         "role": "user",
                         "content": prompt_str,
                         "created_at": datetime.now(timezone.utc).isoformat()
-                    })
+                    }
+                    if active_attached_file_name:
+                        user_turn["attachmentName"] = active_attached_file_name
+                        user_turn["attachmentNames"] = [active_attached_file_name]
+                    full_edit_hist.append(user_turn)
                 if res.get("summary"):
                     full_edit_hist.append({
                         "role": "assistant",
@@ -1656,6 +1723,7 @@ async def refine_knowledge(
                         "created_at": datetime.now(timezone.utc).isoformat()
                     })
 
+                full_edit_hist = sanitize_history_turns(full_edit_hist, default_attachment=active_attached_file_name)
                 k_entry.metadata_["edit_history"] = full_edit_hist
                 res["edit_history"] = full_edit_hist
                 if a_file and os.path.exists(a_file):
@@ -1697,11 +1765,15 @@ async def refine_knowledge(
                             })
 
                     if prompt_str:
-                        full_history.append({
+                        user_turn: Dict[str, Any] = {
                             "role": "user",
                             "content": prompt_str,
                             "created_at": datetime.now(timezone.utc).isoformat()
-                        })
+                        }
+                        if active_attached_file_name:
+                            user_turn["attachmentName"] = active_attached_file_name
+                            user_turn["attachmentNames"] = [active_attached_file_name]
+                        full_history.append(user_turn)
                     if res.get("summary"):
                         full_history.append({
                             "role": "assistant",
@@ -1709,6 +1781,7 @@ async def refine_knowledge(
                             "created_at": datetime.now(timezone.utc).isoformat()
                         })
 
+                full_history = sanitize_history_turns(full_history, default_attachment=active_attached_file_name)
                 k_entry.metadata_["history"] = full_history
                 k_entry.metadata_["chat_history"] = full_history
                 res["history"] = full_history
