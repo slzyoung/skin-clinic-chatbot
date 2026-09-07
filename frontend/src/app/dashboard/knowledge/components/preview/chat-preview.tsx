@@ -865,7 +865,7 @@ export function ChatPreview({
 			});
 			setCompletedOps((prev) => ({ ...prev, [opId]: "confirmed" }));
 			if (mode !== "general" || !sessionId) {
-				setUserChatMessages((prev) => [
+				setChatTurns((prev) => [
 					...prev,
 					{
 						role: "assistant",
@@ -888,7 +888,7 @@ export function ChatPreview({
 			});
 			setCompletedOps((prev) => ({ ...prev, [opId]: "cancelled" }));
 			if (mode !== "general" || !sessionId) {
-				setUserChatMessages((prev) => [
+				setChatTurns((prev) => [
 					...prev,
 					{
 						role: "assistant",
