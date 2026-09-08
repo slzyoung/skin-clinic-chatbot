@@ -2150,19 +2150,28 @@ async def delete_knowledge(
     except Exception:
         pass
 
-    # 1. Fetch DB record to gather all identifiers
+    # 1. Fetch DB record to gather all identifiers and metadata BEFORE modifying state
     stmt = select(Knowledge).where(Knowledge.id == knowledge_id)
     result = await db.execute(stmt)
     knowledge = result.scalar_one_or_none()
     
     file_name = knowledge.file_name if knowledge else None
-    
-    # Mark soft-deleted in PostgreSQL
-    if knowledge:
-        knowledge.deleted_at = datetime.now(timezone.utc)
-        await db.commit()
-        
-    # 2. Collect all identifier variants for multi-key purge
+    d_meta = knowledge.metadata_ if knowledge and isinstance(knowledge.metadata_, dict) else {}
+    ai_summary = knowledge.ai_summary if knowledge else ""
+
+    pipeline = get_ingestion_pipeline(request)
+    bm25 = get_bm25_index(request)
+    vector_store = get_vector_store(request)
+
+    # 2. Execute RAG deletion endpoint FIRST while local JSONs and DB state are intact
+    # This ensures RAG can read all metadata, discover embedded images in JSON/DB, and purge MinIO & vectors
+    try:
+        await delete_document_endpoint(kid_str, pipeline=pipeline, bm25=bm25, vector_store=vector_store)
+        logger.info(f"RAG delete_document_endpoint completed successfully for '{kid_str}'")
+    except Exception as rag_del_err:
+        logger.warning(f"RAG delete_document_endpoint notice for '{kid_str}': {rag_del_err}")
+
+    # 3. Collect all identifier variants for secondary fail-safe multi-key purge
     identifiers_to_purge = {kid_str, f"{kid_str}_parsed", f"{kid_str}.json", f"{kid_str}_parsed.json"}
     if file_name:
         base_name, _ = os.path.splitext(file_name)
@@ -2174,8 +2183,8 @@ async def delete_knowledge(
             f"{file_name}.json"
         })
 
-    # 3. Clean physical files from data/pending, data/output, data/temp
-    for folder in ["data/pending", "data/output", "data/temp"]:
+    # 4. Clean any remaining physical files from data/pending, data/output, data/approved, data/temp, data/storage
+    for folder in ["data/pending", "data/output", "data/approved", "data/temp", "data/storage", "data/uploads", "data/images"]:
         if os.path.exists(folder):
             for f in os.listdir(folder):
                 f_path = os.path.join(folder, f)
@@ -2209,19 +2218,17 @@ async def delete_knowledge(
                     except Exception as err:
                         logger.warning(f"Failed to remove file {f_path}: {err}")
 
-    # Purge staging & approved JSON in MinIO along with all associated embedded images
+    # 5. Fail-safe MinIO purge for document assets & embedded images
     try:
         from app.services.storage import delete_knowledge_images_and_assets
-        d_meta = knowledge.metadata_ if knowledge and isinstance(knowledge.metadata_, dict) else {}
         delete_knowledge_images_and_assets(
             kid_str,
-            doc_data={"summary": knowledge.ai_summary if knowledge else "", "metadata": d_meta, "image_urls": d_meta.get("image_urls", [])}
+            doc_data={"summary": ai_summary, "metadata": d_meta, "image_urls": d_meta.get("image_urls", [])}
         )
     except Exception as s3_del_err:
-        logger.debug(f"MinIO delete note for {kid_str}: {s3_del_err}")
+        logger.debug(f"MinIO secondary delete note for {kid_str}: {s3_del_err}")
 
-    # 4. Clean Vector Store Chunks (PGVector)
-    vector_store = get_vector_store(request)
+    # 6. Fail-safe Vector Store Chunks (PGVector) & Direct SQL table cleanup
     if vector_store:
         for ident in identifiers_to_purge:
             try:
@@ -2229,7 +2236,6 @@ async def delete_knowledge(
             except Exception as vs_err:
                 logger.debug(f"vector_store.delete_document({ident}) notice: {vs_err}")
 
-    # Direct SQL cleanup on vector store table to ensure 100% vector purge
     try:
         from app.rag.config import settings as rag_settings
         table_name = rag_settings.pg_collection_name
@@ -2254,12 +2260,10 @@ async def delete_knowledge(
             await db.execute(cleanup_query, {
                 "kid": kid_str
             })
-        await db.commit()
     except Exception as sql_err:
         logger.warning(f"Direct vector store table purge warning: {sql_err}")
 
-    # 5. Clean BM25 Index
-    bm25 = get_bm25_index(request)
+    # 7. Fail-safe Clean BM25 Index
     if bm25:
         for ident in identifiers_to_purge:
             try:
@@ -2272,11 +2276,9 @@ async def delete_knowledge(
         except Exception as save_err:
             logger.debug(f"BM25 index save error: {save_err}")
 
-    # 6. Fallback RAG endpoint call
-    pipeline = get_ingestion_pipeline(request)
-    try:
-        await delete_document_endpoint(kid_str, pipeline, bm25, vector_store)
-    except Exception:
-        pass
+    # 8. Mark soft-deleted in current PostgreSQL session and commit
+    if knowledge:
+        knowledge.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
                 
     return None

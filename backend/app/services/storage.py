@@ -796,48 +796,70 @@ def promote_staging_to_approved(knowledge_id: str, data: dict) -> dict:
 
 def delete_staging_json(knowledge_id: str) -> None:
     """Deletes staging JSON from MinIO 'staging' bucket and local pending cache."""
-    s3_key = f"{knowledge_id}.json"
     client = _get_client()
+    bucket = _staging_bucket()
     if client:
-        try:
-            client.delete_object(Bucket=_staging_bucket(), Key=s3_key)
-            logger.info(f"Deleted staging JSON '{s3_key}' from MinIO '{_staging_bucket()}'")
-        except Exception as e:
-            logger.debug(f"Failed to delete staging JSON from MinIO: {e}")
-
-    # Remove local cache files
-    for path in [
-        os.path.join("data/pending", f"{knowledge_id}.json"),
-        os.path.join("data/pending", f"{knowledge_id}_parsed.json")
-    ]:
-        if os.path.exists(path):
+        for s3_k in [f"{knowledge_id}.json", f"{knowledge_id}_parsed.json"]:
             try:
-                os.remove(path)
-            except Exception:
-                pass
+                client.delete_object(Bucket=bucket, Key=s3_k)
+                logger.info(f"Deleted staging JSON '{s3_k}' from MinIO '{bucket}'")
+            except Exception as e:
+                logger.debug(f"Failed to delete staging JSON from MinIO: {e}")
+        try:
+            paginator = client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=bucket, Prefix=str(knowledge_id)):
+                for obj in page.get('Contents', []):
+                    try:
+                        client.delete_object(Bucket=bucket, Key=obj['Key'])
+                        logger.info(f"Deleted staging object '{obj['Key']}' from MinIO '{bucket}'")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # Remove local cache files across all potential folders
+    for folder in ["data/pending", "data/temp", "data/storage"]:
+        for name in [f"{knowledge_id}.json", f"{knowledge_id}_parsed.json"]:
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
 
 
 def delete_approved_json(knowledge_id: str) -> None:
     """Deletes approved JSON from MinIO 'approved' bucket and local output cache."""
-    s3_key = f"{knowledge_id}.json"
     client = _get_client()
+    bucket = _approved_bucket()
     if client:
-        try:
-            client.delete_object(Bucket=_approved_bucket(), Key=s3_key)
-            logger.info(f"Deleted approved JSON '{s3_key}' from MinIO '{_approved_bucket()}'")
-        except Exception as e:
-            logger.debug(f"Failed to delete approved JSON from MinIO: {e}")
-
-    # Remove local cache files
-    for path in [
-        os.path.join("data/output", f"{knowledge_id}.json"),
-        os.path.join("data/output", f"{knowledge_id}_parsed.json")
-    ]:
-        if os.path.exists(path):
+        for s3_k in [f"{knowledge_id}.json", f"{knowledge_id}_parsed.json"]:
             try:
-                os.remove(path)
-            except Exception:
-                pass
+                client.delete_object(Bucket=bucket, Key=s3_k)
+                logger.info(f"Deleted approved JSON '{s3_k}' from MinIO '{bucket}'")
+            except Exception as e:
+                logger.debug(f"Failed to delete approved JSON from MinIO: {e}")
+        try:
+            paginator = client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=bucket, Prefix=str(knowledge_id)):
+                for obj in page.get('Contents', []):
+                    try:
+                        client.delete_object(Bucket=bucket, Key=obj['Key'])
+                        logger.info(f"Deleted approved object '{obj['Key']}' from MinIO '{bucket}'")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # Remove local cache files across all potential folders
+    for folder in ["data/output", "data/approved", "data/temp", "data/storage"]:
+        for name in [f"{knowledge_id}.json", f"{knowledge_id}_parsed.json"]:
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
 
 
 def sync_existing_local_to_minio(client=None) -> dict:
