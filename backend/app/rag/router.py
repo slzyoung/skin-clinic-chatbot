@@ -5068,6 +5068,7 @@ async def query_general_endpoint(
             system_prompt = await _resolve_query_general_prompt(db_session)
 
         # 3.3 Contextualize query and retrieve approved knowledge
+        t0_retrieval = time.time()
         search_query = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
         retrieval_response = pipeline.retriever.retrieve(
             query=search_query,
@@ -5079,6 +5080,7 @@ async def query_general_endpoint(
 
         results = retrieval_response.get("results", [])
         context = retrieval_response.get("context", "")
+        retrieval_ms = int((time.time() - t0_retrieval) * 1000)
 
         is_context_empty = (
             not results
@@ -5088,6 +5090,18 @@ async def query_general_endpoint(
 
         if is_context_empty and not request.history:
             logger.info(f"[QUERY-GENERAL] No approved knowledge found for: '{user_prompt}'")
+            from app.rag.services.rag_generator import log_rag_chat
+            log_rag_chat(
+                query=user_prompt,
+                intent_val="UNKNOWN",
+                top_k=10,
+                results=[],
+                context_status="REJECTED",
+                retrieval_ms=retrieval_ms,
+                llm_ms=0,
+                guardrails_status="PASSED",
+                header_title="RAG CHAT ADMIN"
+            )
             return QueryGeneralResponse(
                 prompt=user_prompt,
                 answer="Untuk saat ini informasi tersebut belum tersedia.",
@@ -5119,7 +5133,9 @@ async def query_general_endpoint(
         )
 
         import asyncio
+        t0_llm = time.time()
         answer = await asyncio.to_thread(pipeline.llm_adapter.generate, full_prompt)
+        llm_ms = int((time.time() - t0_llm) * 1000)
 
         from app.rag.services.guardrails import OutputGuard
         answer = OutputGuard.redact_pii(answer)
@@ -5191,6 +5207,9 @@ async def query_general_endpoint(
         # Ensure any unbolded title line directly preceding an image becomes bolded
         clean_answer = re.sub(r'(?:\n|^)(?!#|\*|-|\d\.)([A-Za-z0-9][^\n]{3,80})\n\n(!\[.*?\]\([^\)]+\))', r'\n\n**\1**\n\n\2', clean_answer)
 
+        # Post-process: Ensure image tag is always positioned RIGHT BELOW the item title line (above bullet points)
+        clean_answer = re.sub(r'(\*\*[^\*\n]+\*\*)\n+((?:[ \t]*-\s*\*\*[^\n]+\n+)+)\n*(!\[.*?\]\([^\)]+\))', r'\1\n\n\3\n\n\2', clean_answer)
+
         # Normalize excessive consecutive newlines (max 2)
         clean_answer = re.sub(r'\n{3,}', '\n\n', clean_answer).strip()
 
@@ -5204,12 +5223,20 @@ async def query_general_endpoint(
             clean_answer.strip().lower() == "untuk saat ini informasi tersebut belum tersedia."
             or clean_answer.strip().lower().startswith("untuk saat ini informasi tersebut belum tersedia")
         ) and action_type == "read":
-            clean_answer = "Untuk saat ini informasi tersebut belum tersedia."
+            clean_answer = "Untuk saat ini informasi megenai hal tersebut belum tersedia."
             results = []
 
-        logger.info(
-            f"[QUERY-GENERAL] prompt='{user_prompt}' | "
-            f"action={action_type} | results={len(results)} | answer_len={len(clean_answer)}"
+        from app.rag.services.rag_generator import log_rag_chat
+        log_rag_chat(
+            query=user_prompt,
+            intent_val="UNKNOWN",
+            top_k=len(results),
+            results=results,
+            context_status="ACCEPTED" if (results and not is_context_empty) else "EMPTY",
+            retrieval_ms=retrieval_ms,
+            llm_ms=llm_ms,
+            guardrails_status="PASSED",
+            header_title="RAG CHAT ADMIN"
         )
 
         return QueryGeneralResponse(

@@ -16,9 +16,9 @@ class InterceptHandler(logging.Handler):
     Redirect standard logging (Uvicorn, FastAPI, SQLAlchemy, HTTPX) to Loguru.
     """
     def emit(self, record):
-        # Ignore noisy periodic 200 OK health check logs from Docker / monitoring
+        # Ignore noisy periodic 200 OK health check logs and Hugging Face cache HEAD/GET checks
         message = record.getMessage()
-        if "GET /health" in message and " 200" in message:
+        if ("GET /health" in message and " 200" in message) or any(k in message for k in ["huggingface.co", "resolve-cache", "additional_chat_templates"]):
             return
 
         try:
@@ -96,7 +96,7 @@ def setup_logging(log_level: str = "INFO"):
 
     # 4. Intercept standard library loggers
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "fastapi", "sqlalchemy.engine", "httpx", "urllib3"):
+    for logger_name in ("uvicorn", "uvicorn.access", "uvicorn.error", "fastapi", "sqlalchemy.engine", "httpx", "urllib3", "huggingface_hub", "transformers", "sentence_transformers"):
         mod_logger = logging.getLogger(logger_name)
         mod_logger.handlers = [InterceptHandler()]
         mod_logger.propagate = False
