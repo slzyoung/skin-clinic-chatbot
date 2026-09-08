@@ -361,7 +361,10 @@ export function ChatPreview({
 				}
 			}
 			if (Object.keys(restored).length > 0) {
-				setCompletedOps((prev) => ({ ...restored, ...prev }));
+				const timer = setTimeout(() => {
+					setCompletedOps((prev) => ({ ...restored, ...prev }));
+				}, 0);
+				return () => clearTimeout(timer);
 			}
 		}
 	}, [dbMessages]);
