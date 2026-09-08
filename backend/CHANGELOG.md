@@ -2,6 +2,21 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.2.9] - 2026-09-08
+
+### 100% Stateless Architecture, BM25 MinIO SSOT & Out-of-Band Sync Isolation
+- **BM25Index MinIO Persistence & In-Memory Hydration (`app/rag/services/rag_retriever.py`)**:
+  - Enhanced `BM25Index.save()` and `BM25Index.load()` to serialize and persist index pickle bytes directly to MinIO Object Storage (`knowledge-documents/indexes/bm25_index.pkl`).
+  - Preserved 100% of the AI Engineer's exact `rank-bm25` Python algorithm, tokenization, ingredient intent boosting (+0.35), and cross-encoder reranking in memory without local disk dependencies.
+- **MinIO Presigned 307 Redirection & Storage Offloading (`app/api/routers/storage.py`)**:
+  - Implemented `307 Temporary Redirect` to cryptographically signed S3 presigned URLs in `GET /api/storage/{s3_key}`, offloading binary image delivery from FastAPI worker threads directly to MinIO.
+- **Approved Document Edit & Refine Promotion Persistence (`app/api/routers/knowledge.py`)**:
+  - Fixed `PUT /api/knowledge/{id}` so that when saving an approved document with an active refinement staging draft, the endpoint merges draft modifications, calls `edit_approved_document` to reindex PGVector and BM25, purges the staging draft, and commits updated summary, title, and categories directly to PostgreSQL DB.
+- **Prompt Attachment Image Extraction (`app/rag/router.py`)**:
+  - Enhanced `refine_approved_document` and `refine_pending_document` to automatically detect and parse embedded image markdown tags (`![...](url)`) within pre-parsed prompt attachments, ensuring newly attached images are embedded and preserved in the top-level summary.
+
+---
+
 ## [1.2.8] - 2026-09-07
 
 ### Fullstack Risk Analysis & Defect Remediation

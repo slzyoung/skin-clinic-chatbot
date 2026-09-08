@@ -2402,6 +2402,14 @@ async def refine_pending_document(
     try:
         attached_file_context = ""
         attached_file_name = ""
+        all_attached_images = []
+
+        prompt_str = getattr(request, "prompt", "") if hasattr(request, "prompt") else (request if isinstance(request, str) else "")
+        for m in re.finditer(r'!\[([^\]]*)\]\(([^\)]+)\)', prompt_str):
+            img_u = m.group(2).strip()
+            if img_u and img_u not in all_attached_images:
+                all_attached_images.append(img_u)
+
         if file_attachment and hasattr(file_attachment, "read") and not ("[SUPPLEMENTARY ATTACHED FILE CONTENT:" in getattr(request, "prompt", "")):
             try:
                 temp_dir = "data/temp"
@@ -2418,7 +2426,6 @@ async def refine_pending_document(
                 parse_res = parser.parse_file(temp_file_path)
                 
                 extracted_text = ""
-                all_attached_images = []
                 if parse_res and parse_res.pages:
                     extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
                     extracted_text = "\n\n".join(extracted_pages)
@@ -3285,6 +3292,14 @@ async def refine_approved_document(
         # 0. Parse attached file if provided
         attached_file_context = ""
         attached_file_name = ""
+        all_attached_images = []
+
+        prompt_str = getattr(request, "prompt", "") if hasattr(request, "prompt") else (request if isinstance(request, str) else "")
+        for m in re.finditer(r'!\[([^\]]*)\]\(([^\)]+)\)', prompt_str):
+            img_u = m.group(2).strip()
+            if img_u and img_u not in all_attached_images:
+                all_attached_images.append(img_u)
+
         if file_attachment and hasattr(file_attachment, "read") and not ("[SUPPLEMENTARY ATTACHED FILE CONTENT:" in getattr(request, "prompt", "")):
             try:
                 temp_dir = "data/temp"
@@ -3301,7 +3316,6 @@ async def refine_approved_document(
                 parse_res = parser.parse_file(temp_file_path)
                 
                 extracted_text = ""
-                all_attached_images = []
                 if parse_res and parse_res.pages:
                     extracted_pages = [p.get("text", "") for p in parse_res.pages if p.get("text")]
                     extracted_text = "\n\n".join(extracted_pages)

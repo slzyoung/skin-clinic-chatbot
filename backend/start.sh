@@ -12,7 +12,7 @@ python seed.py
 PORT="${PORT:-8000}"
 echo "Starting application in $ENV mode on port $PORT..."
 if [ "$ENV" = "dev" ] || [ "$ENV" = "development" ]; then
-    exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --reload
+    exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --reload --reload-dir app
 else
     exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
 fi

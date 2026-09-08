@@ -245,42 +245,77 @@ class BM25Index:
                 })
             return results
 
-    def save(self, file_path: str):
-        """Serializes and saves the index to disk using pickle atomically."""
+    def save(self, file_path: str = None):
+        """Serializes and saves the index to MinIO (SSOT) and local disk fallback atomically."""
         try:
-            parent_dir = os.path.dirname(file_path)
-            if parent_dir:
-                os.makedirs(parent_dir, exist_ok=True)
-            tmp_path = f"{file_path}.tmp"
-            with open(tmp_path, "wb") as f:
-                pickle.dump({
-                    "chunks": self.chunks,
-                    "corpus": self.corpus
-                }, f)
-            os.replace(tmp_path, file_path)
-            logger.info(f"Successfully saved BM25 index atomically to {file_path}")
+            payload = {
+                "chunks": self.chunks,
+                "corpus": self.corpus
+            }
+            pickle_bytes = pickle.dumps(payload)
+
+            # 1. Save to MinIO Object Storage (SSOT)
+            try:
+                from app.services.storage import _get_client, _docs_bucket
+                client = _get_client()
+                if client:
+                    client.put_object(
+                        Bucket=_docs_bucket(),
+                        Key="indexes/bm25_index.pkl",
+                        Body=pickle_bytes,
+                        ContentType="application/octet-stream"
+                    )
+                    logger.info(f"✅ Successfully saved BM25 index to MinIO '{_docs_bucket()}/indexes/bm25_index.pkl' ({len(self.chunks)} chunks)")
+            except Exception as s3_err:
+                logger.debug(f"MinIO BM25 save note: {s3_err}")
+
+            # 2. Local fallback if path provided
+            if file_path:
+                parent_dir = os.path.dirname(file_path)
+                if parent_dir:
+                    os.makedirs(parent_dir, exist_ok=True)
+                tmp_path = f"{file_path}.tmp"
+                with open(tmp_path, "wb") as f:
+                    f.write(pickle_bytes)
+                os.replace(tmp_path, file_path)
+                logger.debug(f"Saved BM25 index locally to {file_path}")
         except Exception as e:
             logger.error(f"Failed to save BM25 index: {e}")
 
-    def load(self, file_path: str):
-        """Loads and deserializes the index from disk."""
-        if not os.path.exists(file_path):
-            logger.info(f"No existing BM25 index file found at {file_path}. Creating new.")
-            return
-            
+    def load(self, file_path: str = None):
+        """Loads and deserializes the index from MinIO (SSOT) with local disk fallback."""
+        data = None
+
+        # 1. Fast MinIO fetch (SSOT)
         try:
-            with open(file_path, "rb") as f:
-                data = pickle.load(f)
-                self.chunks = data.get("chunks", [])
-                self.corpus = data.get("corpus", [])
-            
+            from app.services.storage import _get_client, _docs_bucket
+            client = _get_client()
+            if client:
+                resp = client.get_object(Bucket=_docs_bucket(), Key="indexes/bm25_index.pkl")
+                data = pickle.loads(resp["Body"].read())
+                logger.info(f"⚡ Successfully loaded BM25 index from MinIO '{_docs_bucket()}/indexes/bm25_index.pkl'")
+        except Exception as s3_err:
+            logger.debug(f"MinIO BM25 load note: {s3_err}")
+
+        # 2. Local fallback if not found in MinIO
+        if not data and file_path and os.path.exists(file_path):
+            try:
+                with open(file_path, "rb") as f:
+                    data = pickle.load(f)
+                logger.info(f"Loaded BM25 index from local file {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to load local BM25 index: {e}")
+
+        if data:
+            self.chunks = data.get("chunks", [])
+            self.corpus = data.get("corpus", [])
             if self.corpus:
                 self.bm25 = BM25Okapi(self.corpus)
-                logger.info(f"Successfully loaded BM25 index from {file_path}. Loaded {len(self.chunks)} chunks.")
+                logger.info(f"Successfully initialized BM25Okapi with {len(self.chunks)} chunks.")
             else:
                 self.bm25 = None
-        except Exception as e:
-            logger.error(f"Failed to load BM25 index: {e}")
+        else:
+            logger.info("No existing BM25 index found in MinIO or disk. Starting with clean index.")
 
 
 # --- Cross-Encoder Reranker ---

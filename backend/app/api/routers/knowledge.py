@@ -589,7 +589,10 @@ async def list_knowledge(
 
     for item in db_items:
         k_id_str = str(item.id)
-        target_file = resolve_pending_file(k_id_str) or resolve_approved_file(k_id_str)
+        if item.status == KnowledgeStatus.APPROVED:
+            target_file = resolve_approved_file(k_id_str)
+        else:
+            target_file = resolve_pending_file(k_id_str) or resolve_approved_file(k_id_str)
         item_metadata = dict(item.metadata_) if isinstance(item.metadata_, dict) else {}
 
         if target_file and os.path.exists(target_file):
@@ -777,7 +780,10 @@ async def get_knowledge(
             raise HTTPException(status_code=404, detail="Knowledge document not found")
         # OUT-OF-BAND SYNC: Fetch latest AI summary & metadata from RAG JSON files
         try:
-            target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
+            if knowledge.status == KnowledgeStatus.APPROVED:
+                target_file = resolve_approved_file(str(knowledge_id))
+            else:
+                target_file = resolve_pending_file(str(knowledge_id)) or resolve_approved_file(str(knowledge_id))
             if target_file and os.path.exists(target_file):
                 with open(target_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -1157,6 +1163,25 @@ async def approve_batch_knowledge(
             if doc_u:
                 doc_u.status = KnowledgeStatus.APPROVED
                 doc_u.approved_by = current_user.id
+                
+                # Sync finalized summary, content, and title from approved output
+                a_file = resolve_approved_file(aid)
+                if a_file and os.path.exists(a_file):
+                    try:
+                        with open(a_file, "r", encoding="utf-8") as af:
+                            a_data = json.load(af)
+                        if isinstance(a_data, dict):
+                            if a_data.get("summary"):
+                                doc_u.ai_summary = a_data.get("summary")
+                                doc_u.content = a_data.get("summary")
+                            if a_data.get("title"):
+                                doc_u.title = a_data.get("title")
+                            if a_data.get("categories"):
+                                doc_u.metadata_ = doc_u.metadata_ or {}
+                                doc_u.metadata_["categories"] = a_data.get("categories")
+                    except Exception:
+                        pass
+
                 if aid in doc_histories:
                     if doc_u.metadata_ is None:
                         doc_u.metadata_ = {}
@@ -1493,6 +1518,25 @@ async def approve_knowledge(
     if k_entry:
         k_entry.status = KnowledgeStatus.APPROVED
         k_entry.approved_by = current_user.id
+        
+        # Read the newly approved document to sync finalized summary, content, and title to DB
+        a_file = resolve_approved_file(str(knowledge_id))
+        if a_file and os.path.exists(a_file):
+            try:
+                with open(a_file, "r", encoding="utf-8") as af:
+                    a_data = json.load(af)
+                if isinstance(a_data, dict):
+                    if a_data.get("summary"):
+                        k_entry.ai_summary = a_data.get("summary")
+                        k_entry.content = a_data.get("summary")
+                    if a_data.get("title"):
+                        k_entry.title = a_data.get("title")
+                    if a_data.get("categories"):
+                        k_entry.metadata_ = k_entry.metadata_ or {}
+                        k_entry.metadata_["categories"] = a_data.get("categories")
+            except Exception as read_err:
+                logger.debug(f"Note syncing approved file to DB: {read_err}")
+
         if k_entry.metadata_ is None:
             k_entry.metadata_ = {}
         if staged_history:
@@ -1585,27 +1629,94 @@ async def edit_knowledge(
             except Exception:
                 pass
 
-    if p_file:
-        res = await edit_pending_document(
-            knowledge_id=str(knowledge_id),
-            request=payload
-        )
-    else:
+    # If document is already APPROVED, handle promotion of pending refine draft or direct edit
+    if k_entry and k_entry.status == KnowledgeStatus.APPROVED:
+        # If a pending refinement draft exists from AI chat, merge draft contents
+        if p_file and os.path.exists(p_file):
+            try:
+                with open(p_file, "r", encoding="utf-8") as pf:
+                    p_data = json.load(pf)
+
+                # Get latest refined summary from pending draft or last assistant turn in history
+                refined_sum = p_data.get("summary", "")
+                hist = p_data.get("history") or p_data.get("edit_history") or []
+                if isinstance(hist, list):
+                    for turn in reversed(hist):
+                        if isinstance(turn, dict) and turn.get("role") == "assistant" and turn.get("content"):
+                            if len(turn["content"]) > 50 and "\n" in turn["content"]:
+                                refined_sum = turn["content"]
+                                break
+
+                # Use explicit payload summary only if user edited it; otherwise prefer refined_sum
+                if payload.summary and payload.summary.strip() and payload.summary != (k_entry.ai_summary or ""):
+                    final_summary = payload.summary
+                else:
+                    final_summary = refined_sum or p_data.get("summary", "") or (k_entry.ai_summary or "")
+
+                final_title = payload.title if (payload.title and payload.title.strip()) else p_data.get("title", k_entry.title)
+                final_categories = payload.categories if (payload.categories is not None and len(payload.categories) > 0) else p_data.get("categories", p_data.get("suggested_categories", []))
+                final_vis = payload.visibility_settings if payload.visibility_settings else p_data.get("visibility_settings")
+
+                merged_req = EditApprovedDocumentRequest(
+                    summary=final_summary,
+                    title=final_title,
+                    categories=final_categories,
+                    visibility_settings=final_vis
+                )
+            except Exception as read_p_err:
+                logger.warning(f"Failed to read staging draft for approved edit: {read_p_err}")
+                merged_req = payload
+        else:
+            merged_req = payload
+
         res = await edit_approved_document(
             knowledge_id=str(knowledge_id),
-            request=payload,
+            request=merged_req,
             pipeline=pipeline,
             bm25=bm25,
             vector_store=vector_store
         )
 
-    # Sync updates back to the DB row (Only for pending documents; approved documents stay untouched in DB until Approved)
-    if k_entry and k_entry.status != KnowledgeStatus.APPROVED:
-        if payload.title:
-            k_entry.title = payload.title
-        if payload.summary:
-            k_entry.ai_summary = payload.summary
-            k_entry.content = payload.summary
+        try:
+            from app.services.storage import upload_canonical_json
+            upload_canonical_json(str(knowledge_id), res)
+        except Exception:
+            pass
+
+        # Cleanup staging draft file once approved changes are committed
+        try:
+            from app.services.storage import delete_staging_json
+            delete_staging_json(str(knowledge_id))
+        except Exception:
+            if p_file and os.path.exists(p_file):
+                try:
+                    os.remove(p_file)
+                except Exception:
+                    pass
+    else:
+        # Document is pending approval
+        if p_file:
+            res = await edit_pending_document(
+                knowledge_id=str(knowledge_id),
+                request=payload
+            )
+        else:
+            res = await edit_approved_document(
+                knowledge_id=str(knowledge_id),
+                request=payload,
+                pipeline=pipeline,
+                bm25=bm25,
+                vector_store=vector_store
+            )
+
+    # Sync updates back to the PostgreSQL DB row for both approved and pending documents
+    if k_entry:
+        if payload.title or (isinstance(res, dict) and res.get("title")):
+            k_entry.title = (res.get("title") if isinstance(res, dict) and res.get("title") else payload.title) or k_entry.title
+        if payload.summary or (isinstance(res, dict) and res.get("summary")):
+            final_sum = (res.get("summary") if isinstance(res, dict) and res.get("summary") else payload.summary) or k_entry.ai_summary
+            k_entry.ai_summary = final_sum
+            k_entry.content = final_sum
 
         k_entry.type = KnowledgeType.GENERAL
             
@@ -1617,9 +1728,14 @@ async def edit_knowledge(
         if payload.categories is not None:
             sanitized_cats = await sanitize_knowledge_categories(db, payload.categories)
             k_entry.metadata_["categories"] = sanitized_cats
+        elif isinstance(res, dict) and res.get("categories"):
+            sanitized_cats = await sanitize_knowledge_categories(db, res.get("categories"))
+            k_entry.metadata_["categories"] = sanitized_cats
             
         if payload.visibility_settings is not None:
             k_entry.metadata_["visibility_settings"] = payload.visibility_settings.model_dump()
+        elif isinstance(res, dict) and res.get("visibility_settings"):
+            k_entry.metadata_["visibility_settings"] = res.get("visibility_settings")
             
         # Ensure batch_id, chunks, images, and image_urls from res are preserved
         if isinstance(res, dict):
@@ -1631,6 +1747,10 @@ async def edit_knowledge(
                 k_entry.metadata_["image_urls"] = res["image_urls"]
             if res.get("images") and "images" not in k_entry.metadata_:
                 k_entry.metadata_["images"] = res["images"]
+            if res.get("edit_history"):
+                k_entry.metadata_["edit_history"] = res["edit_history"]
+            if res.get("staging_history"):
+                k_entry.metadata_["staging_history"] = res["staging_history"]
 
         # Ensure existing images array with granular role metadata and image_urls in DB metadata are never lost
         if "images" not in k_entry.metadata_ and "images" in existing_meta:
@@ -1643,6 +1763,7 @@ async def edit_knowledge(
         flag_modified(k_entry, "metadata_")
         
         await db.commit()
+        await db.refresh(k_entry)
 
     return res
 
@@ -1903,18 +2024,21 @@ async def refine_knowledge(
         db_res = await db.execute(stmt)
         k_entry = db_res.scalar_one_or_none()
         if k_entry and isinstance(res, dict):
-            if res.get("title"):
-                k_entry.title = res.get("title")
+            # For pending documents, update live summary and title directly in DB
+            # For approved documents, preserve approved baseline in DB until admin explicitly approves
+            if k_entry.status != KnowledgeStatus.APPROVED:
+                if res.get("title"):
+                    k_entry.title = res.get("title")
+                if res.get("summary"):
+                    k_entry.ai_summary = res.get("summary")
+                    k_entry.content = res.get("summary")
 
             if k_entry.metadata_ is None:
                 k_entry.metadata_ = {}
 
-            # Preserve initial summary before updating ai_summary
+            # Preserve initial summary before any updates
             if "initial_summary" not in k_entry.metadata_ and k_entry.ai_summary:
                 k_entry.metadata_["initial_summary"] = k_entry.ai_summary
-
-            if res.get("summary"):
-                k_entry.ai_summary = res.get("summary")
 
             if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
                 k_entry.metadata_["batch_id"] = res.get("batch_id")

@@ -44,7 +44,17 @@ async def get_storage_asset(s3_key: str):
     fname = os.path.basename(clean_key)
     media_type = _resolve_mime_type(fname)
 
-    # 1. Try streaming from MinIO Object Storage
+    # 1. Direct Presigned URL Redirect for browser offloading (Stateless Enterprise Pattern)
+    try:
+        from app.services.storage import get_presigned_url
+        presigned_url = get_presigned_url(clean_key, expires=3600)
+        if presigned_url and not presigned_url.startswith("/api/storage"):
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=presigned_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    except Exception as e:
+        logger.debug(f"Presigned redirect fallback: {e}")
+
+    # 2. Try streaming from MinIO Object Storage
     try:
         stream_gen, ctype, content_length = get_s3_object_stream(clean_key)
         if stream_gen:
