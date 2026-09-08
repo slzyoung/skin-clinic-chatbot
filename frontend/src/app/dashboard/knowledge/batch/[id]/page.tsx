@@ -292,7 +292,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						</Button>
 					)}
 					{hasDeleteAccess &&
-						(activeDoc?.status === "PENDING" || activeDoc?.status === "REJECTED") && (
+						(activeDoc?.status === "PENDING" || activeDoc?.status === "REJECTED" || activeDoc?.status === "PROCESSING") && (
 							<Button
 								variant="outline"
 								className="gap-2 border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50 hover:border-red-300 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"

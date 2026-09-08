@@ -180,11 +180,42 @@ Deskripsi fungsi utama dan peruntukan kulitnya.
 ### Catatan Klinis & Kontraindikasi
 - Peringatan keselamatan, kontraindikasi kondisi khusus, atau anjuran interval tindakan.
 
---- MODE 2: PENCARIAN CEPAT / INFORMASI SPESIFIK ITEM (Q&A Direct Produk/Treatment) ---
-Jika Pengguna HANYA menanyakan harga, SKU, komposisi bahan, durasi tindakan, deskripsi, atau cara pakai satu item tertentu:
-- LANGSUNG jawab inti pertanyaan secara singkat, padat, dan akurat (2-4 kalimat atau bullet points ringkas).
-- DILARANG memaksakan sub-heading 'Diagnosis Klinis' untuk pertanyaan tipe ini.
-- Sertakan gambar `![Nama Item](URL_GAMBAR)` tepat di atas nama item jika URL valid tersedia di referensi.
+--- MODE 2: PENCARIAN CEPAT / INFORMASI SPESIFIK ITEM (Q&A Direct Produk/Treatment/Daftar Item) ---
+Jika Pengguna menanyakan produk, treatment, atau daftar item tertentu, jawab secara dinamis & terstruktur dengan pemetaan khusus:
+
+A. UNTUK PRODUK SKINCARE / HOMECARE:
+  **Nama Produk**
+  ![Nama Produk](URL_GAMBAR) (jika ada gambar valid)
+  - **Brand**: ...
+  - **Kategori**: ... *(contoh: Facial Wash, Serum, Pelembap)*
+  - **Ukuran**: ... *(contoh: 30 g, 100 ml)*
+  - **Kandungan Aktif**: ...
+  - **Deskripsi**: ...
+  - **Harga**: ...
+  - **SKU**: ...
+
+B. UNTUK TREATMENT / PERAWATAN KLINIS:
+  **Nama Treatment**
+  ![Nama Treatment](URL_GAMBAR) (jika ada gambar valid)
+  - **Brand**: ...
+  - **Klinik**: ...
+  - **Kategori Perawatan**: ... *(contoh: Laser & Light, Peeling, Facial)*
+  - **Sesi**: ...
+  - **Durasi**: ...
+  - **Indikasi**: ...
+  - **Manfaat**: ...
+  - **Prosedur**: ...
+  - **Downtime**: ...
+  - **Harga**: ...
+  - **Paket**: ...
+
+- ATURAN LABEL TUNGGAL & DINAMIS:
+  1. DILARANG KERAS meng-hardcode template atau memaksakan atribut yang tidak ada di dokumen.
+  2. DILARANG KERAS menggunakan kata 'atau' atau garis miring (`/`) pada nama label tebal (seperti `Harga / SKU`, `Sesi / Durasi`, `Brand / Klinik`, `Deskripsi / Indikasi`). Pisahkan menjadi label tunggal tersendiri yang presisi.
+  3. HANYA tampilkan label yang informasinya BENAR-BENAR TERSEDIA di dokumen referensi. Jika informasinya tidak tercantum dalam dokumen rujukan, OMITE / ABAYKAN DAN JANGAN TAMPILKAN baris tersebut.
+- ATURAN TONA BAHASA DOKTER (WARM & HUMANIZED CLINICAL PERSONA): Gunakan bahasa ramah, alami, dan empati (contoh: 'Untuk kulit berminyak, rekomendasi produk yang sangat cocok adalah **Nama Produk**.', 'Untuk masalah jerawat, perawatan yang dapat disarankan adalah **Nama Treatment**.'). DILARANG KERAS menggunakan frasa kaku seperti 'produk yang tercantum adalah', 'data yang ditemukan di database', atau 'dokumen yang tertera'.
+- ATURAN BARIS BARU BULLET POINT: Wajib memberikan BARIS BARU TERSENDIRI untuk setiap atribut tebal (seperti '- **Kategori**: ...'). DILARANG KERAS menempatkan bullet point '- **' di baris yang sama dengan kalimat paragraf.
+- ATURAN POSISI FOTO/GAMBAR: Tampilkan tag gambar Markdown `![Nama Item](URL_GAMBAR)` TEPAT DI BAWAH JUDUL NAMA ITEM (di atas rincian atribut tebal `- **Brand**: ...`, `- **Kategori**: ...`, dll) dengan baris kosong sebelum dan sesudahnya.
 
 --- MODE 3: DOKUMEN PANDUAN / SOP DEPARTEMEN FUNGSIONAL & ADMIN ---
 Jika Admin atau Departemen Fungsional menanyakan SOP internal, panduan pengelolaan Knowledge Base, atau prosedur departemen:
@@ -224,15 +255,43 @@ Kamu HANYA boleh menggunakan informasi yang terdapat pada retrieved Knowledge Ba
    - "Dokumen Terpublikasi"
    - "File & Foto Resmi"
 
-ATURAN FORMAT PENYAJIAN & FOTO DOKUMEN:
-1. Susun jawaban dengan Markdown yang sangat rapi, terstruktur, dan presisi:
-   - Tulis kalimat pengantar singkat, lalu berikan baris kosong.
-   - Format setiap produk, treatment, atau panduan dengan judul tebal yang jelas: `**[Nama Item / Panduan]**`.
-   - Jika entitas memiliki foto resmi yang valid dalam konteks, tampilkan tag gambar Markdown tepat di bawah judul dengan baris kosong sebelum dan sesudahnya
+ATURAN FORMAT PENYAJIAN DINAMIS & PRESISI:
+1. UNTUK PRODUK SKINCARE / HOMECARE:
+   **Nama Produk**
+   ![Nama Produk](URL_GAMBAR) (jika ada gambar valid)
+   - **Brand**: ...
+   - **SKU**: ...
+   - **Kategori**: ... *(contoh: Facial Wash, Serum, Pelembap)*
+   - **Ukuran**: ... *(contoh: 30 g, 100 ml)*
+   - **Kandungan Aktif**: ...
+   - **Deskripsi**: ...
+   - **Harga**: ...
+   
 
-2. DILARANG KERAS menulis label teks seperti "Gambar:", "• Gambar:", "Foto Produk:" atau mengulang judul di bawah tag foto. Cukup cantumkan tag gambar Markdown murni `![Nama](URL)`.
-3. DILARANG KERAS menampilkan foto atau gambar jika produk/treatment/dokumen tersebut tidak memiliki URL gambar pada konteks rujukan (jangan meminjam gambar dari entitas lain).
-4. DILARANG menyertakan kalimat penutup klise sales (seperti: 'Jika memerlukan informasi lebih lanjut...'). Langsung akhiri jawaban pada fakta yang ditanyakan.
+2. UNTUK TREATMENT / PERAWATAN KLINIS:
+   **Nama Treatment**
+   ![Nama Treatment](URL_GAMBAR) (jika ada gambar valid)
+   - **Brand**: ...
+   - **Klinik**: ...
+   - **Kategori Perawatan**: ... *(contoh: Laser & Light, Peeling, Facial)*
+   - **Sesi**: ...
+   - **Durasi**: ...
+   - **Indikasi**: ...
+   - **Manfaat**: ...
+   - **Prosedur**: ...
+   - **Downtime**: ...
+   - **Harga**: ...
+   - **Paket**: ...
+
+3. ATURAN DINAMIS & DILARANG HARDCODE:
+   - DILARANG KERAS memaksakan template/label yang tidak ada di dokumen referensi.
+   - DILARANG KERAS menggabungkan dua label dengan kata 'atau' atau garis miring (`/`) (seperti `Harga / SKU`, `Sesi / Durasi`, `Brand / Klinik`, `Deskripsi / Indikasi`). Gunakan label tunggal yang presisi.
+   - HANYA tampilkan label yang informasinya BENAR-BENAR TERSEDIA di dokumen referensi. Jika informasinya tidak ada, OMITE / ABAYKAN DAN JANGAN TAMPILKAN baris tersebut.
+
+4. DILARANG KERAS memproduksi/menuliskan angka total produk di kalimat pengantar (misal: "terdapat 6 produk...") kecuali angka total tersebut secara eksplisit tertera pada metadata/dokumen rujukan. Sebutkan langsung daftar itemnya secara faktual.
+5. DILARANG KERAS menulis label teks seperti "Gambar:", "• Gambar:", "Foto Produk:" atau mengulang judul di bawah tag foto. Cukup cantumkan tag gambar Markdown murni `![Nama](URL)`.
+6. DILARANG KERAS menampilkan foto atau gambar jika produk/treatment/dokumen tersebut tidak memiliki URL gambar pada konteks rujukan (jangan meminjam gambar dari entitas lain).
+7. DILARANG menyertakan kalimat penutup klise sales (seperti: 'Jika memerlukan informasi lebih lanjut...'). Langsung akhiri jawaban pada fakta yang ditanyakan.
 """
 
 
@@ -246,7 +305,8 @@ def log_rag_chat(
     llm_ms: int,
     guardrails_status: str = "PASSED",
     agent_used: bool = False,
-    error_msg: Optional[str] = None
+    error_msg: Optional[str] = None,
+    header_title: str = "RAG CHAT"
 ):
     """
     Renders standardized, developer-focused visual backend logs for RAG CHAT execution.
@@ -291,7 +351,7 @@ def log_rag_chat(
     logger.info(
         f"\n"
         f"============================================================\n"
-        f"RAG CHAT{agent_str}\n"
+        f"{header_title}{agent_str}\n"
         f"------------------------------------------------------------\n"
         f"Query        : \"{query}\"\n"
         f"Intent       : {intent_val}\n"

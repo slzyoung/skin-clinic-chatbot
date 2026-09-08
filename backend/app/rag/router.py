@@ -1455,10 +1455,11 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
             async with AsyncSessionLocal() as session:
                 try:
                     k_uuid = _uuid.UUID(str(knowledge_id))
+                    stmt_k = select(Knowledge).where(Knowledge.id == k_uuid)
                 except ValueError:
-                    k_uuid = knowledge_id
+                    stmt_k = select(Knowledge).where(Knowledge.file_name == str(knowledge_id))
 
-                result = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
+                result = await session.execute(stmt_k)
                 k_entry = result.scalars().first()
                 if k_entry:
                     k_entry.deleted_at = None
@@ -1567,10 +1568,11 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
             async with AsyncSessionLocal() as session:
                 try:
                     k_uuid = _uuid.UUID(str(knowledge_id))
+                    stmt_k = select(Knowledge).where(Knowledge.id == k_uuid)
                 except ValueError:
-                    k_uuid = knowledge_id
+                    stmt_k = select(Knowledge).where(Knowledge.file_name == str(knowledge_id))
 
-                result = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
+                result = await session.execute(stmt_k)
                 k_entry = result.scalars().first()
                 if k_entry:
                     k_entry.status = KnowledgeStatus.REJECTED
@@ -1755,8 +1757,13 @@ Sebutkan jumlah dokumen, jenis masing-masing, dan apakah mereka saling terkait a
                     k_id_str = doc_data.get("knowledge_id")
                     if k_id_str:
                         try:
-                            k_uuid = _uuid.UUID(str(k_id_str))
-                            res = await session.execute(select(Knowledge).where(Knowledge.id == k_uuid))
+                            try:
+                                k_uuid = _uuid.UUID(str(k_id_str))
+                                stmt_b = select(Knowledge).where(Knowledge.id == k_uuid)
+                            except ValueError:
+                                stmt_b = select(Knowledge).where(Knowledge.file_name == str(k_id_str))
+
+                            res = await session.execute(stmt_b)
                             k_obj = res.scalars().first()
                             if k_obj:
                                 meta = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
@@ -2762,7 +2769,46 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             upload_staging_json(k_id, final_updated_data)
         except Exception as st_err:
             logger.debug(f"MinIO staging upload note: {st_err}")
-            
+
+        # Sync refined pending document summary and metadata to PostgreSQL Knowledge record
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.knowledge import Knowledge
+            from sqlalchemy import select
+            import uuid as _uuid
+
+            async with AsyncSessionLocal() as session:
+                try:
+                    k_uuid = _uuid.UUID(str(k_id))
+                    stmt_k = select(Knowledge).where(Knowledge.id == k_uuid, Knowledge.deleted_at.is_(None))
+                except ValueError:
+                    stmt_k = select(Knowledge).where(Knowledge.file_name.ilike(f"%{doc_file_name}%"), Knowledge.deleted_at.is_(None))
+                res_k = await session.execute(stmt_k)
+                k_entry = res_k.scalars().first()
+                if k_entry:
+                    if doc_title:
+                        k_entry.title = doc_title
+                    k_entry.ai_summary = final_summary
+                    k_entry.content = final_summary
+                    if k_entry.metadata_ is None:
+                        k_entry.metadata_ = {}
+                    k_entry.metadata_.update({
+                        "summary": final_summary,
+                        "batch_id": doc_batch_id,
+                        "chunks": updated_chunks,
+                        "staging_history": new_hist,
+                        "images": updated_images,
+                        "image_urls": active_imgs,
+                        "categories": cat_names,
+                        "visibility_settings": vis_settings,
+                    })
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(k_entry, "metadata_")
+                    await session.commit()
+                    logger.info(f"Updated Knowledge DB record for refined pending document '{k_id}'")
+        except Exception as db_err:
+            logger.warning(f"Could not sync refined pending summary to Knowledge DB for '{k_id}': {db_err}")
+
         return final_updated_data
     except Exception as e:
         logger.error(f"Refinement failed for document '{knowledge_id}': {e}")
@@ -4766,7 +4812,140 @@ async def query_general_endpoint(
         effective_prompt = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
 
         # -------------------------------------------------------------
-        # PHASE 1 & 2: Operation Intent Classifier (EDIT / DELETE Pending Operations)
+        # PHASE 1: Confirmation Lifecycle (Check & Execute Active Pending Operation via Chat Prompt)
+        # -------------------------------------------------------------
+        from app.models.pending_operation import PendingOperation
+        from app.core.database import AsyncSessionLocal
+        from sqlalchemy import select
+
+        is_confirm_prompt = bool(re.search(r'^\s*(?:ya|ya\s+hapus|ya\s+edit|ya\s+terapkan|konfirmasi|setuju|terapkan|proses|lanjutkan|ok|okay|yep|yes|confirm|execute|lakukan)\b', clean_user_prompt))
+        is_cancel_prompt = bool(re.search(r'^\s*(?:batal|batalkan|cancel|tidak|jangan|abort|stop)\b', clean_user_prompt))
+
+        if is_confirm_prompt or is_cancel_prompt:
+            async with AsyncSessionLocal() as db_session:
+                now_utc = datetime.now(timezone.utc)
+                stmt = (
+                    select(PendingOperation)
+                    .where(PendingOperation.status == "pending")
+                    .where(PendingOperation.expires_at > now_utc)
+                    .order_by(PendingOperation.created_at.desc())
+                )
+                res = await db_session.execute(stmt)
+                latest_op = res.scalars().first()
+
+                if latest_op:
+                    if is_cancel_prompt:
+                        latest_op.status = "cancelled"
+                        await db_session.commit()
+                        cancel_msg = "Operasi telah dibatalkan atas permintaan Anda."
+                        return QueryGeneralResponse(
+                            type="answer",
+                            message=cancel_msg,
+                            prompt=user_prompt,
+                            answer=cancel_msg,
+                            action="cancelled",
+                            target_knowledge_id=latest_op.knowledge_id,
+                            total_found=0,
+                            results=[]
+                        )
+
+                    elif is_confirm_prompt:
+                        affected_kids = (latest_op.metadata_ or {}).get("affected_knowledge_ids") or [latest_op.knowledge_id]
+                        if latest_op.action == "edit":
+                            edit_results = []
+                            for kid in affected_kids:
+                                r_edit = await GeneralKnowledgeService.apply_edit(
+                                    knowledge_id=kid,
+                                    field=latest_op.field or "summary",
+                                    new_value=latest_op.new_value or "",
+                                    vector_store=target_vs,
+                                    bm25_index=target_bm25,
+                                    pipeline=pipeline,
+                                    target_item=latest_op.target_item,
+                                    db=db_session
+                                )
+                                edit_results.append(r_edit)
+
+                            any_succ = any(r.get("success") for r in edit_results)
+                            if any_succ:
+                                latest_op.status = "confirmed"
+                                latest_op.confirmed_at = now_utc
+                                await db_session.commit()
+                                if len(affected_kids) > 1:
+                                    succ_msg = f"Perubahan pada '{latest_op.target_item or latest_op.knowledge_id}' berhasil diterapkan ke {len(affected_kids)} dokumen Knowledge Base."
+                                else:
+                                    succ_msg = edit_results[0].get("message") or f"Perubahan pada '{latest_op.target_item or latest_op.knowledge_id}' berhasil diterapkan ke Knowledge Base."
+                                return QueryGeneralResponse(
+                                    type="answer",
+                                    message=succ_msg,
+                                    prompt=user_prompt,
+                                    answer=succ_msg,
+                                    action="edit_applied",
+                                    target_knowledge_id=latest_op.knowledge_id,
+                                    total_found=len(affected_kids),
+                                    results=[]
+                                )
+                            else:
+                                errs = [r.get("error", "Unknown error") for r in edit_results if not r.get("success")]
+                                fail_msg = f"Gagal menerapkan perubahan: {'; '.join(errs)}"
+                                return QueryGeneralResponse(
+                                    type="answer",
+                                    message=fail_msg,
+                                    prompt=user_prompt,
+                                    answer=fail_msg,
+                                    action="edit_failed",
+                                    target_knowledge_id=latest_op.knowledge_id,
+                                    total_found=0,
+                                    results=[]
+                                )
+
+                        elif latest_op.action == "delete":
+                            del_results = []
+                            for kid in affected_kids:
+                                r_del = await GeneralKnowledgeService.apply_delete(
+                                    knowledge_id=kid,
+                                    target_item=latest_op.target_item,
+                                    vector_store=target_vs,
+                                    bm25_index=target_bm25,
+                                    db=db_session
+                                )
+                                del_results.append(r_del)
+
+                            any_succ = any(r.get("success") for r in del_results)
+                            if any_succ:
+                                latest_op.status = "confirmed"
+                                latest_op.confirmed_at = now_utc
+                                await db_session.commit()
+                                if len(affected_kids) > 1:
+                                    succ_msg = f"Item '{latest_op.target_item or latest_op.knowledge_id}' berhasil dihapus dari {len(affected_kids)} dokumen Knowledge Base."
+                                else:
+                                    succ_msg = del_results[0].get("message") or f"Item/dokumen '{latest_op.target_item or latest_op.knowledge_id}' berhasil dihapus dari Knowledge Base."
+                                return QueryGeneralResponse(
+                                    type="answer",
+                                    message=succ_msg,
+                                    prompt=user_prompt,
+                                    answer=succ_msg,
+                                    action="delete_applied",
+                                    target_knowledge_id=latest_op.knowledge_id,
+                                    total_found=len(affected_kids),
+                                    results=[]
+                                )
+                            else:
+                                errs = [r.get("error", "Unknown error") for r in del_results if not r.get("success")]
+                                fail_msg = f"Gagal menghapus item: {'; '.join(errs)}"
+                                return QueryGeneralResponse(
+                                    type="answer",
+                                    message=fail_msg,
+                                    prompt=user_prompt,
+                                    answer=fail_msg,
+                                    action="delete_failed",
+                                    target_knowledge_id=latest_op.knowledge_id,
+                                    total_found=0,
+                                    results=[]
+                                )
+
+        # -------------------------------------------------------------
+        # PHASE 2: Operation Intent Classifier (EDIT / DELETE Intent Detection)
         # -------------------------------------------------------------
         # Check if user explicitly requests DELETE
         is_delete_cmd = (
@@ -5082,6 +5261,7 @@ async def query_general_endpoint(
             system_prompt = await _resolve_query_general_prompt(db_session)
 
         # 3.3 Contextualize query and retrieve approved knowledge
+        t0_retrieval = time.time()
         search_query = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
         retrieval_response = pipeline.retriever.retrieve(
             query=search_query,
@@ -5093,6 +5273,7 @@ async def query_general_endpoint(
 
         results = retrieval_response.get("results", [])
         context = retrieval_response.get("context", "")
+        retrieval_ms = int((time.time() - t0_retrieval) * 1000)
 
         is_context_empty = (
             not results
@@ -5102,6 +5283,18 @@ async def query_general_endpoint(
 
         if is_context_empty and not request.history:
             logger.info(f"[QUERY-GENERAL] No approved knowledge found for: '{user_prompt}'")
+            from app.rag.services.rag_generator import log_rag_chat
+            log_rag_chat(
+                query=user_prompt,
+                intent_val="UNKNOWN",
+                top_k=10,
+                results=[],
+                context_status="REJECTED",
+                retrieval_ms=retrieval_ms,
+                llm_ms=0,
+                guardrails_status="PASSED",
+                header_title="RAG CHAT ADMIN"
+            )
             return QueryGeneralResponse(
                 prompt=user_prompt,
                 answer="Untuk saat ini informasi tersebut belum tersedia.",
@@ -5133,7 +5326,9 @@ async def query_general_endpoint(
         )
 
         import asyncio
+        t0_llm = time.time()
         answer = await asyncio.to_thread(pipeline.llm_adapter.generate, full_prompt)
+        llm_ms = int((time.time() - t0_llm) * 1000)
 
         from app.rag.services.guardrails import OutputGuard
         answer = OutputGuard.redact_pii(answer)
@@ -5205,6 +5400,9 @@ async def query_general_endpoint(
         # Ensure any unbolded title line directly preceding an image becomes bolded
         clean_answer = re.sub(r'(?:\n|^)(?!#|\*|-|\d\.)([A-Za-z0-9][^\n]{3,80})\n\n(!\[.*?\]\([^\)]+\))', r'\n\n**\1**\n\n\2', clean_answer)
 
+        # Post-process: Ensure image tag is always positioned RIGHT BELOW the item title line (above bullet points)
+        clean_answer = re.sub(r'(\*\*[^\*\n]+\*\*)\n+((?:[ \t]*-\s*\*\*[^\n]+\n+)+)\n*(!\[.*?\]\([^\)]+\))', r'\1\n\n\3\n\n\2', clean_answer)
+
         # Normalize excessive consecutive newlines (max 2)
         clean_answer = re.sub(r'\n{3,}', '\n\n', clean_answer).strip()
 
@@ -5218,12 +5416,20 @@ async def query_general_endpoint(
             clean_answer.strip().lower() == "untuk saat ini informasi tersebut belum tersedia."
             or clean_answer.strip().lower().startswith("untuk saat ini informasi tersebut belum tersedia")
         ) and action_type == "read":
-            clean_answer = "Untuk saat ini informasi tersebut belum tersedia."
+            clean_answer = "Untuk saat ini informasi megenai hal tersebut belum tersedia."
             results = []
 
-        logger.info(
-            f"[QUERY-GENERAL] prompt='{user_prompt}' | "
-            f"action={action_type} | results={len(results)} | answer_len={len(clean_answer)}"
+        from app.rag.services.rag_generator import log_rag_chat
+        log_rag_chat(
+            query=user_prompt,
+            intent_val="UNKNOWN",
+            top_k=len(results),
+            results=results,
+            context_status="ACCEPTED" if (results and not is_context_empty) else "EMPTY",
+            retrieval_ms=retrieval_ms,
+            llm_ms=llm_ms,
+            guardrails_status="PASSED",
+            header_title="RAG CHAT ADMIN"
         )
 
         return QueryGeneralResponse(

@@ -508,10 +508,25 @@ class OutputGuard:
         return text
 
     @classmethod
+    def format_clinical_tone(cls, text: str) -> str:
+        """Fixes robotic phrasing and ensures clean newline formatting for bullet points."""
+        if not text:
+            return text
+        # Replace stiff robotic backend phrases with warm, natural clinical phrasing
+        text = re.sub(r'(?i)\bproduk yang tercantum adalah\b', 'rekomendasi produk yang cocok adalah', text)
+        text = re.sub(r'(?i)\bperawatan yang tercantum adalah\b', 'rekomendasi perawatan yang cocok adalah', text)
+        text = re.sub(r'(?i)\bdokumen yang tercantum adalah\b', 'rekomendasi yang sesuai adalah', text)
+        
+        # Ensure bullet points '- **' are always on a separate new line
+        text = re.sub(r'([^\n])\s+-\s+\*\*', r'\1\n- **', text)
+        return text
+
+    @classmethod
     def process(cls, answer: str) -> str:
         """Runs all output guards on the generated answer (PII redaction & disclaimer stripping)."""
         result = cls.redact_pii(answer)
         result = cls.strip_patient_disclaimers(result)
+        result = cls.format_clinical_tone(result)
         return result
 
 

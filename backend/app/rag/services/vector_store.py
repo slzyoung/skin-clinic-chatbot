@@ -154,22 +154,21 @@ class PGVectorAdapter(BaseVectorStoreAdapter):
                 q = session.query(DocumentChunk, dist_col)
                 
                 if filter_metadata:
+                    from sqlalchemy import cast, String, not_, or_
                     for k, v in filter_metadata.items():
                         if k == "excluded_categories" and isinstance(v, list):
-                            from sqlalchemy import not_
                             for item in v:
                                 if item:
-                                    q = q.filter(not_(DocumentChunk.metadata_["categories"].astext.ilike(f"%{item}%")))
+                                    q = q.filter(not_(cast(DocumentChunk.metadata_["categories"], String).ilike(f"%{item}%")))
                         elif isinstance(v, list):
-                            from sqlalchemy import or_
-                            or_clauses = [DocumentChunk.metadata_[k].astext.ilike(f"%{item}%") for item in v if item]
+                            or_clauses = [cast(DocumentChunk.metadata_[k], String).ilike(f"%{item}%") for item in v if item]
                             if "all" in v:
-                                or_clauses.append(DocumentChunk.metadata_[k].astext.ilike("%all%"))
+                                or_clauses.append(cast(DocumentChunk.metadata_[k], String).ilike("%all%"))
                                 or_clauses.append(DocumentChunk.metadata_[k].is_(None))
                             if or_clauses:
                                 q = q.filter(or_(*or_clauses))
                         elif v:
-                            q = q.filter(DocumentChunk.metadata_[k].astext.ilike(f"%{v}%"))
+                            q = q.filter(cast(DocumentChunk.metadata_[k], String).ilike(f"%{v}%"))
                         
                 results = q.order_by(dist_col).limit(top_k).all()
                 

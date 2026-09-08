@@ -18,6 +18,13 @@ class KnowledgeCreate(KnowledgeBase):
 class KnowledgeUpdateStatus(BaseModel):
     status: KnowledgeStatus
 
+class KnowledgeUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    ai_summary: Optional[str] = None
+    metadata_: Optional[Dict[str, Any]] = Field(default=None, serialization_alias="metadata")
+    project_id: Optional[UUID] = None
+
 class KnowledgeProjectUpdate(BaseModel):
     project_id: Optional[UUID] = None
 

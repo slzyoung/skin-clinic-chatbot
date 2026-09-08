@@ -473,6 +473,14 @@ class GeneralKnowledgeService:
                 res2 = await session.execute(stmt2)
                 k_obj = res2.scalar_one_or_none()
 
+            if not k_obj:
+                stmt3 = select(Knowledge).where(
+                    Knowledge.deleted_at.is_(None),
+                    Knowledge.file_name == str(knowledge_id)
+                )
+                res3 = await session.execute(stmt3)
+                k_obj = res3.scalar_one_or_none()
+
             if k_obj:
                 if deleted:
                     k_obj.deleted_at = datetime.now(timezone.utc)
@@ -568,7 +576,8 @@ class GeneralKnowledgeService:
 
             # Surgically update summary and chunks
             chunks = existing_doc.get("chunks", [])
-            target_item_lower = (target_item or "").strip().lower() if target_item else None
+            clean_item_name = re.sub(r'^\*+|\*+$|^_+|_+$|^#+\s*', '', target_item.strip()).strip() if target_item else ""
+            target_item_lower = clean_item_name.lower() if clean_item_name else None
 
             # 1. Update summary for target item
             curr_summary = existing_doc.get("summary", "")
@@ -827,7 +836,8 @@ class GeneralKnowledgeService:
 
         # 1. Item-Level Surgical Deletion
         if target_item and target_item.strip():
-            target_item_clean = target_item.strip()
+            raw_item_clean = re.sub(r'^\*+|\*+$|^_+|_+$|^#+\s*', '', target_item.strip()).strip()
+            target_item_clean = raw_item_clean
             target_item_lower = target_item_clean.lower()
             approved_file = resolve_approved_file(knowledge_id)
             if not approved_file:
@@ -844,7 +854,8 @@ class GeneralKnowledgeService:
 
                 for chunk in original_chunks:
                     chunk_text = chunk.get("text", "") if isinstance(chunk, dict) else ""
-                    if target_item_lower in chunk_text.lower():
+                    chunk_lower = chunk_text.lower()
+                    if target_item_lower in chunk_lower or re.sub(r'[\*\_#]', '', chunk_lower).find(target_item_lower) != -1:
                         meta = chunk.get("metadata", {})
                         meta_match = (
                             target_item_lower == str(meta.get("product_name", "")).lower()
@@ -886,6 +897,14 @@ class GeneralKnowledgeService:
                     summary = line_pattern.sub('', summary)
                     summary = re.sub(r'\n{3,}', '\n\n', summary).strip()
                     existing_doc["summary"] = summary
+
+                if summary:
+                    for hist_key in ("staging_history", "history"):
+                        if hist_key in existing_doc and isinstance(existing_doc[hist_key], list) and existing_doc[hist_key]:
+                            for turn in reversed(existing_doc[hist_key]):
+                                if isinstance(turn, dict) and turn.get("role") == "assistant":
+                                    turn["content"] = summary
+                                    break
 
                 with open(approved_file, "w", encoding="utf-8") as f:
                     json.dump(existing_doc, f, indent=4, ensure_ascii=False)

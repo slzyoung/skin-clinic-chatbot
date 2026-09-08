@@ -137,7 +137,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 							Cancel Ingestion
 						</Button>
 					)}
-					{(hasDeleteAccess || data?.status === "REJECTED") && (data?.status === "APPROVED" || data?.status === "REJECTED") && (
+					{(hasDeleteAccess || data?.status === "REJECTED" || data?.status === "PENDING" || data?.status === "PROCESSING") && (
 						<Button
 							onClick={() => setIsDeleteModalOpen(true)}
 							disabled={deleteMutation.isPending || isLoading}
