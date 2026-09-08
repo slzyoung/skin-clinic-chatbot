@@ -792,7 +792,7 @@ class DocumentParser:
 
                             img_title = data.get("title") or data.get("product_name") or os.path.splitext(file_name)[0]
                             p_name = data.get("product_name") or img_title
-                            brand = "ERHA"
+                            brand = data.get("brand") or "PT Arya Noble"
                             active_ing = []
                             clean_sku = None
 
@@ -824,7 +824,7 @@ class DocumentParser:
                             })
 
                             # Clean structured markdown with product name and image context only (zero packaging hallucination)
-                            clean_markdown = f"# {img_title}\n\n![{img_title}]({image_url})\n\nDokumen visual produk resmi ERHA: {p_name}."
+                            clean_markdown = f"# {img_title}\n\n![{img_title}]({image_url})\n\nDokumen visual resmi: {p_name}."
                             extracted_text = clean_markdown
 
                         except Exception as json_err:

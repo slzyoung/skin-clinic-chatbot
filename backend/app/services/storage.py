@@ -1013,24 +1013,93 @@ def clear_all_buckets() -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def delete_image_by_ref(raw_ref: str, knowledge_id: Optional[str] = None) -> bool:
+    """
+    Sanitizes and deletes a single image reference from MinIO images bucket
+    and local disk fallback storage.
+    """
+    if not raw_ref or not isinstance(raw_ref, str):
+        return False
+    clean = raw_ref.strip()
+    client = _get_client()
+    images_bucket = _images_bucket()
+
+    # Strip URL prefix if present
+    if "/api/storage/" in clean:
+        clean = clean.split("/api/storage/")[-1]
+    elif "/storage/" in clean:
+        clean = clean.split("/storage/")[-1]
+    elif "://" in clean:
+        from urllib.parse import urlparse
+        clean = urlparse(clean).path.lstrip("/")
+        if clean.startswith(f"{images_bucket}/"):
+            clean = clean[len(images_bucket) + 1:]
+
+    clean = clean.lstrip("/")
+    fname = os.path.basename(clean)
+
+    if not fname or len(fname) < 4:
+        return False
+
+    success = False
+    # Delete from MinIO images bucket
+    if client:
+        for s3_candidate in [f"images/{fname}", clean, fname]:
+            try:
+                client.delete_object(Bucket=images_bucket, Key=s3_candidate)
+                success = True
+            except Exception as e:
+                logger.debug(f"MinIO delete image '{s3_candidate}' note: {e}")
+        log_kid = f" for doc '{knowledge_id}'" if knowledge_id else ""
+        logger.info(f"🗑️ Deleted MinIO image '{fname}'{log_kid}")
+
+    # Delete from local disk fallback storage
+    for folder in ["data/images", "data/storage/images", "data/temp", "data/uploads", "data/storage"]:
+        for candidate in [fname, f"images/{fname}"]:
+            local_f = os.path.normpath(os.path.join(folder, candidate))
+            if os.path.exists(local_f) and os.path.isfile(local_f):
+                try:
+                    os.remove(local_f)
+                    logger.debug(f"Removed local disk fallback image: {local_f}")
+                except Exception:
+                    pass
+
+    return success
+
+
 def extract_image_keys_from_doc_data(doc_data: dict) -> set:
-    """Extracts all image filenames and S3 keys referenced in a document dictionary."""
+    """
+    Exhaustively extracts all image filenames and S3 keys referenced in a document dictionary.
+    Scans:
+    1. Direct image_url, image_urls, all_extracted_images
+    2. Metadata (images, image_urls, all_extracted_images, initial_summary, s3_key)
+    3. Summaries: summary, initial_summary, batch_summary
+    4. Histories: history, staging_history, chat_history, edit_history (content & attachments)
+    5. Chunks text & chunk metadata
+    6. Complete regex scanner across the entire JSON-serialized doc_data
+    """
     if not isinstance(doc_data, dict):
         return set()
 
     found_keys = set()
     
-    # 1. Direct image_urls list
+    # 1. Direct image_urls list & image_url
+    if doc_data.get("image_url") and isinstance(doc_data["image_url"], str):
+        found_keys.add(doc_data["image_url"].strip())
     for u in doc_data.get("image_urls", []) or []:
         if isinstance(u, str) and u.strip():
             found_keys.add(u.strip())
+    for u in doc_data.get("all_extracted_images", []) or []:
+        if isinstance(u, str) and u.strip():
+            found_keys.add(u.strip())
             
-    # 2. Metadata images / image_urls
+    # 2. Metadata images / image_urls / all_extracted_images
     meta = doc_data.get("metadata", {})
     if isinstance(meta, dict):
-        for u in meta.get("image_urls", []) or []:
-            if isinstance(u, str) and u.strip():
-                found_keys.add(u.strip())
+        for k in ["image_urls", "all_extracted_images"]:
+            for u in meta.get(k, []) or []:
+                if isinstance(u, str) and u.strip():
+                    found_keys.add(u.strip())
         for img in meta.get("images", []) or []:
             if isinstance(img, dict):
                 u = img.get("url") or img.get("image_url") or img.get("s3_key")
@@ -1040,22 +1109,46 @@ def extract_image_keys_from_doc_data(doc_data: dict) -> set:
                 found_keys.add(img.strip())
         if meta.get("s3_key"):
             found_keys.add(str(meta["s3_key"]).strip())
+        if meta.get("image_url") and isinstance(meta["image_url"], str):
+            found_keys.add(meta["image_url"].strip())
 
-    # 3. Summary markdown images
-    summary = str(doc_data.get("summary", "") or "")
-    if summary:
-        import re
-        for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', summary):
-            if m and isinstance(m, str):
-                found_keys.add(m.strip())
+    # 3. Summaries (summary, initial_summary, batch_summary)
+    for sum_key in ["summary", "initial_summary", "batch_summary"]:
+        for container in [doc_data, meta if isinstance(meta, dict) else {}]:
+            s_val = str(container.get(sum_key, "") or "")
+            if s_val:
+                for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', s_val):
+                    if m and isinstance(m, str):
+                        found_keys.add(m.strip())
 
-    # 4. Chunks text & metadata
+    # 4. Histories (history, staging_history, chat_history, edit_history)
+    for hist_key in ["history", "staging_history", "chat_history", "edit_history"]:
+        for container in [doc_data, meta if isinstance(meta, dict) else {}]:
+            h_list = container.get(hist_key) or []
+            if isinstance(h_list, list):
+                for turn in h_list:
+                    if isinstance(turn, dict):
+                        c_text = str(turn.get("content", "") or "")
+                        if c_text:
+                            for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', c_text):
+                                if m and isinstance(m, str):
+                                    found_keys.add(m.strip())
+                        # Check attachments in turn
+                        for att_k in ["attachmentName", "attachmentNames", "images", "image_urls"]:
+                            att_v = turn.get(att_k)
+                            if isinstance(att_v, list):
+                                for a in att_v:
+                                    if isinstance(a, str) and a.strip():
+                                        found_keys.add(a.strip())
+                            elif isinstance(att_v, str) and att_v.strip():
+                                found_keys.add(att_v.strip())
+
+    # 5. Chunks text & metadata
     for chunk in doc_data.get("chunks", []) or []:
         if not isinstance(chunk, dict):
             continue
         c_text = str(chunk.get("text", "") or "")
         if c_text:
-            import re
             for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', c_text):
                 if m and isinstance(m, str):
                     found_keys.add(m.strip())
@@ -1070,6 +1163,24 @@ def extract_image_keys_from_doc_data(doc_data: dict) -> set:
                 elif isinstance(val, str) and val.strip():
                     found_keys.add(val.strip())
 
+    # 6. Global regex scan across serialized JSON representation of doc_data
+    try:
+        raw_json = json.dumps(doc_data)
+        for m in re.findall(r'!\[.*?\]\(([^)\s]+)\)', raw_json):
+            if m:
+                found_keys.add(m.strip())
+        for m in re.findall(r'/(?:api/)?storage/images/[a-zA-Z0-9_\-\.]+', raw_json):
+            if m:
+                found_keys.add(m.strip())
+        for m in re.findall(r'\bimages/[a-zA-Z0-9_\-\.]+\.(?:png|jpe?g|webp|gif|bmp)\b', raw_json, re.IGNORECASE):
+            if m:
+                found_keys.add(m.strip())
+        for m in re.findall(r'\b[a-fA-F0-9]{32}_[a-zA-Z0-9_\-\.]+\.(?:png|jpe?g|webp|gif|bmp)\b', raw_json, re.IGNORECASE):
+            if m:
+                found_keys.add(m.strip())
+    except Exception as scan_err:
+        logger.debug(f"JSON regex scan note: {scan_err}")
+
     return found_keys
 
 
@@ -1083,7 +1194,6 @@ def delete_knowledge_images_and_assets(knowledge_id: str, doc_data: Optional[dic
     """
     kid_str = str(knowledge_id).strip()
     client = _get_client()
-    images_bucket = _images_bucket()
     docs_bucket = _docs_bucket()
 
     all_image_refs = set()
@@ -1113,52 +1223,9 @@ def delete_knowledge_images_and_assets(knowledge_id: str, doc_data: Optional[dic
                     pass
 
     deleted_images = []
-
-    # Helper to sanitize and delete single image reference
-    def _purge_image_ref(raw_ref: str):
-        if not raw_ref:
-            return
-        clean = raw_ref.strip()
-        # Strip URL prefix if present
-        if "/api/storage/" in clean:
-            clean = clean.split("/api/storage/")[-1]
-        elif "/storage/" in clean:
-            clean = clean.split("/storage/")[-1]
-        elif "://" in clean:
-            from urllib.parse import urlparse
-            clean = urlparse(clean).path.lstrip("/")
-            if clean.startswith(f"{images_bucket}/"):
-                clean = clean[len(images_bucket) + 1:]
-
-        clean = clean.lstrip("/")
-        fname = os.path.basename(clean)
-
-        if not fname or len(fname) < 4:
-            return
-
-        # Delete from MinIO images bucket
-        if client:
-            for s3_candidate in [f"images/{fname}", clean, fname]:
-                try:
-                    client.delete_object(Bucket=images_bucket, Key=s3_candidate)
-                except Exception as e:
-                    logger.debug(f"MinIO delete image '{s3_candidate}' note: {e}")
-            deleted_images.append(fname)
-            logger.info(f"🗑️ Deleted MinIO image '{fname}' for doc '{kid_str}'")
-
-        # Delete from local disk fallback storage
-        for folder in ["data/images", "data/storage/images", "data/temp", "data/uploads", "data/storage"]:
-            for candidate in [fname, f"images/{fname}"]:
-                local_f = os.path.normpath(os.path.join(folder, candidate))
-                if os.path.exists(local_f) and os.path.isfile(local_f):
-                    try:
-                        os.remove(local_f)
-                        logger.debug(f"Removed local disk fallback image: {local_f}")
-                    except Exception:
-                        pass
-
     for ref in all_image_refs:
-        _purge_image_ref(ref)
+        if delete_image_by_ref(ref, knowledge_id=kid_str):
+            deleted_images.append(os.path.basename(ref))
 
     # Clean MinIO knowledge-documents bucket (originals & canonical)
     if client and kid_str:

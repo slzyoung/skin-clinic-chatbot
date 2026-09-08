@@ -292,7 +292,7 @@ export function KnowledgeTable({
 
 	const filteredList = useMemo(() => {
 		return displayRows
-			?.filter((item) => (selectedProjectId ? item.projectId === selectedProjectId : !item.projectId))
+			?.filter((item) => (selectedProjectId ? item.projectId === selectedProjectId : true))
 			?.filter((item) => (statusFilter !== "ALL" ? item.status === statusFilter : true))
 			?.filter((item) => isCategoryMatch(item.categories, categoryFilter))
 			?.filter(

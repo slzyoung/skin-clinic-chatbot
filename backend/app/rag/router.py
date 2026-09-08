@@ -138,7 +138,69 @@ def normalize_image_assets(
                     seen_urls.add(clean_u)
                     assets.append(create_image_asset(clean_u, role=default_role, product_name=default_product_name))
                 
-    return assets
+def resolve_matching_categories(raw_cats: Any, db_categories: list, content_text: str = "") -> list:
+    """
+    Fuzzy and synonym-aware category matcher for Knowledge Base ingestion and refine.
+    Maps terms like 'acne', 'jerawat', 'flek', 'brightening' to actual database Category objects.
+    Scans content_text as fallback if LLM output is empty or unrecognized.
+    """
+    if not db_categories:
+        return []
+
+    valid_cat_ids = {str(c.get("id")).lower(): c for c in db_categories if isinstance(c, dict) and c.get("id")}
+    valid_cat_names = {str(c.get("name")).strip().lower(): c for c in db_categories if isinstance(c, dict) and c.get("name")}
+    
+    category_alias_map = {
+        "acne": "Acne Care", "jerawat": "Acne Care", "acne care": "Acne Care", "komedo": "Acne Care",
+        "anti aging": "Anti Aging", "aging": "Anti Aging", "penuaan": "Anti Aging", "kerutan": "Anti Aging",
+        "dark spot": "Dark Spot", "flek": "Dark Spot", "spot": "Dark Spot", "hiperpigmentasi": "Dark Spot",
+        "brightening": "Brightening", "bright": "Brightening", "mencerahkan": "Brightening", "pencerah": "Brightening",
+        "scar": "Scar Treatment", "bopeng": "Scar Treatment", "scar treatment": "Scar Treatment", "bekas": "Scar Treatment",
+        "wound": "Wound Healing", "luka": "Wound Healing", "wound healing": "Wound Healing",
+        "psoriasis": "Psoriasis Care", "psoriasis care": "Psoriasis Care"
+    }
+
+    clean_cats = []
+    seen_ids = set()
+
+    for c in (raw_cats or []):
+        cname = ""
+        cid = ""
+        if isinstance(c, dict):
+            cid = str(c.get("id", "")).lower()
+            cname = str(c.get("name", "")).strip().lower()
+        elif isinstance(c, str):
+            cname = c.strip().lower()
+
+        if cname in ["category name", "category_name", "category_id", "uuid", "null", "none", ""]:
+            continue
+
+        matched_obj = None
+        if cid in valid_cat_ids:
+            matched_obj = valid_cat_ids[cid]
+        elif cname in valid_cat_names:
+            matched_obj = valid_cat_names[cname]
+        else:
+            # Dynamic matching against actual DB category names
+            for cat_low_name, cat_obj in valid_cat_names.items():
+                if cat_low_name in cname or cname in cat_low_name:
+                    matched_obj = cat_obj
+                    break
+
+        if matched_obj and matched_obj.get("id") not in seen_ids:
+            clean_cats.append(matched_obj)
+            seen_ids.add(matched_obj.get("id"))
+
+    # Dynamic Fallback: scan content_text for any active DB category name
+    if not clean_cats and content_text:
+        text_low = content_text.lower()
+        for cat_low_name, cat_obj in valid_cat_names.items():
+            if len(cat_low_name) >= 3 and re.search(rf'\b{re.escape(cat_low_name)}\b', text_low):
+                if cat_obj.get("id") not in seen_ids:
+                    clean_cats.append(cat_obj)
+                    seen_ids.add(cat_obj.get("id"))
+
+    return clean_cats
 
 
 def auto_embed_images_in_summary(
@@ -1106,18 +1168,6 @@ async def process_ingestion_background(
                     except Exception as cat_err:
                         logger.warning(f"Failed to fetch categories for metadata detection: {cat_err}")
 
-                    if not db_categories:
-                        default_cats = [
-                            ("9b79e362-ec70-4560-902e-fd5897c07a00", "Acne Care"),
-                            ("1a23b456-ec70-4560-902e-fd5897c07a01", "Anti Aging"),
-                            ("2b34c567-ec70-4560-902e-fd5897c07a02", "Dark Spot"),
-                            ("3c45d678-ec70-4560-902e-fd5897c07a03", "Psoriasis Care"),
-                            ("4d56e789-ec70-4560-902e-fd5897c07a04", "Scar Treatment"),
-                            ("5e67f890-ec70-4560-902e-fd5897c07a05", "Wound Healing"),
-                            ("6f78a901-ec70-4560-902e-fd5897c07a06", "Brightening")
-                        ]
-                        db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
-
                     # Document content excerpt for structuring
                     doc_content_excerpt = canonical_text[:30000] if len(canonical_text) > 30000 else canonical_text
 
@@ -1141,8 +1191,10 @@ You are an expert document structuring and knowledge curation AI for PT Arya Nob
 
 Your tasks:
 1. **FORMAT DOCUMENT CONTENT IN CLEAN, WELL-STRUCTURED MARKDOWN**:
-   - Format the document content in clean, well-structured Markdown. 
-   - Use appropriate headings (`#` for document title, `##` for main sections/products/treatments, `###` for subsections), bullet points, spacing, tables, and line breaks to ensure the content is easy to read and looks like a properly formatted document.
+   - Format the document content in clean, consistent, well-structured Markdown hierarchy (`#` for document title, `##` for main sections/products/treatments, `###` for subsections).
+   - EXCEL & SPREADSHEET TABLE PRESERVATION:
+     * For SPREADSHEET / EXCEL / CSV files: PRESERVE AND KEEP ALL TABLES EXACTLY AS TABLES IN MARKDOWN (`| Col 1 | Col 2 |`). Do NOT flatten or break tables into unstructured bullet lists unless explicitly requested by the Admin.
+     * IMAGE CAPTION & LEGEND PLACEMENT: For images inside or associated with tables/sections, place the markdown image tag `![Alt Text](IMAGE_URL)` cleanly, and place any caption, legend, or description text DIRECTLY BELOW the image tag.
    - SMART TOPIC-BASED IMAGE PLACEMENT:
      * NEVER dump all images together at the top under the main document title (# Title).
      * Place each image intelligently inside its relevant section or topic:
@@ -1163,7 +1215,7 @@ Your tasks:
      STRICT CATEGORY RULES:
      * ONLY select categories that exist in "Available Categories".
      * NEVER invent, fabricate, or hallucinate new categories or placeholder text.
-     * If NO category from "Available Categories" matches this document, you MUST return an empty array: []!
+     * If NO category from "Available Categories" matches this document, return an empty array: []!
    - feedback: 1 sentence in Indonesian describing the document type and content.
 
 DOCUMENT CONTENT:
@@ -1206,28 +1258,9 @@ Return ONLY valid JSON (no surrounding markdown code blocks):
                     extracted_valid_from = parsed_meta.get("valid_from")
                     extracted_valid_until = parsed_meta.get("valid_until")
                     
-                    # Strict validation against database categories
+                    # Robust Category validation and fuzzy resolution
                     raw_suggested = parsed_meta.get("suggested_categories", [])
-                    valid_cat_ids = {str(c.get("id")).lower() for c in db_categories if isinstance(c, dict) and c.get("id")}
-                    valid_cat_names = {str(c.get("name")).strip().lower(): c for c in db_categories if isinstance(c, dict) and c.get("name")}
-                    clean_suggested_cats = []
-                    for c in raw_suggested:
-                        if isinstance(c, dict):
-                            cid = str(c.get("id", "")).lower()
-                            cname = str(c.get("name", "")).strip().lower()
-                            if cname in ["category name", "category_name", "uuid", "null", "none", ""]:
-                                continue
-                            if cid in valid_cat_ids:
-                                clean_suggested_cats.append(c)
-                            elif cname in valid_cat_names:
-                                clean_suggested_cats.append(valid_cat_names[cname])
-                        elif isinstance(c, str):
-                            cname = c.strip().lower()
-                            if cname in ["category name", "category_name", "uuid", "null", "none", ""]:
-                                continue
-                            if cname in valid_cat_names:
-                                clean_suggested_cats.append(valid_cat_names[cname])
-                    suggested_categories = clean_suggested_cats
+                    suggested_categories = resolve_matching_categories(raw_suggested, db_categories, content_text=doc_content_excerpt)
                     feedback = parsed_meta.get("feedback", feedback)
 
                     # For image files: strictly preserve clean product name + image markdown (zero packaging detail/SKU hallucinations)
@@ -2449,18 +2482,6 @@ async def refine_pending_document(
         except Exception as cat_err:
             logger.warning(f"Failed to fetch categories for refine prompt: {cat_err}")
 
-        if not db_categories:
-            default_cats = [
-                ("9b79e362-ec70-4560-902e-fd5897c07a00", "Acne Care"),
-                ("1a23b456-ec70-4560-902e-fd5897c07a01", "Anti Aging"),
-                ("2b34c567-ec70-4560-902e-fd5897c07a02", "Dark Spot"),
-                ("3c45d678-ec70-4560-902e-fd5897c07a03", "Psoriasis Care"),
-                ("4d56e789-ec70-4560-902e-fd5897c07a04", "Scar Treatment"),
-                ("5e67f890-ec70-4560-902e-fd5897c07a05", "Wound Healing"),
-                ("6f78a901-ec70-4560-902e-fd5897c07a06", "Brightening")
-            ]
-            db_categories = [{"id": cid, "name": cname} for cid, cname in default_cats]
-
         history_str = ""
         if request.history:
             for msg in request.history:
@@ -2518,6 +2539,9 @@ EDITING GUIDELINES:
 5. **PRESERVE UNCHANGED CONTENT**: Keep all other sections, bullet points, and facts from the existing document that were not requested to be changed.
 6. **CLEAN MARKDOWN**: Ensure the output is clean Markdown with headings (`#`, `##`), bullet points, tables, and blank lines before and after images.
 7. **FEEDBACK**: Write 1 short, polite Indonesian sentence explaining what was changed (e.g. "Bagian Warnings telah dihapus sesuai instruksi.").
+8. **IMAGE REPLACEMENT & SWAP RULE**:
+   - If the Admin instructs to replace, swap, or update an existing image (e.g. "ubah gambar A diganti dengan ini", "ganti foto produk dengan foto terlampir", "replace image B"), you MUST REPLACE the existing markdown image tag `![Old Alt](OLD_URL)` with the new image tag `![New Alt](NEW_URL)`.
+   - Ensure the OLD image URL is completely removed and replaced by the NEW attached image URL in the document text.
 
 Return a valid JSON object ONLY (do NOT wrap in ```json blocks):
 {{
@@ -2572,15 +2596,27 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             updated_data["sku"] = refined_sku
             updated_data["feedback"] = f"Nomor SKU berhasil diperbarui menjadi {refined_sku}."
 
-        # Embed newly attached image assets if uploaded in this turn and omitted by LLM
+        # Embed or Swap newly attached image assets if uploaded in this turn
         if "all_attached_images" in locals() and all_attached_images:
-            missing_new_imgs = [u for u in all_attached_images if u and u not in updated_data.get("summary", "")]
-            if missing_new_imgs:
-                updated_data["summary"] = auto_embed_images_in_summary(
-                    updated_data.get("summary", ""),
-                    missing_new_imgs,
-                    title=cur_title or "Knowledge Image"
-                )
+            is_swap_requested = bool(re.search(r'\b(?:ganti|ubah|replace|tukar|gantikan)\s+(?:gambar|foto|image|picture)\b', request.prompt, re.IGNORECASE))
+            current_doc_summary = updated_data.get("summary", "")
+            if is_swap_requested:
+                # Find old image tag in summary and replace it with newly attached image
+                old_img_match = re.search(r'!\[([^\]]*)\]\(([^\)]+)\)', current_doc_summary)
+                if old_img_match:
+                    old_tag = old_img_match.group(0)
+                    alt_text = old_img_match.group(1) or cur_title or "Foto Produk"
+                    new_tag = f"![{alt_text}]({all_attached_images[0]})"
+                    updated_data["summary"] = current_doc_summary.replace(old_tag, new_tag, 1)
+                    updated_data["feedback"] = "Gambar berhasil diganti dengan file terlampir yang baru."
+            else:
+                missing_new_imgs = [u for u in all_attached_images if u and u not in updated_data.get("summary", "")]
+                if missing_new_imgs:
+                    updated_data["summary"] = auto_embed_images_in_summary(
+                        updated_data.get("summary", ""),
+                        missing_new_imgs,
+                        title=cur_title or "Knowledge Image"
+                    )
 
         # Dynamically synchronize image_urls from the updated summary (Single Source of Truth)
         # Any image of a deleted product/section will naturally not be in the summary and thus cleanly excluded.
@@ -2613,28 +2649,9 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
                 })
         updated_data["images"] = updated_images
 
-        # Strict Category validation against database
+        # Robust Category validation against database
         raw_cats = updated_data.get("suggested_categories", staged_data.get("suggested_categories", []))
-        valid_cat_ids = {str(c.get("id")).lower() for c in db_categories if isinstance(c, dict) and c.get("id")}
-        valid_cat_names = {str(c.get("name")).strip().lower(): c for c in db_categories if isinstance(c, dict) and c.get("name")}
-        clean_cats = []
-        for c in raw_cats:
-            if isinstance(c, dict):
-                cid = str(c.get("id", "")).lower()
-                cname = str(c.get("name", "")).strip().lower()
-                if cname in ["category name", "category_name", "category_id", "uuid", "null", "none", ""]:
-                    continue
-                if cid in valid_cat_ids:
-                    clean_cats.append(c)
-                elif cname in valid_cat_names:
-                    clean_cats.append(valid_cat_names[cname])
-            elif isinstance(c, str):
-                cname = c.strip().lower()
-                if cname in ["category name", "category_name", "category_id", "uuid", "null", "none", ""]:
-                    continue
-                if cname in valid_cat_names:
-                    clean_cats.append(valid_cat_names[cname])
-        raw_cats = clean_cats
+        raw_cats = resolve_matching_categories(raw_cats, db_categories, content_text=actual_summary)
 
         # Build updated multi-turn conversation history
         existing_hist = staged_data.get("history", [])
@@ -3449,34 +3466,70 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
         if refined_title:
             doc_title = refined_title
 
-        # Collect and auto-embed attached image URLs
-        all_imgs = []
-        if existing_doc.get("image_urls") and isinstance(existing_doc["image_urls"], list):
-            for u in existing_doc["image_urls"]:
-                if u and u not in all_imgs:
-                    all_imgs.append(u)
-        if "all_attached_images" in locals() and all_attached_images:
-            for u in all_attached_images:
-                if u and u not in all_imgs:
-                    all_imgs.append(u)
-        if existing_doc.get("image_url") and existing_doc["image_url"] not in all_imgs:
-            all_imgs.append(existing_doc["image_url"])
-
-        structured_images = normalize_image_assets(
-            existing_images=existing_doc.get("images"),
-            image_urls=all_imgs,
-            default_product_name=doc_title
+        # Check if user explicitly requested to delete an image
+        delete_img_match = re.search(
+            r'\b(?:hapus|delete|hilangkan|remove)\s+(?:gambar|foto|image|picture)(?:\s+(?:produk|item|dari)?\s*([^\n\r]+))?',
+            request.prompt,
+            re.IGNORECASE
         )
+        if delete_img_match:
+            del_target = delete_img_match.group(1).strip() if delete_img_match.group(1) else ""
+            if del_target:
+                target_words = [w for w in re.split(r'[\s\-_/]+', del_target) if len(w) > 2 and w.lower() not in ["erha", "produk", "product", "gambar", "foto", "image"]]
+                img_tags = list(re.finditer(r'!\[([^\]]*)\]\(([^\)]+)\)', updated_summary))
+                for itag in img_tags:
+                    alt = itag.group(1)
+                    url = itag.group(2)
+                    if any(tw.lower() in alt.lower() or tw.lower() in url.lower() for tw in target_words):
+                        updated_summary = updated_summary.replace(itag.group(0), "")
+            updated_summary = re.sub(r'\n{3,}', '\n\n', updated_summary)
 
-        # Smart contextual topic-based image embedding if omitted by LLM
-        if all_imgs:
-            updated_summary = auto_embed_images_in_summary(
-                updated_summary,
-                structured_images or all_imgs,
-                title=doc_title or "Knowledge Image"
-            )
+        # Embed or Swap newly attached image assets if uploaded in this turn
+        if "all_attached_images" in locals() and all_attached_images:
+            is_swap_requested = bool(re.search(r'\b(?:ganti|ubah|replace|tukar|gantikan)\s+(?:gambar|foto|image|picture)\b', request.prompt, re.IGNORECASE))
+            if is_swap_requested:
+                old_img_match = re.search(r'!\[([^\]]*)\]\(([^\)]+)\)', updated_summary)
+                if old_img_match:
+                    old_tag = old_img_match.group(0)
+                    alt_text = old_img_match.group(1) or doc_title or "Foto Produk"
+                    new_tag = f"![{alt_text}]({all_attached_images[0]})"
+                    updated_summary = updated_summary.replace(old_tag, new_tag, 1)
+            else:
+                missing_new_imgs = [u for u in all_attached_images if u and u not in updated_summary]
+                if missing_new_imgs:
+                    updated_summary = auto_embed_images_in_summary(
+                        updated_summary,
+                        missing_new_imgs,
+                        title=doc_title or "Knowledge Image"
+                    )
 
-        doc_img_url = all_imgs[0] if all_imgs else (existing_doc.get("image_url") or None)
+        # Dynamically synchronize image_urls from the updated summary (Single Source of Truth)
+        # Any image of a deleted product/section or deleted image will naturally not be in the summary and thus cleanly excluded.
+        active_imgs = []
+        for img_match in re.finditer(r'!\[([^\]]*)\]\(([^\)]+)\)', updated_summary):
+            u = img_match.group(2).strip()
+            if u and u not in active_imgs:
+                active_imgs.append(u)
+
+        # Filter structured images metadata to only retain active images
+        existing_imgs = existing_doc.get("images") or []
+        updated_images = []
+        for img_obj in existing_imgs:
+            if isinstance(img_obj, dict) and img_obj.get("url") in active_imgs:
+                updated_images.append(img_obj)
+        existing_urls = {img_obj.get("url") for img_obj in updated_images if isinstance(img_obj, dict)}
+        for u in active_imgs:
+            if u not in existing_urls:
+                updated_images.append({
+                    "id": f"img_{uuid.uuid4().hex[:8]}",
+                    "url": u,
+                    "s3_key": "",
+                    "role": "PRODUCT_PACKAGING",
+                    "product_name": doc_title,
+                    "caption": doc_title
+                })
+
+        doc_img_url = active_imgs[0] if active_imgs else None
 
         # ─── RE-CHUNK from updated summary (same pipeline as Approve) ─────────────
         cat_names = [c for c in updated_categories if isinstance(c, str)]
@@ -3549,8 +3602,8 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             "valid_until": doc_valid_until,
             "summary": updated_summary,
             "image_url": doc_img_url,
-            "image_urls": all_imgs,
-            "images": structured_images,
+            "image_urls": active_imgs,
+            "images": updated_images,
             "initial_prompt": existing_doc.get("initial_prompt") if isinstance(existing_doc, dict) else None,
             "staging_history": existing_doc.get("staging_history", []) if isinstance(existing_doc, dict) else [],
             "edit_history": new_edit_hist,
@@ -3572,36 +3625,48 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
             except Exception as b_err:
                 logger.warning(f"Could not update batch summary after refine approved: {b_err}")
 
-        with open(approved_file, "w", encoding="utf-8") as f:
-            json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
+        # Create Staging Draft Copy for this refinement session (Isolation Pattern)
+        pending_file = os.path.join("data/pending", f"{knowledge_id}.json")
+        os.makedirs("data/pending", exist_ok=True)
 
-        # Sync canonical / approved JSON to MinIO after refine
+        pending_doc_structure = {
+            "knowledge_id": knowledge_id,
+            "batch_id": existing_doc.get("batch_id") if isinstance(existing_doc, dict) else None,
+            "file_name": file_name,
+            "file_hash": existing_doc.get("file_hash") if isinstance(existing_doc, dict) else None,
+            "title": doc_title,
+            "status": "On review",
+            "document_type": doc_type,
+            "valid_from": doc_valid_from,
+            "valid_until": doc_valid_until,
+            "summary": updated_summary,
+            "image_url": doc_img_url,
+            "image_urls": active_imgs,
+            "images": updated_images,
+            "initial_prompt": existing_doc.get("initial_prompt") if isinstance(existing_doc, dict) else None,
+            "staging_history": existing_doc.get("staging_history", []) if isinstance(existing_doc, dict) else [],
+            "history": new_edit_hist,
+            "edit_history": new_edit_hist,
+            "timing_metrics": existing_doc.get("timing_metrics") if isinstance(existing_doc, dict) else None,
+            "batch_summary": approved_doc_structure.get("batch_summary"),
+            "categories": cat_names,
+            "suggested_categories": cat_names,
+            "visibility_settings": vis_settings,
+            "chunks": updated_chunks
+        }
+
+        with open(pending_file, "w", encoding="utf-8") as f:
+            json.dump(pending_doc_structure, f, indent=4, ensure_ascii=False)
+
         try:
-            from app.services.storage import upload_approved_json
-            upload_approved_json(knowledge_id, approved_doc_structure)
+            from app.services.storage import upload_staging_json
+            upload_staging_json(knowledge_id, pending_doc_structure)
         except Exception as canon_err:
-            logger.warning(f"Could not sync approved JSON to MinIO after refine: {canon_err}")
-        target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
-        if target_store:
-            logger.info(f"Re-indexing PGVector for knowledge_id '{knowledge_id}'...")
-            target_store.delete_document(knowledge_id)
-            target_store.insert_chunks(updated_chunks)
+            logger.warning(f"Could not sync staging draft JSON to MinIO after refine: {canon_err}")
 
-        if bm25:
-            logger.info(f"Re-indexing BM25 for knowledge_id '{knowledge_id}'...")
-            bm25.remove_file_chunks(knowledge_id)
-            bm25.add_chunks(updated_chunks)
-            bm25.save(settings.bm25_index_path)
+        logger.info(f"📌 [RefineApproved] Saved staging draft for knowledge_id '{knowledge_id}' (status: On review). PGVector re-indexing deferred until Admin clicks Save Knowledge.")
 
-        if target_store and hasattr(target_store, "upsert_knowledge_category"):
-            target_store.upsert_knowledge_category(
-                knowledge_id=knowledge_id,
-                file_name=file_name,
-                categories=updated_categories,
-                summary=updated_summary
-            )
-
-        return approved_doc_structure
+        return pending_doc_structure
     except HTTPException:
         raise
     except Exception as e:
@@ -4684,18 +4749,22 @@ async def query_general_endpoint(
         target_vs = (pipeline.retriever.vector_store if pipeline.retriever and hasattr(pipeline.retriever, 'vector_store') else vector_store)
         target_bm25 = (pipeline.retriever.bm25_index if pipeline.retriever and hasattr(pipeline.retriever, 'bm25_index') else bm25)
 
+        effective_prompt = GenerationPipeline.contextualize_retrieval_query(user_prompt, request.history)
+
         # -------------------------------------------------------------
         # PHASE 1 & 2: Operation Intent Classifier (EDIT / DELETE Pending Operations)
         # -------------------------------------------------------------
         # Check if user explicitly requests DELETE
-        # Check if user explicitly requests DELETE
         is_delete_cmd = (
-            bool(re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:hapus|delete|hilangkan)\b', clean_user_prompt))
-            or bool(re.search(r'\b(?:hapus|delete)\s+(?:dokumen|produk|item|bagian|tahapan|parameter|indikator|data|knowledge)\b', clean_user_prompt))
+            bool(re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase)\b', clean_user_prompt))
+            or bool(re.search(r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase)\s+(?:dokumen|produk|item|bagian|tahapan|parameter|indikator|data|knowledge)\b', clean_user_prompt))
         ) and not bool(re.search(r'\b(apakah|bagaimana|mengapa|kenapa|bisa kah|kapan)\b', clean_user_prompt))
 
         if is_delete_cmd:
-            matched_res = GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+            matched_res = (
+                await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+                or await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
+            )
             if not matched_res:
                 return QueryGeneralResponse(
                     type="answer",
@@ -4801,16 +4870,24 @@ async def query_general_endpoint(
             )
 
         # Check if user explicitly requests EDIT
+        edit_verbs = r'(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi|terapkan|pasang|masukkan|tambahkan|sisipkan|gantikan|set|sesuaikan)'
         is_edit_cmd = (
-            bool(re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:ubah|ganti|edit|update|perbarui|revisi)\b', clean_user_prompt))
+            bool(re.search(rf'^\s*(?:tolong\s+|mohon\s+|coba\s+)?{edit_verbs}\b', clean_user_prompt))
             or (
-                bool(re.search(r'\b(?:ubah|ganti|edit|update|perbarui|revisi)\b', clean_user_prompt))
-                and bool(re.search(r'\b(?:menjadi|ke|sebagai)\b', clean_user_prompt))
+                bool(re.search(rf'\b{edit_verbs}\b', clean_user_prompt))
+                and (
+                    bool(re.search(r'\b(?:menjadi|ke|sebagai|jadi|dengan|sebesar|berupa)\b|=', clean_user_prompt))
+                    or bool(re.search(r'(?:rp\.?\s*\d+|\b\d+\s*(?:k|rb|ribu|gr|gram|ml|l|mg|pcs|sachet|botol|pack)\b)', clean_user_prompt))
+                    or bool(re.search(r'\b(?:foto|gambar|image|picture|tabel|section|bagian|halaman|sebelum|sesudah|before|after)\b', clean_user_prompt))
+                )
             )
         ) and not bool(re.search(r'\b(apakah|bagaimana|mengapa|kenapa|bisa kah|kapan)\b', clean_user_prompt))
 
         if is_edit_cmd:
-            matched_res = GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+            matched_res = (
+                await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+                or await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
+            )
             if matched_res:
                 target_item, matched_docs = matched_res
                 top_doc = matched_docs[0]
@@ -4821,8 +4898,16 @@ async def query_general_endpoint(
                 context_label = doc_data.get("_matched_context_label") or target_item or doc_title
 
                 # Extract new value
-                val_m = re.search(r'\b(?:menjadi|ke|sebagai)\s+[`"]?([^\n\r`"]+)[`"]?', user_prompt, re.IGNORECASE)
+                val_m = re.search(r'(?:\b(?:menjadi|ke|sebagai|jadi|dengan|sebesar|berupa)\b|=)\s*[`"]?([^\n\r`"]+)[`"]?', user_prompt, re.IGNORECASE)
                 new_val = val_m.group(1).strip() if val_m else ""
+                if not new_val:
+                    unit_m = re.search(r'(?:rp\.?\s*[\d\.,]+|\b\d+\s*(?:k|rb|ribu|gr|gram|ml|l|mg|pcs|sachet|botol|pack)\b)', user_prompt, re.IGNORECASE)
+                    if unit_m:
+                        new_val = unit_m.group(0).strip()
+                if new_val:
+                    new_val = re.sub(r'[\s,\.]+(?:ya|dong|tolong|mohon|terima\s*kasih|thanks)$', '', new_val, flags=re.IGNORECASE).strip()
+                else:
+                    new_val = user_prompt.strip()
 
                 # Extract field name dynamically
                 field = None
@@ -4836,7 +4921,8 @@ async def query_general_endpoint(
                     ("indikasi", ["indikasi", "kegunaan", "manfaat", "fungsi"]),
                     ("cara_pakai", ["cara pakai", "aturan pakai", "cara penggunaan", "aturan penggunaan", "instruksi", "dosis"]),
                     ("periode", ["periode", "masa berlaku", "periode promo", "valid until"]),
-                    ("brand", ["brand", "merek", "merk"])
+                    ("brand", ["brand", "merek", "merk"]),
+                    ("kandungan", ["kandungan", "komposisi", "ingredients", "key ingredients", "ingridients", "bahan"])
                 ]
 
                 for canonical_name, aliases in field_keywords:
@@ -4848,9 +4934,9 @@ async def query_general_endpoint(
                         break
 
                 if not field:
-                    field_match = re.search(r'\b(?:ubah|ganti|edit|update|perbarui|revisi)\s+([a-zA-Z_]+)\b', clean_user_prompt)
+                    field_match = re.search(r'\b(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi)\s+([a-zA-Z_0-9\s]+?)(?:\s+produk|\s+item|\s+ke|\s+menjadi|\s+sebagai|\b)', clean_user_prompt)
                     if field_match:
-                        candidate_field = field_match.group(1).lower()
+                        candidate_field = field_match.group(1).lower().strip()
                         if candidate_field not in ("data", "informasi", "dokumen", "item", "produk", "ke", "menjadi", "sebagai"):
                             field = candidate_field
 
@@ -4871,6 +4957,7 @@ async def query_general_endpoint(
                     "usage_instruction": "Instruksi Penggunaan",
                     "periode": "Periode Promo / Masa Berlaku",
                     "brand": "Brand",
+                    "kandungan": "Kandungan / Key Ingredients",
                     "summary": "Ringkasan Dokumen"
                 }
                 field_display = field_display_names.get(field.lower(), field.capitalize())
@@ -4928,7 +5015,8 @@ async def query_general_endpoint(
                             + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else "") +
                             f"- **Bagian yang Diperbarui**: {field_display}\n"
                             f"- **Nilai Baru**: {new_val}\n"
-                            f"- **Dokumen Terdampak ({len(matched_docs)} Dokumen)**:\n{doc_list_str}\n\n"
+                            f"- **Dokumen Terdampak ({len(matched_docs)} Dokumen)**:\n{doc_list_str}\n"
+                            f"- **Catatan Keamanan**: *Hanya data entitas target yang diperbarui. Seluruh data dan produk lainnya dalam dokumen ini tetap utuh (tidak terhapus).*\n\n"
                             f"Apakah Anda yakin ingin menerapkan perubahan ini? Silakan klik tombol konfirmasi di bawah."
                         )
                     else:
@@ -4939,7 +5027,8 @@ async def query_general_endpoint(
                             + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else "") +
                             f"- **ID Dokumen**: {batch_link} — *{doc_title}*\n"
                             f"- **Bagian yang Diperbarui**: {field_display}\n"
-                            f"- **Nilai Baru**: {new_val}\n\n"
+                            f"- **Nilai Baru**: {new_val}\n"
+                            f"- **Catatan Keamanan**: *Hanya data entitas target yang diperbarui. Seluruh data dan produk lainnya dalam dokumen ini tetap utuh (tidak terhapus).*\n\n"
                             f"Apakah Anda yakin ingin menerapkan perubahan ini? Silakan klik tombol konfirmasi di bawah."
                         )
 
@@ -5071,7 +5160,7 @@ async def query_general_endpoint(
                 continue
 
             img_filename = os.path.basename(str(img)).lower()
-            if ("pptx_img_1_" in img_filename or "pptx_img_2_" in img_filename or "cover" in img_filename) and not any(k in img_filename for k in ["before", "after", "spot", "wash", "s4_img"]):
+            if ("cover" in img_filename or "header_logo" in img_filename or meta.get("image_role") == "COVER") and not any(k in img_filename for k in ["before", "after", "product", "treatment", "photo", "image", "img"]):
                 continue
 
             chunk_content = hit.get("content") or hit.get("text") or ""
@@ -5110,12 +5199,11 @@ async def query_general_endpoint(
         if len(clean_answer.strip()) > len(disclaimer_phrase) + 30 and clean_answer.strip().endswith(disclaimer_phrase):
             clean_answer = clean_answer.strip()[:-len(disclaimer_phrase)].rstrip()
 
-        # Normalize missing/unavailable responses from LLM — narrow guard
+        # Normalize missing/unavailable responses from LLM
         if (
-            "untuk saat ini informasi tersebut belum tersedia" in clean_answer.lower()
-            and action_type == "read"
-            and (not results or is_context_empty)
-        ):
+            clean_answer.strip().lower() == "untuk saat ini informasi tersebut belum tersedia."
+            or clean_answer.strip().lower().startswith("untuk saat ini informasi tersebut belum tersedia")
+        ) and action_type == "read":
             clean_answer = "Untuk saat ini informasi tersebut belum tersedia."
             results = []
 

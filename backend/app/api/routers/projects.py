@@ -231,5 +231,9 @@ async def delete_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    from sqlalchemy import update
     project.deleted_at = datetime.now(timezone.utc)
+    await db.execute(
+        update(Knowledge).where(Knowledge.project_id == project_id).values(project_id=None)
+    )
     await db.commit()

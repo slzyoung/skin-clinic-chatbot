@@ -88,6 +88,8 @@ interface Message {
 	action?: string;
 	type?: string;
 	operation_id?: string | null;
+	operation_status?: string | null;
+	attachments?: Record<string, unknown>;
 	target_knowledge_id?: string | null;
 	total_found?: number;
 }
@@ -104,7 +106,10 @@ function getInitialMessages(
 	const currentSummary = aiSummary || knowledge?.ai_summary;
 
 	// For APPROVED documents, always provide the single current approved summary as Turn 0 baseline
-	if (knowledgeStatus === "APPROVED") {
+	if (
+		knowledgeStatus?.toUpperCase() === "APPROVED" ||
+		knowledge?.status?.toUpperCase() === "APPROVED"
+	) {
 		if (currentSummary) {
 			return [{ role: "assistant", content: currentSummary }];
 		}
@@ -121,7 +126,7 @@ function getInitialMessages(
 		(typeof meta?.initial_prompt === "string" && meta.initial_prompt.trim()) ||
 		undefined;
 	const initialSummary =
-		(meta?.initial_summary as string) || initialSummarySnapshot || currentSummary || undefined;
+		currentSummary || (meta?.initial_summary as string) || initialSummarySnapshot || undefined;
 	const docFile = fileName || knowledge?.file_name || undefined;
 
 	// Build Turn 0
@@ -169,13 +174,31 @@ function getInitialMessages(
 			(!effectivePrompt && history[0]?.role === "assistant");
 
 		if (startsWithTurn0) {
-			return history.map(mapTurn);
+			const mapped = history.map(mapTurn);
+			if (currentSummary) {
+				for (let i = mapped.length - 1; i >= 0; i--) {
+					if (mapped[i].role === "assistant") {
+						mapped[i].content = currentSummary;
+						break;
+					}
+				}
+			}
+			return mapped;
 		}
 
-		return [
+		const mapped = [
 			...turn0,
 			...history.map(mapTurn),
 		];
+		if (currentSummary) {
+			for (let i = mapped.length - 1; i >= 0; i--) {
+				if (mapped[i].role === "assistant") {
+					mapped[i].content = currentSummary;
+					break;
+				}
+			}
+		}
+		return mapped;
 	}
 
 	if (initialSummary && knowledgeStatus !== "PROCESSING") {
@@ -274,6 +297,11 @@ export function ChatPreview({
 	const dbMessages: Message[] = useMemo(() => {
 		if (mode === "general" && sessionMessages) {
 			return sessionMessages.map((m) => {
+				const att = m.attachments as Record<string, unknown> | undefined;
+				const opStat =
+					(m as { operation_status?: string | null }).operation_status ||
+					(att?.operation_status as string) ||
+					undefined;
 				if (m.role === "user") {
 					const cleaned = cleanMessageTurn(m.content);
 					return {
@@ -282,8 +310,10 @@ export function ChatPreview({
 						attachmentName: cleaned.attachmentName,
 						attachmentNames: cleaned.attachmentNames,
 						action: m.action || undefined,
-						type: m.type || (m.attachments?.type as string) || undefined,
-						operation_id: m.operation_id || (m.attachments?.operation_id as string) || undefined,
+						type: m.type || (att?.type as string) || undefined,
+						operation_id: m.operation_id || (att?.operation_id as string) || undefined,
+						operation_status: opStat,
+						attachments: att,
 						target_knowledge_id: m.target_knowledge_id || undefined,
 						total_found: m.total_found ?? undefined,
 					};
@@ -292,8 +322,10 @@ export function ChatPreview({
 					role: m.role as "user" | "assistant",
 					content: m.content,
 					action: m.action || undefined,
-					type: m.type || (m.attachments?.type as string) || undefined,
-					operation_id: m.operation_id || (m.attachments?.operation_id as string) || undefined,
+					type: m.type || (att?.type as string) || undefined,
+					operation_id: m.operation_id || (att?.operation_id as string) || undefined,
+					operation_status: opStat,
+					attachments: att,
 					target_knowledge_id: m.target_knowledge_id || undefined,
 					total_found: m.total_found ?? undefined,
 				};
@@ -301,6 +333,38 @@ export function ChatPreview({
 		}
 		return [];
 	}, [mode, sessionMessages]);
+
+	// Permanently restore confirmed/cancelled status across page navigation and session re-entry
+	useEffect(() => {
+		if (dbMessages && dbMessages.length > 0) {
+			const restored: Record<string, "confirmed" | "cancelled"> = {};
+			for (const m of dbMessages) {
+				const opId = m.operation_id || (m.attachments?.operation_id as string);
+				const opStatus =
+					m.operation_status || (m.attachments?.operation_status as string);
+				if (opId) {
+					if (opStatus === "confirmed" || opStatus === "cancelled") {
+						restored[opId] = opStatus as "confirmed" | "cancelled";
+					} else if (
+						m.action === "edit_applied" ||
+						m.action === "delete_applied" ||
+						(m.attachments?.action as string) === "edit_applied" ||
+						(m.attachments?.action as string) === "delete_applied"
+					) {
+						restored[opId] = "confirmed";
+					} else if (
+						m.action === "cancelled" ||
+						(m.attachments?.action as string) === "cancelled"
+					) {
+						restored[opId] = "cancelled";
+					}
+				}
+			}
+			if (Object.keys(restored).length > 0) {
+				setCompletedOps((prev) => ({ ...restored, ...prev }));
+			}
+		}
+	}, [dbMessages]);
 
 	const [input, setInput] = useState("");
 	const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -935,7 +999,10 @@ export function ChatPreview({
 	const renderOperationActions = (msg: Message) => {
 		if (!msg.operation_id || msg.role !== "assistant") return null;
 		const opId = msg.operation_id;
-		const status = completedOps[opId];
+		const status =
+			completedOps[opId] ||
+			msg.operation_status ||
+			(msg.attachments?.operation_status as string);
 		const isPending = activeOpId === opId;
 		const isDelete = msg.action?.toLowerCase().includes("delete");
 

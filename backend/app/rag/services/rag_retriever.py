@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 from loguru import logger
 # pyrefly: ignore [missing-import]
 from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
 
 from app.rag.services.interfaces import BaseVectorStoreAdapter
 from app.rag.config import settings
@@ -296,6 +295,7 @@ class Reranker:
             self._initialized = True
             logger.info(f"Loading Cross-Encoder Reranker model: {self.model_name}...")
             try:
+                from sentence_transformers import CrossEncoder
                 self.model = CrossEncoder(self.model_name)
                 logger.info("Cross-Encoder Reranker model loaded successfully.")
             except Exception as e:
@@ -622,6 +622,36 @@ class HybridRetriever:
                 vu = meta.get("valid_until") or meta.get("expiry_date")
                 logger.info(f"Filtered out expired promotional chunk: '{p_name}' (valid_until: {vu})")
 
+        # Target ingredient extraction for precision filtering & anti-contamination
+        target_ingredient = None
+        ing_match = re.search(r'\b(?:kandungan|mengandung|bahan\s+aktif|komposisi|ingredients?|dengan\s+kandungan)\s+([a-zA-Z0-9\-\s]{3,30})\b', q_lower)
+        if ing_match:
+            cand = ing_match.group(1).strip()
+            cand = re.sub(r'\b(apa\s+saja|adakah|ada|saja|ya|dong|tolong|di\s+erha|ini|itu|tersebut)\b', '', cand).strip()
+            if re.match(r'^(dan|atau|serta|pada|dari|dalam|tentang|apakah|bagaimana)\b', cand):
+                cand = ""
+            if len(cand) >= 3 and cand not in ("produk", "skincare", "obat", "cream", "krim", "serum"):
+                target_ingredient = cand
+        elif re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', q_lower):
+            prod_cand = re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', q_lower).group(1).strip()
+            if any(prod_cand.endswith(suf) for suf in ["ine", "ide", "acid", "ol", "ate", "oil"]) or prod_cand in ("centella", "retinol", "ceramide", "niacinamide", "betaine", "salicylic", "glycolic", "hyaluronic"):
+                target_ingredient = prod_cand
+
+        if target_ingredient:
+            target_ing_lower = target_ingredient.lower()
+            matching_active = []
+            for h in active_hits:
+                txt = h.get("text", "").lower()
+                meta_str = str(h.get("metadata", {})).lower()
+                if target_ing_lower in txt or target_ing_lower in meta_str:
+                    h["_has_target_ingredient"] = True
+                    matching_active.append(h)
+                else:
+                    h["_has_target_ingredient"] = False
+            if matching_active:
+                logger.info(f"Target ingredient '{target_ingredient}' matched {len(matching_active)} chunks in pre-filtering.")
+                active_hits = matching_active
+
         final_hits = active_hits
         if rerank and self.reranker and active_hits:
             all_reranked = self.reranker.rerank(query, active_hits, top_n=len(active_hits))
@@ -638,6 +668,21 @@ class HybridRetriever:
             is_ingredients_intent = any(k in query_lower for k in ingredients_keywords)
             is_treatment_intent = any(k in query_lower for k in treatment_keywords)
             is_product_intent = any(k in query_lower for k in product_keywords)
+
+            # Target ingredient extraction for precision filtering & anti-contamination
+            target_ingredient = None
+            ing_match = re.search(r'\b(?:kandungan|mengandung|bahan\s+aktif|komposisi|ingredients?|dengan\s+kandungan)\s+([a-zA-Z0-9\-\s]{3,30})\b', query_lower)
+            if ing_match:
+                cand = ing_match.group(1).strip()
+                cand = re.sub(r'\b(apa\s+saja|adakah|ada|saja|ya|dong|tolong|di\s+erha|ini|itu|tersebut)\b', '', cand).strip()
+                if re.match(r'^(dan|atau|serta|pada|dari|dalam|tentang|apakah|bagaimana)\b', cand):
+                    cand = ""
+                if len(cand) >= 3 and cand not in ("produk", "skincare", "obat", "cream", "krim", "serum"):
+                    target_ingredient = cand
+            elif re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', query_lower):
+                prod_cand = re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', query_lower).group(1).strip()
+                if any(prod_cand.endswith(suf) for suf in ["ine", "ide", "acid", "ol", "ate", "oil"]) or prod_cand in ("centella", "retinol", "ceramide", "niacinamide", "betaine", "salicylic", "glycolic", "hyaluronic"):
+                    target_ingredient = prod_cand
 
             # Clinical indication keywords for automatic medical cross-referencing
             clinical_indications_query = []
@@ -668,6 +713,18 @@ class HybridRetriever:
                 elif is_ingredients_intent and any(s in section_upper for s in ["INGREDIENT", "KANDUNGAN", "KOMPOSISI"]):
                     boost += 0.05
 
+                # Strict ingredient match boost (+0.35)
+                if target_ingredient:
+                    target_ing_lower = target_ingredient.lower()
+                    hit_text_lower = updated_hit.get("text", "").lower()
+                    meta_lower = str(meta).lower()
+                    if target_ing_lower in hit_text_lower or target_ing_lower in meta_lower:
+                        boost += 0.35
+                        updated_hit["_has_target_ingredient"] = True
+                        logger.debug(f"Target ingredient '{target_ingredient}' found in '{meta.get('product_name')}'. Boosted +0.35")
+                    else:
+                        updated_hit["_has_target_ingredient"] = False
+
                 if is_procedure_intent and any(s in section_upper for s in ["TAHAPAN", "PROSEDUR", "PROTOKOL", "LANGKAH", "INFORMASI PROSEDUR", "CARA TINDAKAN"]):
                     boost += 0.15
                     
@@ -692,6 +749,14 @@ class HybridRetriever:
             # Document Diversity Selection:
             # Prevents a single document from dominating all top-N slots so interrelated documents (e.g. Treatment + Product + Promo) can both be retrieved
             sorted_by_score = sorted(boosted_hits, key=lambda h: h.get("rerank_score", 0.0), reverse=True)
+
+            # Strict ingredient isolation: if target ingredient is requested and we have matching hits,
+            # discard non-matching product hits so unrelated products don't leak into the context
+            if target_ingredient:
+                matching_hits = [h for h in sorted_by_score if h.get("_has_target_ingredient")]
+                if matching_hits:
+                    logger.info(f"Target ingredient '{target_ingredient}' matched {len(matching_hits)} chunks. Discarding non-matching products to prevent leakage.")
+                    sorted_by_score = matching_hits
             diverse_hits = []
             seen_doc_counts = {}
             deferred_hits = []

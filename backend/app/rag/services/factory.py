@@ -90,6 +90,10 @@ class AdapterFactory:
         return OpenAIAdapter(api_key=api_key, model_name=model_name, base_url=base_url)
 
     @staticmethod
+    def get_llm_adapter() -> BaseLLMAdapter:
+        return AdapterFactory.get_llm()
+
+    @staticmethod
     def get_vector_store() -> BaseVectorStoreAdapter:
         """
         Factory method: instantiates the vector store adapter based on

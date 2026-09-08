@@ -69,8 +69,8 @@ class GeneralKnowledgeService:
     """Dedicated service for performing safe, item-level CRUD operations on approved KB data."""
 
     @staticmethod
-    def find_all_target_documents_and_item(
-        query: str, output_dir: str = "data/output"
+    async def find_all_target_documents_and_item(
+        query: str, output_dir: str = "data/output", db: Optional[Any] = None
     ) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
         """
         Scans approved documents to identify the matching target entity/item name and
@@ -94,7 +94,7 @@ class GeneralKnowledgeService:
         container_candidate = None
         explicit_item_candidate = None
         cmd_match = re.search(
-            r'\b(?:hapus|delete|hilangkan|ubah|ganti|edit|update|perbarui)\s+(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:dari|pada|di|dalam)\s+["\'“]?([^"\'”\n]+)["\'”]?',
+            r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase|ubah|ganti|edit|tukar|salin|update|perbarui|revisi)\s+(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:dari|pada|di|dalam)\s+["\'“]?([^"\'”\n]+)["\'”]?',
             query,
             re.IGNORECASE
         )
@@ -120,15 +120,20 @@ class GeneralKnowledgeService:
         # e.g.: "edit ukuran ERHA Acneact Gentle Acne Moisturizer ke 40 g"
         if not explicit_item_candidate:
             core = re.sub(
-                r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:ubah|ganti|edit|update|perbarui|revisi|hapus|delete)\s+',
+                r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi|hapus|delete|hilangkan|remove|buang|bersihkan)\s+',
                 '',
                 query,
                 flags=re.IGNORECASE
             )
-            # Strip trailing target value (ke 40 g / menjadi 50000)
-            val_m = re.search(r'\b(?:menjadi|ke|sebagai)\s+[`"\'“]?([^\n\r`"\'”]+)[\'"”`]?$', core, re.IGNORECASE)
+            # Strip trailing target value (ke 40 g / jadi 40 g / dengan 50000 / menjadi 50000)
+            val_m = re.search(r'\b(?:menjadi|jadi|ke|sebagai|dengan|sebesar|berupa|=)\s+[`"\'“]?([^\n\r`"\'”]+)[\'"”`]?$', core, re.IGNORECASE)
             if val_m:
                 core = core[:val_m.start()].strip()
+            else:
+                # Also strip raw trailing value without transition word (e.g. "Facial Wash 40 g" -> "Facial Wash")
+                raw_val_m = re.search(r'\b(\d+(?:\.\d+)?\s*(?:g|gram|ml|l|kg|oz)\b|(?:Rp\.?\s*)?\d[\d\.\,]+)$', core, re.IGNORECASE)
+                if raw_val_m:
+                    core = core[:raw_val_m.start()].strip()
 
             # Strip leading field words
             field_words = [
@@ -138,7 +143,8 @@ class GeneralKnowledgeService:
                 'nama_produk', 'nama', 'judul',
                 'kategori', 'category',
                 'deskripsi', 'description', 'keterangan',
-                'indikasi', 'cara_pakai', 'dosis'
+                'indikasi', 'cara_pakai', 'dosis',
+                'kandungan', 'komposisi', 'ingredients', 'key ingredients', 'bahan'
             ]
             for fw in field_words:
                 core = re.sub(rf'\b{fw}\b', '', core, flags=re.IGNORECASE).strip()
@@ -274,6 +280,112 @@ class GeneralKnowledgeService:
                 except Exception as e:
                     logger.debug(f"[DedicatedService] scan error {f}: {e}")
 
+        # DB Hydration fallback: scan active PostgreSQL Knowledge records if disk scan yields no matches
+        if not matched_docs:
+            try:
+                from app.models.knowledge import Knowledge
+                from sqlalchemy import select
+
+                async def _scan_db(session):
+                    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None))
+                    res = await session.execute(stmt)
+                    return res.scalars().all()
+
+                if db:
+                    k_rows = await _scan_db(db)
+                else:
+                    from app.core.database import AsyncSessionLocal
+                    async with AsyncSessionLocal() as session:
+                        k_rows = await _scan_db(session)
+
+                for k_obj in k_rows:
+                    doc_id = str(k_obj.id)
+                    if doc_id in seen_doc_ids:
+                        continue
+                    doc_title = str(k_obj.title or k_obj.file_name or doc_id)
+                    file_name = str(k_obj.file_name or "")
+                    summary = str(k_obj.ai_summary or "")
+                    m_dict = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
+                    doc = {
+                        "knowledge_id": doc_id,
+                        "batch_id": m_dict.get("batch_id"),
+                        "file_name": file_name,
+                        "title": doc_title,
+                        "summary": summary,
+                        "chunks": m_dict.get("chunks", []),
+                        "images": m_dict.get("images", []),
+                        "image_urls": m_dict.get("image_urls", []),
+                        "categories": m_dict.get("categories", []),
+                        "visibility_settings": m_dict.get("visibility_settings", {})
+                    }
+
+                    doc_candidates = [doc_title]
+                    for h in re.findall(r'^#{1,4}\s+([^\n\r]+)', summary, re.MULTILINE):
+                        h_clean = re.sub(r'[\*\_]', '', h).strip()
+                        if len(h_clean) > 2:
+                            doc_candidates.append(h_clean)
+
+                    score = 0
+                    match_type = "mention"
+                    matched_item_for_doc = None
+
+                    if explicit_uuid and (explicit_uuid == doc_id.lower()):
+                        score += 1000
+                        match_type = "explicit_uuid"
+
+                    if explicit_item_candidate:
+                        cand_low = explicit_item_candidate.lower()
+                        if cand_low == doc_title.lower() or cand_low in doc_title.lower() or cand_low in file_name.lower().replace("_", " "):
+                            score += 500 + len(doc_title)
+                            match_type = "dedicated_document"
+                            matched_item_for_doc = explicit_item_candidate
+                            if not resolved_entity_name:
+                                resolved_entity_name = doc_title
+
+                        for c in doc_candidates:
+                            if cand_low == c.lower() or cand_low in c.lower() or c.lower() in cand_low:
+                                if match_type != "dedicated_document":
+                                    score += 200 + len(c)
+                                    match_type = "section"
+                                matched_item_for_doc = c
+                                if not resolved_entity_name:
+                                    resolved_entity_name = c
+                                break
+
+                    if score == 0:
+                        if doc_title and len(doc_title) > 3 and doc_title.lower() in q_lower:
+                            score += 300 + len(doc_title)
+                            match_type = "title_in_query"
+                            matched_item_for_doc = doc_title
+                            if not resolved_entity_name:
+                                resolved_entity_name = doc_title
+                        else:
+                            for c in doc_candidates:
+                                if len(c) > 3 and c.lower() in q_lower:
+                                    score += 150 + len(c)
+                                    match_type = "item_in_query"
+                                    matched_item_for_doc = c
+                                    if not resolved_entity_name:
+                                        resolved_entity_name = c
+                                    break
+
+                    if score > 0:
+                        seen_doc_ids.add(doc_id)
+                        doc_copy = dict(doc)
+                        doc_copy["_matched_context_label"] = matched_item_for_doc or resolved_entity_name or doc_title
+                        matched_docs.append({
+                            "knowledge_id": doc_id,
+                            "title": doc_title,
+                            "file_name": file_name,
+                            "batch_id": doc.get("batch_id"),
+                            "score": score,
+                            "match_type": match_type,
+                            "target_item": matched_item_for_doc or resolved_entity_name,
+                            "doc_data": doc_copy
+                        })
+            except Exception as db_scan_err:
+                logger.debug(f"[GeneralKnowledgeService] DB scan fallback note: {db_scan_err}")
+
         if not matched_docs:
             return None
 
@@ -282,14 +394,14 @@ class GeneralKnowledgeService:
         return (resolved_entity_name, matched_docs)
 
     @staticmethod
-    def find_target_document_and_item(
-        query: str, output_dir: str = "data/output"
+    async def find_target_document_and_item(
+        query: str, output_dir: str = "data/output", db: Optional[Any] = None
     ) -> Optional[Tuple[str, Optional[str], Dict[str, Any]]]:
         """
         Scans approved documents to identify the matching document ID and target item/entity/section name.
         Returns the highest-priority matching document (knowledge_id, target_item_name, doc_data).
         """
-        res = GeneralKnowledgeService.find_all_target_documents_and_item(query, output_dir)
+        res = await GeneralKnowledgeService.find_all_target_documents_and_item(query, output_dir, db=db)
         if not res:
             return None
         target_item, matched_docs = res
@@ -371,6 +483,13 @@ class GeneralKnowledgeService:
                     meta = dict(k_obj.metadata_) if isinstance(k_obj.metadata_, dict) else {}
                     meta.update(existing_doc.get("metadata", {}))
                     meta["chunks"] = existing_doc.get("chunks", [])
+                    meta["summary"] = existing_doc.get("summary")
+                    if existing_doc.get("batch_summary"):
+                        meta["batch_summary"] = existing_doc.get("batch_summary")
+                    if "staging_history" in existing_doc:
+                        meta["staging_history"] = existing_doc["staging_history"]
+                    if "edit_history" in existing_doc:
+                        meta["edit_history"] = existing_doc["edit_history"]
                     k_obj.metadata_ = meta
                     logger.info(f"[DedicatedService] Updated Knowledge '{k_obj.id}' metadata & summary in DB")
                 await session.commit()
@@ -473,6 +592,8 @@ class GeneralKnowledgeService:
                     field_synonyms = ["indikasi", "indication", "indications"]
                 elif clean_field in ("cara_pakai", "aturan_pakai", "instruksi", "penggunaan", "dosis"):
                     field_synonyms = ["cara_pakai", "aturan_pakai", "instruksi", "penggunaan", "dosis", "cara pakai", "aturan pakai"]
+                elif clean_field in ("kandungan", "komposisi", "ingredients", "key_ingredients", "key ingredients", "ingridients", "bahan"):
+                    field_synonyms = ["kandungan", "komposisi", "ingredients", "key ingredients", "key_ingredients", "ingridients", "bahan"]
 
                 syn_regex = "|".join(field_synonyms)
                 bullet_attr_pattern = re.compile(
@@ -596,6 +717,58 @@ class GeneralKnowledgeService:
                         chunk["text"] = bullet_attr_pattern.sub(rf'\g<1>{formatted_val}', chunk_text)
                     elif not re.match(r'^#{1,3}\s+[^\n]+$', chunk_text.strip()):
                         chunk["text"] = chunk_text.strip() + f"\n- **{field.capitalize()}**: {formatted_val}"
+
+            # Synchronize last assistant turn in staging_history/history if present
+            curr_summary = existing_doc.get("summary", "")
+            if curr_summary:
+                for hist_key in ("staging_history", "history"):
+                    if hist_key in existing_doc and isinstance(existing_doc[hist_key], list) and existing_doc[hist_key]:
+                        for turn in reversed(existing_doc[hist_key]):
+                            if isinstance(turn, dict) and turn.get("role") == "assistant":
+                                turn["content"] = curr_summary
+                                break
+
+            # Append to edit_history
+            edit_entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "action": "edit",
+                "field": clean_field,
+                "target_item": target_item,
+                "old_value": str(old_value)[:200] if old_value else None,
+                "new_value": formatted_val,
+                "source": "general_prompt"
+            }
+            if "edit_history" not in existing_doc or not isinstance(existing_doc["edit_history"], list):
+                existing_doc["edit_history"] = []
+            existing_doc["edit_history"].append(edit_entry)
+
+            # Update batch_summary if this document belongs to a batch
+            batch_id = existing_doc.get("batch_id")
+            cur_bs = existing_doc.get("batch_summary") or existing_doc.get("metadata", {}).get("batch_summary")
+            if cur_bs and target_item:
+                if bullet_attr_pattern.search(cur_bs):
+                    cur_bs = bullet_attr_pattern.sub(rf'\g<1>{formatted_val}', cur_bs)
+                existing_doc["batch_summary"] = cur_bs
+                if "metadata" in existing_doc and isinstance(existing_doc["metadata"], dict):
+                    existing_doc["metadata"]["batch_summary"] = cur_bs
+
+                # Propagate updated batch_summary to other output/pending files in this batch
+                out_dir = settings.output_dir if hasattr(settings, "output_dir") else "data/output"
+                if os.path.exists(out_dir):
+                    for fn in os.listdir(out_dir):
+                        if fn.endswith(".json") and fn != os.path.basename(approved_file):
+                            f_path = os.path.join(out_dir, fn)
+                            try:
+                                with open(f_path, "r", encoding="utf-8") as bf:
+                                    b_data = json.load(bf)
+                                if b_data.get("batch_id") == batch_id:
+                                    b_data["batch_summary"] = cur_bs
+                                    if "metadata" in b_data and isinstance(b_data["metadata"], dict):
+                                        b_data["metadata"]["batch_summary"] = cur_bs
+                                    with open(f_path, "w", encoding="utf-8") as bf:
+                                        json.dump(b_data, bf, indent=4, ensure_ascii=False)
+                            except Exception:
+                                pass
 
             # Save local JSON file
             with open(approved_file, "w", encoding="utf-8") as f:

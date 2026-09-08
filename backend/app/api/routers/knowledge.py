@@ -183,16 +183,40 @@ async def get_general_chat_session(
     msg_res = await db.execute(msg_stmt)
     db_msgs = msg_res.scalars().all()
 
-    formatted_msgs = []
+    # Collect all operation IDs to resolve their execution status (confirmed, cancelled, pending)
+    op_ids = []
     for m in db_msgs:
         att = m.attachments or {}
+        op_id_str = att.get("operation_id")
+        if op_id_str:
+            try:
+                op_ids.append(uuid.UUID(str(op_id_str)))
+            except Exception:
+                pass
+
+    op_status_map = {}
+    if op_ids:
+        op_stmt = select(PendingOperation).where(PendingOperation.id.in_(op_ids))
+        op_res = await db.execute(op_stmt)
+        for op_obj in op_res.scalars().all():
+            op_status_map[str(op_obj.id)] = op_obj.status
+
+    formatted_msgs = []
+    for m in db_msgs:
+        att = dict(m.attachments) if isinstance(m.attachments, dict) else {}
+        op_id_str = att.get("operation_id")
+        op_status = op_status_map.get(str(op_id_str)) if op_id_str else None
+        if op_status:
+            att["operation_status"] = op_status
+
         formatted_msgs.append(GeneralChatMessageItem(
             id=m.id,
             role=m.role.value.lower(),
             content=m.content,
             action=att.get("action"),
             type=att.get("type"),
-            operation_id=att.get("operation_id"),
+            operation_id=op_id_str,
+            operation_status=op_status,
             target_knowledge_id=att.get("target_knowledge_id"),
             total_found=att.get("total_found"),
             attachments=att,
@@ -550,9 +574,18 @@ async def list_knowledge(
     db_items = list(result.scalars().all())
 
     # 2. Out-of-band sync DB items with RAG staging files (data/pending or data/output)
+    del_proj_stmt = select(Project.id).where(Project.deleted_at.is_not(None))
+    del_proj_res = await db.execute(del_proj_stmt)
+    deleted_proj_ids = set(del_proj_res.scalars().all())
+
     db_by_id = {str(item.id): item for item in db_items}
     updated_db = False
     db_responses: List[KnowledgeResponse] = []
+
+    for item in db_items:
+        if item.project_id and item.project_id in deleted_proj_ids:
+            item.project_id = None
+            updated_db = True
 
     for item in db_items:
         k_id_str = str(item.id)
@@ -1566,8 +1599,8 @@ async def edit_knowledge(
             vector_store=vector_store
         )
 
-    # Sync updates back to the DB row
-    if k_entry:
+    # Sync updates back to the DB row (Only for pending documents; approved documents stay untouched in DB until Approved)
+    if k_entry and k_entry.status != KnowledgeStatus.APPROVED:
         if payload.title:
             k_entry.title = payload.title
         if payload.summary:
