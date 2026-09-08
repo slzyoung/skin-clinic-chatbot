@@ -16,6 +16,7 @@ interface ApprovalActionsProps {
 	pendingCategories?: string[];
 	pendingVisibilitySettings?: VisibilitySettings;
 	pendingTitle?: string;
+	pendingSummary?: string;
 }
 
 export function ApprovalActions({
@@ -23,6 +24,7 @@ export function ApprovalActions({
 	pendingCategories,
 	pendingVisibilitySettings,
 	pendingTitle,
+	pendingSummary,
 }: ApprovalActionsProps) {
 	const router = useRouter();
 	const approveKnowledge = useApproveKnowledge();
@@ -38,12 +40,13 @@ export function ApprovalActions({
 		if (
 			(pendingCategories && pendingCategories.length > 0) ||
 			pendingVisibilitySettings ||
-			pendingTitle
+			pendingTitle ||
+			(pendingSummary && pendingSummary !== knowledge.ai_summary)
 		) {
 			await editKnowledge.mutateAsync({
 				id: knowledge.id,
 				data: {
-					summary: knowledge.ai_summary || "",
+					summary: pendingSummary || knowledge.ai_summary || "",
 					categories: pendingCategories || [],
 					visibility_settings: pendingVisibilitySettings,
 					title: pendingTitle,

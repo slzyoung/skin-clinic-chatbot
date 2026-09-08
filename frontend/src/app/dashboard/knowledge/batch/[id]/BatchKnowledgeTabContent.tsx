@@ -63,6 +63,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 		const [pendingVisibilitySettings, setPendingVisibilitySettings] =
 			useState<VisibilitySettings>(initialVisibility);
 		const [pendingTitle, setPendingTitle] = useState(doc?.title || "");
+		const [pendingSummary, setPendingSummary] = useState(doc?.ai_summary || "");
 		const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 		const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
 
@@ -84,6 +85,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 						},
 					);
 					setPendingTitle(doc.title || "");
+					setPendingSummary(doc.ai_summary || "");
 				}, 0);
 				return () => clearTimeout(timer);
 			}
@@ -93,7 +95,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 			await editKnowledge.mutateAsync({
 				id: knowledgeId,
 				data: {
-					summary: doc?.ai_summary || "",
+					summary: pendingSummary || doc?.ai_summary || "",
 					categories: pendingCategories,
 					visibility_settings: pendingVisibilitySettings,
 					title: typeof newTitle === "string" ? newTitle : pendingTitle,
@@ -135,6 +137,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 			setPendingCategories(initialCategories);
 			setPendingVisibilitySettings(initialVisibility);
 			setPendingTitle(doc?.title || "");
+			setPendingSummary(doc?.ai_summary || "");
 			setIsEditMode(false);
 		};
 
@@ -148,7 +151,9 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 						knowledgeId={knowledgeId}
 						knowledge={doc}
 						knowledgeStatus={doc?.status}
-						aiSummary={doc?.ai_summary}
+						aiSummary={pendingSummary || doc?.ai_summary}
+						summaryValue={pendingSummary}
+						onChangeSummary={setPendingSummary}
 						fileName={doc?.file_name}
 						initialPrompt={(doc?.metadata?.initial_prompt as string) || undefined}
 						files={(doc?.metadata?.files as { file_name: string; summary: string }[]) || []}

@@ -36,6 +36,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
 	const [pendingVisibilitySettings, setPendingVisibilitySettings] = useState<VisibilitySettings>(initialVisibility);
 	const [pendingTitle, setPendingTitle] = useState(data?.title || "");
+	const [pendingSummary, setPendingSummary] = useState(data?.ai_summary || "");
 
 	useEffect(() => {
 		if (!isEditMode && data) {
@@ -45,6 +46,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 				setPendingCategories(cats);
 				setPendingVisibilitySettings(vis);
 				setPendingTitle(data.title || "");
+				setPendingSummary(data.ai_summary || "");
 			}, 0);
 			return () => clearTimeout(timer);
 		}
@@ -64,7 +66,15 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	};
 
 	const handleSave = async (newTitle?: string) => {
-		await editKnowledge.mutateAsync({ id, data: { summary: data?.ai_summary || "", categories: pendingCategories, visibility_settings: pendingVisibilitySettings, title: typeof newTitle === 'string' ? newTitle : pendingTitle } });
+		await editKnowledge.mutateAsync({
+			id,
+			data: {
+				summary: pendingSummary || data?.ai_summary || "",
+				categories: pendingCategories,
+				visibility_settings: pendingVisibilitySettings,
+				title: typeof newTitle === "string" ? newTitle : pendingTitle,
+			},
+		});
 		setIsEditMode(false);
 	};
 
@@ -72,6 +82,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 		setPendingCategories(initialCategories);
 		setPendingVisibilitySettings(initialVisibility);
 		setPendingTitle(data?.title || "");
+		setPendingSummary(data?.ai_summary || "");
 		setIsEditMode(false);
 	};
 
@@ -157,6 +168,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 									if (isEditMode) {
 										setIsSaveModalOpen(true);
 									} else {
+										setPendingSummary(data?.ai_summary || "");
 										setIsEditMode(true);
 									}
 								}}
@@ -177,7 +189,9 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					knowledgeId={id}
 					knowledge={data}
 					knowledgeStatus={data?.status}
-					aiSummary={data?.ai_summary}
+					aiSummary={pendingSummary || data?.ai_summary}
+					summaryValue={pendingSummary}
+					onChangeSummary={setPendingSummary}
 					fileName={data?.file_name}
 					initialPrompt={(data?.metadata?.initial_prompt as string) || undefined}
 					files={(data?.metadata?.files as { file_name: string; summary: string }[]) || []}
