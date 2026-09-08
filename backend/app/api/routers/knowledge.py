@@ -1599,8 +1599,8 @@ async def edit_knowledge(
             vector_store=vector_store
         )
 
-    # Sync updates back to the DB row (Only for pending documents; approved documents stay untouched in DB until Approved)
-    if k_entry and k_entry.status != KnowledgeStatus.APPROVED:
+    # Sync updates back to the DB row for all documents (PENDING, APPROVED, etc.)
+    if k_entry:
         if payload.title:
             k_entry.title = payload.title
         if payload.summary:
