@@ -61,6 +61,14 @@ export function DoctorManageKnowledgeDialog({
 		);
 	});
 
+	const handleToggleAll = () => {
+		if (selectedIds.length > 0) {
+			setSelectedIds([]);
+		} else {
+			setSelectedIds(categories.map((c) => c.id));
+		}
+	};
+
 	return (
 		<Dialog open={isOpen} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-md p-0 flex flex-col gap-0 rounded-lg overflow-hidden bg-white border border-gray-200 shadow-none">
@@ -82,6 +90,22 @@ export function DoctorManageKnowledgeDialog({
 							className="pl-9 border-gray-200 bg-white focus-visible:ring-blue-500 text-sm h-10 rounded-lg"
 						/>
 					</div>
+
+					{/* Selection Controls */}
+					{categories.length > 0 && (
+						<div className="flex items-center justify-between px-1 text-xs text-zinc-500">
+							<span>
+								{selectedIds.length} of {categories.length} selected
+							</span>
+							<button
+								type="button"
+								onClick={handleToggleAll}
+								className="font-medium text-blue-600 hover:text-blue-700 transition-colors cursor-pointer"
+							>
+								{selectedIds.length > 0 ? "Unselect All" : "Select All"}
+							</button>
+						</div>
+					)}
 
 					{/* List of knowledge */}
 					<div className="flex flex-col gap-2.5 max-h-[50vh] overflow-y-auto pr-1">
