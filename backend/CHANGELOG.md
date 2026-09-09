@@ -8,6 +8,7 @@ All notable changes to the Arya Noble AI Chatbot Backend are documented in this 
 - **Title Fallback & Resolution (`app/rag/router.py`)**:
   - Updated `edit_approved_document` and `edit_pending_document` to robustly resolve `updated_title` prioritizing non-empty `request.title`, falling back to `existing_doc.get("title")` and then `file_name`.
   - Cascaded `updated_title` to `chunk.metadata["title"]` across all chunks during document edits.
+  - Harmonized chunk cascading in `edit_approved_document` with pending revision staging structure (`pending_doc_structure`).
 - **Database & Staging Title Consistency (`app/api/routers/knowledge.py`)**:
   - Ensured `k_entry.title` and `k_entry.metadata_["title"]` are both synchronized with updated title.
 

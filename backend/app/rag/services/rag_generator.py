@@ -214,8 +214,9 @@ B. UNTUK TREATMENT / PERAWATAN KLINIS:
   2. DILARANG KERAS menggunakan kata 'atau' atau garis miring (`/`) pada nama label tebal (seperti `Harga / SKU`, `Sesi / Durasi`, `Brand / Klinik`, `Deskripsi / Indikasi`). Pisahkan menjadi label tunggal tersendiri yang presisi.
   3. HANYA tampilkan label yang informasinya BENAR-BENAR TERSEDIA di dokumen referensi. Jika informasinya tidak tercantum dalam dokumen rujukan, OMITE / ABAYKAN DAN JANGAN TAMPILKAN baris tersebut.
 - ATURAN TONA BAHASA DOKTER (WARM & HUMANIZED CLINICAL PERSONA): Gunakan bahasa ramah, alami, dan empati (contoh: 'Untuk kulit berminyak, rekomendasi produk yang sangat cocok adalah **Nama Produk**.', 'Untuk masalah jerawat, perawatan yang dapat disarankan adalah **Nama Treatment**.'). DILARANG KERAS menggunakan frasa kaku seperti 'produk yang tercantum adalah', 'data yang ditemukan di database', atau 'dokumen yang tertera'.
-- ATURAN BARIS BARU BULLET POINT: Wajib memberikan BARIS BARU TERSENDIRI untuk setiap atribut tebal (seperti '- **Kategori**: ...'). DILARANG KERAS menempatkan bullet point '- **' di baris yang sama dengan kalimat paragraf.
 - ATURAN POSISI FOTO/GAMBAR: Tampilkan tag gambar Markdown `![Nama Item](URL_GAMBAR)` TEPAT DI BAWAH JUDUL NAMA ITEM (di atas rincian atribut tebal `- **Brand**: ...`, `- **Kategori**: ...`, dll) dengan baris kosong sebelum dan sesudahnya.
+- ATURAN TAMPILAN TABEL (MANDATORY TABLE FORMATTING): Jika menyajikan data dalam bentuk tabel Markdown, gambar/foto wajib ditempatkan di dalam sel tabel, dan KETERANGAN/CAPTION GAMBAR WAJIB DITULISKAN DI SEBELAH BAWAH GAMBAR di dalam sel tabel tersebut (contoh: `| ![Nama](URL)<br><sub>Keterangan Gambar</sub> |`). DILARANG menempatkan keterangan gambar di atas atau di samping gambar pada sel tabel.
+
 
 --- MODE 3: DOKUMEN PANDUAN / SOP DEPARTEMEN FUNGSIONAL & ADMIN ---
 Jika Admin atau Departemen Fungsional menanyakan SOP internal, panduan pengelolaan Knowledge Base, atau prosedur departemen:
@@ -687,11 +688,14 @@ class GenerationPipeline:
 
         anaphora_indicators = [
             r"\w+nya\b", r"\bnya\b", r"\bini\b", r"\bitu\b", r"\btersebut\b", r"\bdia\b", 
-            r"\bproduk ini\b", r"\btreatment ini\b", r"\btindakan ini\b",
+            r"\bproduk ini\b", r"\bproduk itu\b", r"\bproduk tersebut\b",
+            r"\btreatment ini\b", r"\btreatment tersebut\b", r"\btindakan ini\b", r"\btindakan tersebut\b",
+            r"\bdokumen ini\b", r"\bdokumen tersebut\b",
             r"\bcara pakai\b", r"\bcara penggunaan\b", r"\bkandungan\b", 
             r"\bkomposisi\b", r"\bharga\b", r"\befek samping\b", 
             r"\bkontraindikasi\b", r"\bdosis\b", r"\bberapa\b", r"\burutan\b",
-            r"\btahapan\b", r"\bprosedur\b"
+            r"\btahapan\b", r"\bprosedur\b",
+            r"\b(hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase|ganti|ubah|edit|tukar|salin|revisi|perbarui|modifikasi|perbaiki|gantikan|gantiin|update|pasang|set|sesuaikan)\b"
         ]
 
         has_anaphora = any(re.search(ind, clean_q) for ind in anaphora_indicators)
@@ -713,7 +717,7 @@ class GenerationPipeline:
             # 1. Check for bold title or heading: **Product/Treatment Name**
             bold_matches = re.findall(r'\*\*([A-Za-z0-9\s\.\-\/\+]{3,60})\*\*', content)
             if bold_matches:
-                ignore_labels = {"harga", "status", "dokumen id", "knowledge id", "catatan", "indikasi", "aturan pakai", "cara pakai", "perubahan", "nilai baru"}
+                ignore_labels = {"harga", "status", "dokumen id", "knowledge id", "catatan", "indikasi", "aturan pakai", "cara pakai", "perubahan", "nilai baru", "kategori", "sku"}
                 valid_bolds = [b.strip() for b in bold_matches if b.strip().lower() not in ignore_labels and len(b.strip()) >= 4]
                 if valid_bolds:
                     last_context = valid_bolds[0]
@@ -722,7 +726,7 @@ class GenerationPipeline:
             # 2. Check for markdown headings ### Heading
             heading_matches = re.findall(r'###\s*([A-Za-z0-9\s\.\-\/\+]{3,60})', content)
             if heading_matches:
-                ignore_h = {"diagnosis klinis", "perawatan", "produk", "catatan klinis", "pratinjau perubahan", "tahapan treatment"}
+                ignore_h = {"diagnosis klinis", "perawatan", "produk", "catatan klinis", "pratinjau perubahan", "tahapan treatment", "prosedur & langkah kerja"}
                 valid_headings = [h.strip() for h in heading_matches if h.strip().lower() not in ignore_h and len(h.strip()) >= 4]
                 if valid_headings:
                     last_context = valid_headings[0]
@@ -731,13 +735,16 @@ class GenerationPipeline:
             # 3. Check for image markdown label ![Label](http...)
             img_labels = re.findall(r'!\[([A-Za-z0-9\s\.\-\/\+]{3,60})\]\(', content)
             if img_labels:
-                last_context = img_labels[0].strip()
-                break
+                clean_img_lbl = img_labels[0].strip()
+                clean_img_lbl = re.sub(r'^(Foto\s+Treatment|Foto\s+Produk|Foto\s+Sebelum|Foto\s+Sesudah|Foto\s+Before\s+&\s+After)\s*[\-\:]?\s*', '', clean_img_lbl, flags=re.IGNORECASE).strip()
+                if len(clean_img_lbl) >= 3:
+                    last_context = clean_img_lbl
+                    break
 
             # 4. If user message, extract core query entity
             role = str(msg.get("role", "")).lower()
             if role in ("user", "admin"):
-                cleaned = re.sub(r'^(?:tolong|bisa|apakah|bagaimana|apa|mohon|info|tanya|jelaskan\s+tentang)\s+', '', content, flags=re.IGNORECASE)
+                cleaned = re.sub(r'^(?:tolong|bisa|apakah|bagaimana|apa|mohon|info|tanya|jelaskan\s+tentang|rekomendasi)\s+', '', content, flags=re.IGNORECASE)
                 clean_words = cleaned.split()[:5]
                 if clean_words:
                     candidate = " ".join(clean_words).strip("?.!,")
@@ -747,7 +754,12 @@ class GenerationPipeline:
 
         if last_context:
             logger.info(f"🔗 [Contextualize Query] Follow-up detected ('{query}') -> Contextualized with '{last_context}'")
+            # If query starts with an action verb (e.g. "hapus", "edit"), append context in parentheses to preserve leading verb
+            action_match = re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase|ganti|ubah|edit|tukar|salin|revisi|perbarui|modifikasi|perbaiki|gantikan|gantiin|update|pasang|set|sesuaikan)\b', clean_q, re.IGNORECASE)
+            if action_match:
+                return f"{query} ({last_context})"
             return f"{last_context} {query}"
+
 
         return query
 

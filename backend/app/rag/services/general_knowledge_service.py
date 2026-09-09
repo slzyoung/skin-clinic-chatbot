@@ -27,7 +27,7 @@ from app.rag.services.rag_retriever import parse_date_safely
 
 
 def resolve_approved_file(knowledge_id: str, output_dir: str = "data/output") -> Optional[str]:
-    """Resolves the physical JSON file path for an approved document."""
+    """Resolves the physical JSON file path for an approved document, hydrating from MinIO/DB if needed."""
     if not knowledge_id:
         return None
     k_id = str(knowledge_id).strip()
@@ -62,6 +62,57 @@ def resolve_approved_file(knowledge_id: str, output_dir: str = "data/output") ->
                     except Exception as err:
                         logger.debug(f"[DedicatedService] Error scanning file {f}: {err}")
 
+    # MinIO Source of Truth Hydration fallback
+    clean_p = os.path.join(output_dir, f"{k_id}.json")
+    try:
+        from app.services.storage import get_approved_json
+        approved_data = get_approved_json(k_id)
+        if approved_data:
+            os.makedirs(output_dir, exist_ok=True)
+            with open(clean_p, "w", encoding="utf-8") as fp:
+                json.dump(approved_data, fp, indent=4, ensure_ascii=False)
+            return clean_p
+    except Exception as e:
+        logger.debug(f"[DedicatedService] MinIO approved hydration note: {e}")
+
+    # PostgreSQL Database Hydration fallback
+    try:
+        from app.core.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE id::text = :k_id AND status = 'APPROVED' AND deleted_at IS NULL LIMIT 1"),
+                {"k_id": k_id}
+            ).fetchone()
+            if not row:
+                row = conn.execute(
+                    text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE (LOWER(title) = LOWER(:k_id) OR LOWER(file_name) = LOWER(:k_id)) AND status = 'APPROVED' AND deleted_at IS NULL LIMIT 1"),
+                    {"k_id": k_id}
+                ).fetchone()
+
+            if row:
+                row_id, title, fname, summary, meta_val = row[0], row[1], row[2], row[3], row[4]
+                m_dict = meta_val if isinstance(meta_val, dict) else (json.loads(meta_val) if isinstance(meta_val, str) else {})
+                doc = {
+                    "knowledge_id": str(row_id),
+                    "batch_id": m_dict.get("batch_id"),
+                    "file_name": fname or str(row_id),
+                    "title": title or fname or str(row_id),
+                    "status": "Approved",
+                    "summary": summary or "",
+                    "chunks": m_dict.get("chunks", []),
+                    "images": m_dict.get("images", []),
+                    "image_urls": m_dict.get("image_urls", []),
+                    "categories": m_dict.get("categories", []),
+                    "visibility_settings": m_dict.get("visibility_settings", {})
+                }
+                os.makedirs(output_dir, exist_ok=True)
+                with open(clean_p, "w", encoding="utf-8") as fp:
+                    json.dump(doc, fp, indent=4, ensure_ascii=False)
+                return clean_p
+    except Exception as db_e:
+        logger.debug(f"[DedicatedService] DB hydration fallback note: {db_e}")
+
     return None
 
 
@@ -90,37 +141,67 @@ class GeneralKnowledgeService:
         )
         explicit_uuid = uuid_matches[0].lower() if uuid_matches else None
 
-        # Extract explicit command structure: <action> <item> (dari|pada|di|dalam) <container>
-        container_candidate = None
-        explicit_item_candidate = None
-        cmd_match = re.search(
-            r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase|ubah|ganti|edit|tukar|salin|update|perbarui|revisi)\s+(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:dari|pada|di|dalam)\s+["\'“]?([^"\'”\n]+)["\'”]?',
+        # 1. Check for ingredient-based delete query:
+        # e.g.: "hapus seluruh produk dengan yang mengandung Hyaluronic Acid"
+        ingredient_delete_match = re.search(
+            r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase)\s+(?:seluruh|semua|setiap)?\s*(?:produk|item|barang|treatment)?\s*(?:dengan\s+)?(?:yang\s+)?(?:mengandung|ada\s+kandungan|kandungan|bahan|komposisi|berisi)\s+["\'“]?([^"\'”\n\?\.\(]+)',
             query,
             re.IGNORECASE
         )
-        if cmd_match:
-            explicit_item_candidate = cmd_match.group(1).strip()
-            container_candidate = cmd_match.group(2).strip()
-        else:
-            quote_match = re.search(r'["\'“]([^"\'”]+)["\'”]', query)
-            if quote_match:
-                explicit_item_candidate = quote_match.group(1).strip()
+        ingredient_filter = None
+        if ingredient_delete_match:
+            raw_ing = ingredient_delete_match.group(1).strip().strip('"\'“”`')
+            raw_ing = re.sub(r'\s+(?:dari|pada|di|dalam|ke)\s+.*$', '', raw_ing, flags=re.IGNORECASE).strip()
+            raw_ing = re.sub(r'[\s,\.]+(?:ya|dong|tolong|mohon|terima\s*kasih|thanks)$', '', raw_ing, flags=re.IGNORECASE).strip()
+            if len(raw_ing) > 1:
+                ingredient_filter = raw_ing
+
+        # 2. Check for edit with transition word:
+        # e.g.: "Ubah informasi kandungan Hyaluronic Acid menjadi Polyglutamic Acid (PGA) pada semua produk"
+        edit_trans_match = re.search(
+            r'\b(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi)\s+(?:informasi|data|bagian|detail)?\s*(kandungan|komposisi|ingredients|bahan|ukuran|harga|sku|nama|kategori|deskripsi)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:menjadi|jadi|ke|sebagai|=)\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s*(?:pada|di|dalam|untuk)?\s*(?:semua|seluruh|setiap)?\s*(?:produk|item|dokumen|kb|knowledge|data)?$',
+            query,
+            re.IGNORECASE
+        )
+        edit_target_candidate = None
+        if edit_trans_match:
+            edit_target_candidate = edit_trans_match.group(2).strip()
+            # Clean leading field or preposition words if captured
+            edit_target_candidate = re.sub(r'^(?:informasi|data|bagian|detail|kandungan|komposisi|ingredients|bahan|ukuran|harga|sku|nama|kategori|deskripsi)\s+', '', edit_target_candidate, flags=re.IGNORECASE).strip()
+
+        # 3. Standard command extraction
+        container_candidate = None
+        explicit_item_candidate = ingredient_filter or edit_target_candidate
+        action_verbs_regex = r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase|ubah|ganti|edit|tukar|salin|revisi|pembaruan|perbarui|modifikasi|perbaiki|gantikan|gantiin|update|pasang|set|sesuaikan)\b'
+        
+        if not explicit_item_candidate:
+            cmd_match = re.search(
+                rf'{action_verbs_regex}\s+(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:dari|pada|di|dalam)\s+["\'“]?([^"\'”\n]+)["\'”]?',
+                query,
+                re.IGNORECASE
+            )
+            if cmd_match:
+                explicit_item_candidate = cmd_match.group(1).strip()
+                container_candidate = cmd_match.group(2).strip()
             else:
-                keyword_match = re.search(
-                    r'\b(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)\s+([a-zA-Z0-9\s&+\-_/]+?)(?:\s+(?:pada|di|dari|dalam|menjadi|ke|sebagai)\b|$)',
-                    query,
-                    re.IGNORECASE
-                )
-                if keyword_match:
-                    candidate = keyword_match.group(1).strip()
-                    if len(candidate) > 2 and candidate.lower() not in ("dokumen", "doc", "kb", "knowledge"):
-                        explicit_item_candidate = candidate
+                quote_match = re.search(r'["\'“]([^"\'”]+)["\'”]', query)
+                if quote_match:
+                    explicit_item_candidate = quote_match.group(1).strip()
+                else:
+                    keyword_match = re.search(
+                        r'\b(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)\s+([a-zA-Z0-9\s&+\-_/]+?)(?:\s+(?:pada|di|dari|dalam|menjadi|ke|sebagai)\b|$)',
+                        query,
+                        re.IGNORECASE
+                    )
+                    if keyword_match:
+                        candidate = keyword_match.group(1).strip()
+                        if len(candidate) > 2 and candidate.lower() not in ("dokumen", "doc", "kb", "knowledge", "tersebut", "ini", "itu"):
+                            explicit_item_candidate = candidate
 
         # Clean core entity extraction for edit/update patterns:
-        # e.g.: "edit ukuran ERHA Acneact Gentle Acne Moisturizer ke 40 g"
         if not explicit_item_candidate:
             core = re.sub(
-                r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi|hapus|delete|hilangkan|remove|buang|bersihkan)\s+',
+                rf'^\s*(?:tolong\s+|mohon\s+|coba\s+)?{action_verbs_regex}\s+',
                 '',
                 query,
                 flags=re.IGNORECASE
@@ -154,6 +235,12 @@ class GeneralKnowledgeService:
             if len(core) > 2 and not re.match(r'^[0-9a-fA-F\-]{10,}$', core):
                 explicit_item_candidate = core
 
+        # Filter out purely anaphoric terms from explicit_item_candidate
+        if explicit_item_candidate:
+            anaphoric_clean = explicit_item_candidate.lower().strip()
+            if anaphoric_clean in ("tersebut", "produk tersebut", "item tersebut", "dokumen tersebut", "ini", "itu", "nya", "produk ini", "produk itu"):
+                explicit_item_candidate = None
+
         search_folders = [output_dir, os.path.join("backend", output_dir)]
         seen_doc_ids = set()
         matched_docs = []
@@ -179,6 +266,20 @@ class GeneralKnowledgeService:
                     doc_title = str(doc.get("title") or doc.get("file_name") or "")
                     file_name = str(doc.get("file_name") or "")
                     summary = str(doc.get("summary") or "")
+                    batch_summary = str(doc.get("batch_summary") or "")
+
+                    # Document's own content corpus (summary + chunks)
+                    doc_own_corpus = summary
+                    for chunk in doc.get("chunks", []):
+                        if isinstance(chunk, dict):
+                            doc_own_corpus += "\n" + str(chunk.get("text", ""))
+
+                    # Full text corpus including batch and staging
+                    full_text_corpus = doc_own_corpus + "\n" + batch_summary
+                    if doc.get("staging_history") and isinstance(doc.get("staging_history"), list):
+                        for t in doc.get("staging_history"):
+                            if isinstance(t, dict) and t.get("role") == "assistant":
+                                full_text_corpus += "\n" + str(t.get("content", ""))
 
                     # Collect candidate items/sections from this document
                     doc_candidates = []
@@ -188,9 +289,9 @@ class GeneralKnowledgeService:
                             doc_candidates.append(v.strip())
 
                     # Headings in summary
-                    for h in re.findall(r'^#{1,4}\s+([^\n\r]+)', summary, re.MULTILINE):
+                    for h in re.findall(r'^#{1,4}\s+([^\n\r]+)', full_text_corpus, re.MULTILINE):
                         h_clean = re.sub(r'[\*\_]', '', h).strip()
-                        if len(h_clean) > 2:
+                        if len(h_clean) > 2 and h_clean.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
                             doc_candidates.append(h_clean)
 
                     # Chunks metadata
@@ -216,14 +317,59 @@ class GeneralKnowledgeService:
                     score = 0
                     match_type = "mention"
                     matched_item_for_doc = None
+                    target_sub_items = []
 
                     # 1. Explicit UUID in prompt matches this doc
                     if explicit_uuid and (explicit_uuid == doc_id.lower()):
                         score += 1000
                         match_type = "explicit_uuid"
 
-                    # 2. Check explicit item candidate against document title / filename
-                    if explicit_item_candidate:
+                    # 2. Ingredient filter match (e.g. "Hyaluronic Acid", "Retinol", "BHA")
+                    # Check document's own corpus so cross-document batch summaries don't cause false positives
+                    if ingredient_filter:
+                        ing_low = ingredient_filter.lower()
+                        ing_regex = re.compile(rf'\b{re.escape(ing_low)}\b', re.IGNORECASE)
+                        if ing_regex.search(doc_own_corpus):
+                            score += 450
+                            match_type = "ingredient_match"
+                            # Identify specific product sections containing this ingredient
+                            sections = re.split(r'(?=^#{1,3}\s+)', full_text_corpus, flags=re.MULTILINE)
+                            for s in sections:
+                                m_h = re.match(r'^#{1,3}\s+([^\n]+)', s)
+                                if m_h:
+                                    h_name = re.sub(r'[\*\_]', '', m_h.group(1)).strip()
+                                    if ing_regex.search(s) and h_name.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
+                                        target_sub_items.append(h_name)
+
+                            # Also check markdown table rows for product name
+                            for line in full_text_corpus.splitlines():
+                                if ing_regex.search(line) and "|" in line:
+                                    cols = [c.strip() for c in line.split("|") if c.strip()]
+                                    for col in cols:
+                                        col_clean = re.sub(r'!\[.*?\]\(.*?\)', '', col).strip()
+                                        if len(col_clean) > 3 and not col_clean.startswith("http") and not col_clean.startswith("/api/storage"):
+                                            if any(kw in col_clean.lower() for kw in ["erha", "serum", "gel", "cream", "wash", "lotion", "moisturizer", "toner", "sabun"]):
+                                                target_sub_items.append(col_clean)
+                                                break
+
+                            # Deduplicate preserving order
+                            seen_items = set()
+                            unique_sub_items = []
+                            for it in target_sub_items:
+                                if it.lower() not in seen_items:
+                                    seen_items.add(it.lower())
+                                    unique_sub_items.append(it)
+
+                            if unique_sub_items:
+                                matched_item_for_doc = ", ".join(unique_sub_items)
+                            else:
+                                matched_item_for_doc = f"Produk dengan kandungan {ingredient_filter}"
+
+                            if not resolved_entity_name:
+                                resolved_entity_name = matched_item_for_doc
+
+                    # 3. Check explicit item candidate against document title / filename / candidates / summary
+                    elif explicit_item_candidate:
                         cand_low = explicit_item_candidate.lower()
                         # Exact or strong title match -> Dedicated document!
                         if cand_low == doc_title.lower() or cand_low in doc_title.lower() or cand_low in file_name.lower().replace("_", " "):
@@ -244,7 +390,13 @@ class GeneralKnowledgeService:
                                     resolved_entity_name = c
                                 break
 
-                    # 3. Check query text against document title or unique candidates
+                        # Content / ingredient match in summary or batch_summary
+                        if score == 0 and (cand_low in full_text_corpus.lower()):
+                            score += 150 + len(explicit_item_candidate)
+                            match_type = "content_mention"
+                            matched_item_for_doc = explicit_item_candidate
+
+                    # 4. Check query text against document title or unique candidates
                     if score == 0:
                         if doc_title and len(doc_title) > 3 and doc_title.lower() in q_lower:
                             score += 300 + len(doc_title)
@@ -280,14 +432,17 @@ class GeneralKnowledgeService:
                 except Exception as e:
                     logger.debug(f"[DedicatedService] scan error {f}: {e}")
 
-        # DB Hydration fallback: scan active PostgreSQL Knowledge records if disk scan yields no matches
+        # DB Hydration fallback: scan active APPROVED PostgreSQL Knowledge records if disk scan yields no matches
         if not matched_docs:
             try:
-                from app.models.knowledge import Knowledge
-                from sqlalchemy import select
+                from app.models.knowledge import Knowledge, KnowledgeStatus
+                from sqlalchemy import select, or_
 
                 async def _scan_db(session):
-                    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None))
+                    stmt = select(Knowledge).where(
+                        or_(Knowledge.status == KnowledgeStatus.APPROVED, Knowledge.status == 'APPROVED'),
+                        Knowledge.deleted_at.is_(None)
+                    )
                     res = await session.execute(stmt)
                     return res.scalars().all()
 
@@ -332,6 +487,17 @@ class GeneralKnowledgeService:
                     if explicit_uuid and (explicit_uuid == doc_id.lower()):
                         score += 1000
                         match_type = "explicit_uuid"
+
+                    if ingredient_filter:
+                        ing_low = ingredient_filter.lower()
+                        ing_regex = re.compile(rf'\b{re.escape(ing_low)}\b', re.IGNORECASE)
+                        full_txt = summary + " " + doc_title
+                        if ing_regex.search(full_txt):
+                            score += 450
+                            match_type = "ingredient_match"
+                            matched_item_for_doc = f"Produk dengan kandungan {ingredient_filter}"
+                            if not resolved_entity_name:
+                                resolved_entity_name = matched_item_for_doc
 
                     if explicit_item_candidate:
                         cand_low = explicit_item_candidate.lower()
@@ -521,7 +687,8 @@ class GeneralKnowledgeService:
         bm25_index=None,
         pipeline=None,
         target_item: Optional[str] = None,
-        db=None
+        db=None,
+        auto_approve: bool = True
     ) -> Dict[str, Any]:
         """
         Applies a surgical, item-level edit to an approved KB document.
@@ -675,6 +842,11 @@ class GeneralKnowledgeService:
                         curr_summary = bullet_key_pattern.sub(rf'\g<1>{formatted_val}', curr_summary)
                         existing_doc["summary"] = curr_summary
 
+                    # 1D. Ingredient / keyword replacement across summary:
+                    if clean_item_name and clean_item_name.lower() in curr_summary.lower():
+                        curr_summary = re.sub(rf'\b{re.escape(clean_item_name)}\b', formatted_val, curr_summary, flags=re.IGNORECASE)
+                        existing_doc["summary"] = curr_summary
+
             # 2. Update matching chunks
             for chunk in chunks:
                 if not isinstance(chunk, dict):
@@ -685,6 +857,12 @@ class GeneralKnowledgeService:
 
                 chunk_text = chunk.get("text", "")
                 chunk_text_lower = chunk_text.lower()
+
+                # Replace direct ingredient / keyword in chunk text if present
+                if clean_item_name and clean_item_name.lower() in chunk_text_lower:
+                    chunk["text"] = re.sub(rf'\b{re.escape(clean_item_name)}\b', formatted_val, chunk_text, flags=re.IGNORECASE)
+                    chunk_text = chunk["text"]
+                    chunk_text_lower = chunk_text.lower()
 
                 # If target_item is specified, skip chunks that do not belong to this item
                 if target_item_lower and target_item_lower not in chunk_text_lower:
@@ -779,42 +957,168 @@ class GeneralKnowledgeService:
                             except Exception:
                                 pass
 
-            # Save local JSON file
-            with open(approved_file, "w", encoding="utf-8") as f:
-                json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+            if auto_approve:
+                # AUTO-APPROVE: General Prompt confirm → overwrite approved file, re-ingest immediately
+                existing_doc["status"] = "Approved"
+                existing_doc.pop("is_revision", None)
 
-            # Re-index PGVector
-            if vector_store:
-                logger.info(f"[DedicatedService] Re-indexing PGVector for '{doc_kid}'...")
-                vector_store.delete_document(doc_kid)
-                vector_store.insert_chunks(chunks)
+                # 1. Overwrite data/output/{doc_kid}.json
+                os.makedirs("data/output", exist_ok=True)
+                with open(approved_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_doc, f, indent=4, ensure_ascii=False)
 
-            # Re-index BM25
-            if bm25_index:
-                logger.info(f"[DedicatedService] Re-indexing BM25 for '{doc_kid}'...")
-                bm25_index.remove_file_chunks(doc_kid)
-                bm25_index.add_chunks(chunks)
-                bm25_index.save(settings.bm25_index_path)
+                # 2. Re-chunk from updated summary for vector + BM25 indexing
+                doc_chunks = existing_doc.get("chunks", [])
+                updated_summary = existing_doc.get("summary", "")
+                if updated_summary and updated_summary.strip():
+                    try:
+                        from app.rag.utils.summary_chunker import chunk_summary_markdown
+                        doc_img_url = existing_doc.get("image_url") or (
+                            existing_doc.get("image_urls", [None])[0]
+                            if existing_doc.get("image_urls") else None
+                        )
+                        raw_cats = existing_doc.get("categories") or existing_doc.get("suggested_categories") or []
+                        parsed_cats = []
+                        if isinstance(raw_cats, list):
+                            for c in raw_cats:
+                                if isinstance(c, dict) and "name" in c:
+                                    parsed_cats.append(c["name"])
+                                elif isinstance(c, str):
+                                    parsed_cats.append(c)
+                        vis_settings = existing_doc.get("visibility_settings") or {
+                            "clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]
+                        }
+                        doc_chunks = chunk_summary_markdown(
+                            summary=updated_summary,
+                            source_file=existing_doc.get("file_name", doc_kid),
+                            knowledge_id=doc_kid,
+                            batch_id=existing_doc.get("batch_id"),
+                            file_hash=existing_doc.get("file_hash", ""),
+                            title=existing_doc.get("title", doc_kid),
+                            doc_type=existing_doc.get("document_type", "GENERAL"),
+                            categories=parsed_cats,
+                            valid_from=str(existing_doc.get("valid_from", "")).strip() or None,
+                            valid_until=str(existing_doc.get("valid_until", "")).strip() or None,
+                            visibility_settings=vis_settings,
+                            default_image_url=doc_img_url,
+                        )
+                        existing_doc["chunks"] = doc_chunks
+                        # Re-save with updated chunks
+                        with open(approved_file, "w", encoding="utf-8") as f:
+                            json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+                        logger.info(f"[DedicatedService] Re-chunked summary into {len(doc_chunks)} chunks for '{doc_kid}'")
+                    except Exception as rechunk_err:
+                        logger.warning(f"[DedicatedService] Re-chunking failed, using existing chunks: {rechunk_err}")
 
-            # Sync MinIO approved JSON
-            try:
-                from app.services.storage import upload_approved_json
-                upload_approved_json(doc_kid, existing_doc)
-            except Exception as s3_err:
-                logger.debug(f"[DedicatedService] MinIO approved sync note: {s3_err}")
+                # 3. Re-ingest into Vector Store (delete old → insert new)
+                v_store = vector_store
+                if not v_store and pipeline:
+                    v_store = pipeline.vector_store
+                if not v_store:
+                    try:
+                        from app.rag.services.vector_store import PGVectorAdapter
+                        v_store = PGVectorAdapter()
+                    except Exception:
+                        pass
+                if v_store:
+                    try:
+                        v_store.delete_document(doc_kid)
+                        file_name = existing_doc.get("file_name", "")
+                        if file_name and file_name != doc_kid:
+                            v_store.delete_document(file_name)
+                    except Exception as del_err:
+                        logger.debug(f"[DedicatedService] Vector pre-delete note: {del_err}")
+                    if doc_chunks:
+                        try:
+                            v_store.insert_chunks(doc_chunks)
+                            logger.info(f"[DedicatedService] Re-indexed {len(doc_chunks)} chunks in vector store for '{doc_kid}'")
+                        except Exception as ins_err:
+                            logger.error(f"[DedicatedService] Vector insert failed: {ins_err}")
 
-            # Sync PostgreSQL Knowledge DB record directly and commit
-            await GeneralKnowledgeService.sync_knowledge_db(doc_kid, existing_doc=existing_doc, db=db)
+                # 4. Re-ingest into BM25 Index
+                bm25_inst = bm25_index
+                if not bm25_inst:
+                    try:
+                        from app.rag.services.rag_retriever import BM25Index
+                        bm25_inst = BM25Index()
+                        if os.path.exists(settings.bm25_index_path):
+                            bm25_inst.load(settings.bm25_index_path)
+                    except Exception:
+                        pass
+                if bm25_inst:
+                    try:
+                        bm25_inst.remove_file_chunks(doc_kid)
+                        file_name = existing_doc.get("file_name", "")
+                        if file_name and file_name != doc_kid:
+                            bm25_inst.remove_file_chunks(file_name)
+                    except Exception as bm25_del_err:
+                        logger.debug(f"[DedicatedService] BM25 pre-delete note: {bm25_del_err}")
+                    if doc_chunks:
+                        try:
+                            bm25_inst.add_chunks(doc_chunks)
+                            os.makedirs(os.path.dirname(settings.bm25_index_path), exist_ok=True)
+                            bm25_inst.save(settings.bm25_index_path)
+                            logger.info(f"[DedicatedService] Re-indexed {len(doc_chunks)} chunks in BM25 for '{doc_kid}'")
+                        except Exception as bm25_ins_err:
+                            logger.error(f"[DedicatedService] BM25 insert failed: {bm25_ins_err}")
 
-            logger.info(f"[DedicatedService] Successfully applied edit to '{doc_kid}' field='{field}' target_item='{target_item}'")
-            return {
-                "success": True,
-                "knowledge_id": doc_kid,
-                "field": field,
-                "target_item": target_item,
-                "old_value": str(old_value)[:200] if old_value else None,
-                "new_value": str(new_value)[:200]
-            }
+                # 5. Sync PostgreSQL Knowledge record
+                try:
+                    await GeneralKnowledgeService.sync_knowledge_db(doc_kid, existing_doc=existing_doc, db=db)
+                except Exception as db_err:
+                    logger.debug(f"[DedicatedService] DB sync note: {db_err}")
+
+                # 6. Upload approved JSON to MinIO approved bucket
+                try:
+                    from app.services.storage import promote_staging_to_approved
+                    promote_staging_to_approved(doc_kid, existing_doc)
+                except Exception as s3_err:
+                    logger.debug(f"[DedicatedService] MinIO approved sync note: {s3_err}")
+
+                # 7. Clean up any stale pending file
+                pending_cleanup = os.path.join("data/pending", f"{doc_kid}.json")
+                if os.path.exists(pending_cleanup):
+                    try:
+                        os.remove(pending_cleanup)
+                    except Exception:
+                        pass
+
+                logger.info(f"[DedicatedService] Auto-approved edit for '{doc_kid}'. Data immediately retrievable by RAG.")
+                return {
+                    "success": True,
+                    "knowledge_id": doc_kid,
+                    "field": field,
+                    "target_item": target_item,
+                    "old_value": str(old_value)[:200] if old_value else None,
+                    "new_value": str(new_value)[:200],
+                    "message": f"Perubahan pada '{target_item or doc_kid}' berhasil diterapkan dan langsung aktif di RAG."
+                }
+            else:
+                # PENDING DRAFT: Dashboard Admin edit → Priority 4 versioning rule
+                existing_doc["status"] = "On review"
+                existing_doc["is_revision"] = True
+                os.makedirs("data/pending", exist_ok=True)
+                pending_file = os.path.join("data/pending", f"{doc_kid}.json")
+                with open(pending_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_doc, f, indent=4, ensure_ascii=False)
+
+                try:
+                    from app.services.storage import upload_staging_json
+                    upload_staging_json(doc_kid, existing_doc)
+                except Exception as s3_err:
+                    logger.debug(f"[DedicatedService] MinIO staging sync note: {s3_err}")
+
+                logger.info(f"[DedicatedService] Staged edit revision for '{doc_kid}' to pending queue (status: 'On review'). Active approved document remains searchable until approved.")
+                return {
+                    "success": True,
+                    "knowledge_id": doc_kid,
+                    "field": field,
+                    "target_item": target_item,
+                    "old_value": str(old_value)[:200] if old_value else None,
+                    "new_value": str(new_value)[:200],
+                    "message": f"Perubahan pada '{target_item or doc_kid}' berhasil disimpan sebagai draft peninjauan (PENDING). Dokumen aktif tetap diretrieve RAG sampai diapprove."
+                }
+
 
         except Exception as e:
             logger.error(f"[DedicatedService] Failed to apply edit for '{knowledge_id}': {e}")
@@ -848,63 +1152,161 @@ class GeneralKnowledgeService:
                     existing_doc = json.load(f)
 
                 doc_kid = str(existing_doc.get("knowledge_id") or knowledge_id)
+                summary = existing_doc.get("summary", "")
+
+                # Build list of specific items to delete (supports comma-separated or ingredient queries)
+                delete_targets = []
+                if "," in target_item:
+                    for s in target_item.split(","):
+                        s_clean = s.strip()
+                        if s_clean and not s_clean.lower().startswith("produk dengan kandungan"):
+                            delete_targets.append(s_clean)
+
+                ing_m = re.search(r'(?:produk\s+(?:dengan\s+)?(?:yang\s+)?(?:mengandung|kandungan|bahan)\s+|kandungan\s+)(.+)', target_item, re.IGNORECASE)
+                ing_keyword = ing_m.group(1).strip().lower() if ing_m else None
+                if not ing_keyword and len(target_item_clean.split()) <= 4 and target_item_clean.lower() not in (str(existing_doc.get("title", "")).lower(), str(existing_doc.get("file_name", "")).lower()):
+                    ing_keyword = target_item_clean.lower()
+
+                # If ingredient keyword is present, collect all specific product names containing it
+                if ing_keyword:
+                    corpus = summary + " " + str(existing_doc.get("batch_summary", ""))
+                    if existing_doc.get("staging_history") and isinstance(existing_doc.get("staging_history"), list):
+                        for t in existing_doc.get("staging_history"):
+                            if isinstance(t, dict) and t.get("role") == "assistant":
+                                corpus += "\n" + str(t.get("content", ""))
+                    ing_re = re.compile(rf'\b{re.escape(ing_keyword)}\b', re.IGNORECASE)
+                    for line in corpus.splitlines():
+                        if ing_re.search(line):
+                            # Check for heading
+                            m_h = re.match(r'^#{1,3}\s+([^\n]+)', line)
+                            if m_h:
+                                h_name = re.sub(r'[\*\_]', '', m_h.group(1)).strip()
+                                if len(h_name) > 2 and h_name.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
+                                    delete_targets.append(h_name)
+                            # Check for bullet or table row product name
+                            m_b = re.match(r'^[|\-\*]\s*([^\n|→]+?)(?:\s*→|\s*\||\s*:\s*Sabun|\s*:\s*Pelembap|\s*:\s*Perawatan)', line)
+                            if m_b:
+                                b_name = re.sub(r'[\*\_#]', '', m_b.group(1)).strip()
+                                if len(b_name) > 3 and not b_name.lower().startswith("http") and not b_name.lower().startswith("/api/storage"):
+                                    delete_targets.append(b_name)
+
+                if not delete_targets:
+                    delete_targets = [target_item_clean]
+
+                # Deduplicate delete_targets
+                unique_delete_targets = []
+                seen_dt = set()
+                for dt in delete_targets:
+                    if dt.lower() not in seen_dt:
+                        seen_dt.add(dt.lower())
+                        unique_delete_targets.append(dt)
+                delete_targets = unique_delete_targets
+
                 original_chunks = existing_doc.get("chunks", [])
                 filtered_chunks = []
                 removed_count = 0
+                ing_re = re.compile(rf'\b{re.escape(ing_keyword)}\b', re.IGNORECASE) if ing_keyword else None
 
                 for chunk in original_chunks:
                     chunk_text = chunk.get("text", "") if isinstance(chunk, dict) else ""
                     chunk_lower = chunk_text.lower()
-                    if target_item_lower in chunk_lower or re.sub(r'[\*\_#]', '', chunk_lower).find(target_item_lower) != -1:
-                        meta = chunk.get("metadata", {})
-                        meta_match = (
-                            target_item_lower == str(meta.get("product_name", "")).lower()
-                            or target_item_lower == str(meta.get("title", "")).lower()
-                            or target_item_lower == str(meta.get("section", "")).lower()
-                            or target_item_lower == str(meta.get("heading", "")).lower()
-                        )
-                        escaped_name = re.escape(target_item_clean)
-                        has_heading = bool(re.search(rf'^#{1,4}\s*[^\n]*{escaped_name}', chunk_text, re.MULTILINE | re.IGNORECASE))
+                    meta = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
 
-                        line_pattern = re.compile(rf'^[|\-\*\d\.]*\s*[^\n]*{escaped_name}[^\n]*$\n?', re.MULTILINE | re.IGNORECASE)
-                        new_chunk_text = line_pattern.sub('', chunk_text).strip()
+                    # Check if chunk matches any delete target or ingredient
+                    should_remove = False
+                    for dt in delete_targets:
+                        dt_low = dt.lower()
+                        if dt_low in chunk_lower or re.sub(r'[\*\_#]', '', chunk_lower).find(dt_low) != -1:
+                            should_remove = True
+                            break
+                        if dt_low in (str(meta.get("product_name", "")).lower(), str(meta.get("title", "")).lower(), str(meta.get("section", "")).lower(), str(meta.get("heading", "")).lower()):
+                            should_remove = True
+                            break
 
-                        if meta_match or has_heading or len(new_chunk_text) < 30:
-                            removed_count += 1
-                        else:
-                            chunk_copy = dict(chunk)
-                            chunk_copy["text"] = new_chunk_text
-                            filtered_chunks.append(chunk_copy)
-                            removed_count += 1
+                    if not should_remove and ing_re and ing_re.search(chunk_lower):
+                        should_remove = True
+
+                    if should_remove:
+                        removed_count += 1
                     else:
                         filtered_chunks.append(chunk)
 
+                # Helper to clean markdown sections, bullets, and table rows
+                def _clean_md(text: str, targets: list[str], ing_kw: Optional[str]) -> str:
+                    if not text:
+                        return ""
+                    res = text
+                    for t in targets:
+                        if not t or len(t.strip()) < 2:
+                            continue
+                        esc = re.escape(t.strip())
+                        res = re.sub(
+                            r'(?:^|\n)(#{1,4}\s*[^\n]*' + esc + r'[^\n]*\n(?:(?!^#{1,4}\s)[^\n]*\n?)*)',
+                            '\n',
+                            res,
+                            flags=re.MULTILINE | re.IGNORECASE
+                        )
+                        res = re.sub(
+                            rf'^[|\-\*\d\.]+\s*[^\n]*{esc}[^\n]*$\n?',
+                            '',
+                            res,
+                            flags=re.MULTILINE | re.IGNORECASE
+                        )
+                    if ing_kw and len(ing_kw.strip()) > 1:
+                        esc_ing = re.escape(ing_kw.strip())
+                        res = re.sub(
+                            rf'^[|\-\*\d\.]+\s*[^\n]*\b{esc_ing}\b[^\n]*$\n?',
+                            '',
+                            res,
+                            flags=re.MULTILINE | re.IGNORECASE
+                        )
+                    return re.sub(r'\n{3,}', '\n\n', res).strip()
+
+                # Clean summary
+                if summary:
+                    existing_doc["summary"] = _clean_md(summary, delete_targets, ing_keyword)
+
+                # Clean batch_summary
+                if existing_doc.get("batch_summary"):
+                    existing_doc["batch_summary"] = _clean_md(existing_doc["batch_summary"], delete_targets, ing_keyword)
+                    if "metadata" in existing_doc and isinstance(existing_doc["metadata"], dict):
+                        existing_doc["metadata"]["batch_summary"] = existing_doc["batch_summary"]
+
+                # Clean staging_history
+                for hist_key in ("staging_history", "history"):
+                    if hist_key in existing_doc and isinstance(existing_doc[hist_key], list):
+                        for turn in existing_doc[hist_key]:
+                            if isinstance(turn, dict) and turn.get("role") == "assistant":
+                                orig_c = turn.get("content", "")
+                                if orig_c:
+                                    turn["content"] = _clean_md(orig_c, delete_targets, ing_keyword)
+
                 existing_doc["chunks"] = filtered_chunks
 
-                # Remove target item section from summary
-                summary = existing_doc.get("summary", "")
-                if summary and target_item_lower in summary.lower():
-                    escaped_name = re.escape(target_item_clean)
-                    section_pattern = re.compile(
-                        r'(?:^|\n)(#{1,4}\s*[^\n]*' + escaped_name + r'[^\n]*\n(?:(?!^#{1,4}\s)[^\n]*\n?)*)',
-                        re.MULTILINE | re.IGNORECASE
-                    )
-                    summary = section_pattern.sub('\n', summary)
-                    line_pattern = re.compile(
-                        rf'^[|\-\*]\s*[^\n]*{escaped_name}[^\n]*$\n?',
-                        re.MULTILINE | re.IGNORECASE
-                    )
-                    summary = line_pattern.sub('', summary)
-                    summary = re.sub(r'\n{3,}', '\n\n', summary).strip()
-                    existing_doc["summary"] = summary
-
-                if summary:
-                    for hist_key in ("staging_history", "history"):
-                        if hist_key in existing_doc and isinstance(existing_doc[hist_key], list) and existing_doc[hist_key]:
-                            for turn in reversed(existing_doc[hist_key]):
-                                if isinstance(turn, dict) and turn.get("role") == "assistant":
-                                    turn["content"] = summary
-                                    break
+                if not filtered_chunks:
+                    # All chunks were removed -> Full document deletion
+                    if approved_file and os.path.exists(approved_file):
+                        try:
+                            os.remove(approved_file)
+                        except Exception:
+                            pass
+                    if vector_store:
+                        vector_store.delete_document(doc_kid)
+                    if bm25_index:
+                        bm25_index.remove_file_chunks(doc_kid)
+                        bm25_index.save(settings.bm25_index_path)
+                    try:
+                        from app.services.storage import delete_knowledge_images_and_assets
+                        delete_knowledge_images_and_assets(doc_kid, doc_data=existing_doc)
+                    except Exception as s3_err:
+                        logger.debug(f"[DedicatedService] MinIO delete note: {s3_err}")
+                    await GeneralKnowledgeService.sync_knowledge_db(doc_kid, deleted=True, db=db)
+                    return {
+                        "success": True,
+                        "knowledge_id": doc_kid,
+                        "target_item": target_item_clean,
+                        "title": f"Seluruh item ({', '.join(delete_targets)}) dan dokumen '{doc_kid}' berhasil dihapus dari basis pengetahuan."
+                    }
 
                 with open(approved_file, "w", encoding="utf-8") as f:
                     json.dump(existing_doc, f, indent=4, ensure_ascii=False)
