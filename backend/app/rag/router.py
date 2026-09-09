@@ -3086,7 +3086,7 @@ async def edit_approved_document(
 
         updated_summary = request.summary if request.summary is not None else existing_doc.get("summary", "")
         updated_categories = request.categories if (request.categories is not None and len(request.categories) > 0) else existing_doc.get("categories", [])
-        updated_title = request.title if request.title is not None else existing_doc.get("file_name", knowledge_id)
+        updated_title = (request.title.strip() if (request.title and request.title.strip()) else None) or existing_doc.get("title") or existing_doc.get("file_name", knowledge_id)
         updated_doc_type = request.document_type if request.document_type is not None else existing_doc.get("document_type")
         updated_valid_from = request.valid_from if request.valid_from is not None else existing_doc.get("valid_from")
         updated_valid_until = request.valid_until if request.valid_until is not None else existing_doc.get("valid_until")
@@ -3098,7 +3098,9 @@ async def edit_approved_document(
             "doctors": ["all"]
         })
 
-        if updated_summary and updated_summary.strip():
+        if request.chunks is not None and len(request.chunks) > 0:
+            updated_chunks = request.chunks
+        elif updated_summary and updated_summary.strip():
             try:
                 from app.rag.utils.summary_chunker import chunk_summary_markdown
                 updated_chunks = chunk_summary_markdown(
@@ -3114,6 +3116,18 @@ async def edit_approved_document(
                 )
             except Exception as rechunk_err:
                 logger.warning(f"Update approved re-chunking failed: {rechunk_err}")
+
+        # Cascade document-level title and visibility settings to all chunk metadata
+        if isinstance(updated_chunks, list):
+            for ch in updated_chunks:
+                if isinstance(ch, dict):
+                    if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                        ch["metadata"] = {}
+                    ch["metadata"]["title"] = updated_title
+                    ch["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
+                    ch["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
+                    ch["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
+                    ch["metadata"]["visibility_settings"] = vis_settings
 
         approved_doc_structure = {
             "knowledge_id": knowledge_id,
@@ -3265,7 +3279,9 @@ async def edit_pending_document(
         existing_doc["visibility_settings"] = vis_settings
 
         str_categories = [c["name"] if isinstance(c, dict) else c for c in normalized_categories]
-        if updated_summary and updated_summary.strip():
+        if request.chunks is not None and len(request.chunks) > 0:
+            existing_doc["chunks"] = request.chunks
+        elif updated_summary and updated_summary.strip():
             try:
                 from app.rag.utils.summary_chunker import chunk_summary_markdown
                 updated_chunks = chunk_summary_markdown(
@@ -3282,6 +3298,18 @@ async def edit_pending_document(
                 existing_doc["chunks"] = updated_chunks
             except Exception as rechunk_err:
                 logger.warning(f"Update pending re-chunking failed: {rechunk_err}")
+
+        # Cascade document-level title and visibility settings to all chunk metadata
+        if isinstance(existing_doc.get("chunks"), list):
+            for ch in existing_doc["chunks"]:
+                if isinstance(ch, dict):
+                    if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                        ch["metadata"] = {}
+                    ch["metadata"]["title"] = updated_title
+                    ch["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
+                    ch["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
+                    ch["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
+                    ch["metadata"]["visibility_settings"] = vis_settings
 
         with open(pending_file, "w", encoding="utf-8") as f:
             json.dump(existing_doc, f, indent=4, ensure_ascii=False)
@@ -3931,7 +3959,17 @@ async def approve_document(
                 "doctors": ["all"]
             }
 
-            if approve_summary and approve_summary.strip():
+            # If chunks already exist with custom or per-section categories, preserve them;
+            # otherwise, re-chunk from the summary for fresh structural indexing.
+            has_custom_chunks = False
+            if isinstance(chunks, list) and len(chunks) > 0:
+                has_custom_chunks = any(
+                    (isinstance(ch, dict) and ch.get("metadata", {}).get("is_custom"))
+                    or (isinstance(ch, dict) and ch.get("metadata", {}).get("categories"))
+                    for ch in chunks
+                )
+
+            if not has_custom_chunks and approve_summary and approve_summary.strip():
                 try:
                     from app.rag.utils.summary_chunker import chunk_summary_markdown
                     doc_img_url = data.get("image_url") or (data.get("image_urls")[0] if (data.get("image_urls") and isinstance(data.get("image_urls"), list)) else None)
@@ -3952,6 +3990,16 @@ async def approve_document(
                     logger.info(f"Approve: re-chunked summary into {len(chunks)} structure-aware chunks for indexing.")
                 except Exception as rechunk_err:
                     logger.warning(f"Approve: re-chunking failed, using existing chunks: {rechunk_err}")
+            elif has_custom_chunks:
+                logger.info(f"Approve: preserving {len(chunks)} custom/per-section categorized chunks for indexing.")
+                for ch in chunks:
+                    if isinstance(ch, dict):
+                        if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                            ch["metadata"] = {}
+                        ch["metadata"]["clinics"] = vis_settings.get("clinics", ["all"])
+                        ch["metadata"]["doctor_types"] = vis_settings.get("doctor_types", ["all"])
+                        ch["metadata"]["doctors"] = vis_settings.get("doctors", ["all"])
+                        ch["metadata"]["visibility_settings"] = vis_settings
 
             # Pre-clear existing entries for this doc from vector store and BM25
             v_store = pipeline.vector_store
@@ -4056,6 +4104,8 @@ async def approve_document(
                         k_entry.metadata_["history"] = []
                         k_entry.metadata_["chat_history"] = []
                         k_entry.metadata_["edit_history"] = []
+                        k_entry.metadata_["categories"] = parsed_cats
+                        k_entry.metadata_["chunks"] = chunks
                         if initial_prompt_val:
                             k_entry.metadata_["initial_prompt"] = initial_prompt_val
                         from sqlalchemy.orm.attributes import flag_modified

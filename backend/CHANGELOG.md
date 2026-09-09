@@ -2,6 +2,50 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.3.3] - 2026-09-09
+
+### Document Title Synchronization & Chunk Cascade
+- **Title Fallback & Resolution (`app/rag/router.py`)**:
+  - Updated `edit_approved_document` and `edit_pending_document` to robustly resolve `updated_title` prioritizing non-empty `request.title`, falling back to `existing_doc.get("title")` and then `file_name`.
+  - Cascaded `updated_title` to `chunk.metadata["title"]` across all chunks during document edits.
+- **Database & Staging Title Consistency (`app/api/routers/knowledge.py`)**:
+  - Ensured `k_entry.title` and `k_entry.metadata_["title"]` are both synchronized with updated title.
+
+---
+
+## [1.3.2] - 2026-09-09
+
+### Document-Level Visibility Cascading to Chunk Metadata & Vector Indexing
+- **Chunk Metadata Visibility Synchronization (`app/rag/router.py`)**:
+  - Updated `edit_approved_document`, `edit_pending_document`, and `approve_document` to cascade top-level document `visibility_settings` (`clinics`, `doctor_types`, `doctors`) to every chunk's `metadata` fields before re-indexing into PGVector and BM25.
+  - Ensures doctor role-based filtering in `HybridRetriever` and vector store queries accurately enforces document-level permissions on individual chunks.
+- **Database Chunk Visibility Consistency (`app/api/routers/knowledge.py`)**:
+  - Enhanced `edit_knowledge` to synchronize `k_entry.metadata_["chunks"]` with the active document-level `visibility_settings`.
+
+---
+
+## [1.3.1] - 2026-09-09
+
+### Per-Chunk Category Preservation During Approval & Sync
+- **Approval Re-Chunking Guard (`app/rag/router.py`)**:
+  - Enhanced `approve_document` to inspect existing chunk metadata before re-chunking. If chunks already contain user-customized per-section categories (`metadata.is_custom` or `metadata.categories`), existing chunks are preserved and indexed directly into PGVector and BM25 instead of being wiped out by top-level summary re-chunking.
+- **Dual-Sync Chunks Persistence (`app/rag/router.py`, `app/api/routers/knowledge.py`)**:
+  - Ensured `approve_document` and `approve_knowledge` persist customized `chunks` directly into PostgreSQL `metadata_["chunks"]` and `data/output/{id}.json`.
+
+---
+
+## [1.3.0] - 2026-09-09
+
+### Section-Aware Category Persistence & Bottom-Up Chunk Integration
+- **Per-Section Chunk Metadata Schema (`app/rag/schemas.py`)**:
+  - Extended `EditApprovedDocumentRequest` to accept `chunks: Optional[List[Dict[str, Any]]] = None`, allowing section-level category edits to be passed and persisted directly into chunk metadata.
+- **Section Chunk Preservation & Re-Indexing (`app/rag/router.py`)**:
+  - Enhanced `edit_approved_document` and `edit_pending_document` to prioritize supplied `request.chunks` when updating documents, ensuring user-defined per-section categories are stored in chunk metadata and indexed into PGVector and BM25.
+- **Bottom-Up Category Synchronization (`app/api/routers/knowledge.py`)**:
+  - Enhanced `edit_knowledge` (`PUT /api/knowledge/{id}`) to derive top-level document categories from modified chunk metadata (`payload.chunks`) and synchronize changes to PostgreSQL `metadata_["chunks"]`, MinIO canonical JSON, and PGVector.
+
+---
+
 ## [1.2.9] - 2026-09-08
 
 ### 100% Stateless Architecture, BM25 MinIO SSOT & Out-of-Band Sync Isolation

@@ -1534,6 +1534,9 @@ async def approve_knowledge(
                     if a_data.get("categories"):
                         k_entry.metadata_ = k_entry.metadata_ or {}
                         k_entry.metadata_["categories"] = a_data.get("categories")
+                    if a_data.get("chunks"):
+                        k_entry.metadata_ = k_entry.metadata_ or {}
+                        k_entry.metadata_["chunks"] = a_data.get("chunks")
             except Exception as read_err:
                 logger.debug(f"Note syncing approved file to DB: {read_err}")
 
@@ -1654,14 +1657,26 @@ async def edit_knowledge(
                     final_summary = refined_sum or p_data.get("summary", "") or (k_entry.ai_summary or "")
 
                 final_title = payload.title if (payload.title and payload.title.strip()) else p_data.get("title", k_entry.title)
-                final_categories = payload.categories if (payload.categories is not None and len(payload.categories) > 0) else p_data.get("categories", p_data.get("suggested_categories", []))
+                # If chunks are explicitly modified, derive bottom-up unique categories
+                if payload.chunks and len(payload.chunks) > 0:
+                    derived_cats = []
+                    for ch in payload.chunks:
+                        c_list = ch.get("metadata", {}).get("categories", []) or ([ch.get("metadata", {}).get("category")] if ch.get("metadata", {}).get("category") else [])
+                        for c in c_list:
+                            if c and str(c).strip() and str(c).strip() not in derived_cats:
+                                derived_cats.append(str(c).strip())
+                    final_categories = derived_cats if derived_cats else (payload.categories if payload.categories else p_data.get("categories", p_data.get("suggested_categories", [])))
+                else:
+                    final_categories = payload.categories if (payload.categories is not None and len(payload.categories) > 0) else p_data.get("categories", p_data.get("suggested_categories", []))
+
                 final_vis = payload.visibility_settings if payload.visibility_settings else p_data.get("visibility_settings")
 
                 merged_req = EditApprovedDocumentRequest(
                     summary=final_summary,
                     title=final_title,
                     categories=final_categories,
-                    visibility_settings=final_vis
+                    visibility_settings=final_vis,
+                    chunks=payload.chunks
                 )
             except Exception as read_p_err:
                 logger.warning(f"Failed to read staging draft for approved edit: {read_p_err}")
@@ -1741,8 +1756,23 @@ async def edit_knowledge(
         if isinstance(res, dict):
             if res.get("batch_id") and "batch_id" not in k_entry.metadata_:
                 k_entry.metadata_["batch_id"] = res["batch_id"]
-            if res.get("chunks"):
+            if payload.chunks:
+                k_entry.metadata_["chunks"] = payload.chunks
+            elif res.get("chunks"):
                 k_entry.metadata_["chunks"] = res["chunks"]
+
+            # Cascade current visibility settings to all DB chunks
+            current_vis = k_entry.metadata_.get("visibility_settings") or {"clinics": ["all"], "doctor_types": ["all"], "doctors": ["all"]}
+            if isinstance(k_entry.metadata_.get("chunks"), list):
+                for ch in k_entry.metadata_["chunks"]:
+                    if isinstance(ch, dict):
+                        if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                            ch["metadata"] = {}
+                        ch["metadata"]["clinics"] = current_vis.get("clinics", ["all"])
+                        ch["metadata"]["doctor_types"] = current_vis.get("doctor_types", ["all"])
+                        ch["metadata"]["doctors"] = current_vis.get("doctors", ["all"])
+                        ch["metadata"]["visibility_settings"] = current_vis
+
             if res.get("image_urls") and "image_urls" not in k_entry.metadata_:
                 k_entry.metadata_["image_urls"] = res["image_urls"]
             if res.get("images") and "images" not in k_entry.metadata_:
