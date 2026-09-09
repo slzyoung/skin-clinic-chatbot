@@ -151,13 +151,15 @@ def resolve_matching_categories(raw_cats: Any, db_categories: list, content_text
     valid_cat_names = {str(c.get("name")).strip().lower(): c for c in db_categories if isinstance(c, dict) and c.get("name")}
     
     category_alias_map = {
-        "acne": "Acne Care", "jerawat": "Acne Care", "acne care": "Acne Care", "komedo": "Acne Care",
-        "anti aging": "Anti Aging", "aging": "Anti Aging", "penuaan": "Anti Aging", "kerutan": "Anti Aging",
-        "dark spot": "Dark Spot", "flek": "Dark Spot", "spot": "Dark Spot", "hiperpigmentasi": "Dark Spot",
+        "acne": "Acne Care", "jerawat": "Acne Care", "acne care": "Acne Care", "komedo": "Acne Care", "jerawat & komedo": "Acne Care",
+        "anti aging": "Anti Aging", "aging": "Anti Aging", "penuaan": "Anti Aging", "kerutan": "Anti Aging", "anti-aging": "Anti Aging",
+        "dark spot": "Dark Spot", "flek": "Dark Spot", "spot": "Dark Spot", "hiperpigmentasi": "Dark Spot", "flek hitam": "Dark Spot",
         "brightening": "Brightening", "bright": "Brightening", "mencerahkan": "Brightening", "pencerah": "Brightening",
-        "scar": "Scar Treatment", "bopeng": "Scar Treatment", "scar treatment": "Scar Treatment", "bekas": "Scar Treatment",
+        "scar": "Scar Treatment", "bopeng": "Scar Treatment", "scar treatment": "Scar Treatment", "bekas": "Scar Treatment", "bekas jerawat": "Scar Treatment",
         "wound": "Wound Healing", "luka": "Wound Healing", "wound healing": "Wound Healing",
-        "psoriasis": "Psoriasis Care", "psoriasis care": "Psoriasis Care"
+        "psoriasis": "Psoriasis Care", "psoriasis care": "Psoriasis Care",
+        "hair care": "Hair Care", "rambut": "Hair Care", "kerontokan": "Hair Care",
+        "body care": "Body Care", "tubuh": "Body Care", "kulit tubuh": "Body Care"
     }
 
     clean_cats = []
@@ -180,18 +182,26 @@ def resolve_matching_categories(raw_cats: Any, db_categories: list, content_text
             matched_obj = valid_cat_ids[cid]
         elif cname in valid_cat_names:
             matched_obj = valid_cat_names[cname]
+        elif cname in category_alias_map and category_alias_map[cname].lower() in valid_cat_names:
+            matched_obj = valid_cat_names[category_alias_map[cname].lower()]
         else:
-            # Dynamic matching against actual DB category names
-            for cat_low_name, cat_obj in valid_cat_names.items():
-                if cat_low_name in cname or cname in cat_low_name:
-                    matched_obj = cat_obj
+            # Check aliases inside cname
+            for alias, canonical in category_alias_map.items():
+                if alias in cname and canonical.lower() in valid_cat_names:
+                    matched_obj = valid_cat_names[canonical.lower()]
                     break
+            if not matched_obj:
+                # Dynamic matching against actual DB category names
+                for cat_low_name, cat_obj in valid_cat_names.items():
+                    if cat_low_name in cname or cname in cat_low_name:
+                        matched_obj = cat_obj
+                        break
 
         if matched_obj and matched_obj.get("id") not in seen_ids:
             clean_cats.append(matched_obj)
             seen_ids.add(matched_obj.get("id"))
 
-    # Dynamic Fallback: scan content_text for any active DB category name
+    # Dynamic Fallback: scan content_text for active DB category names and aliases
     if not clean_cats and content_text:
         text_low = content_text.lower()
         for cat_low_name, cat_obj in valid_cat_names.items():
@@ -200,7 +210,17 @@ def resolve_matching_categories(raw_cats: Any, db_categories: list, content_text
                     clean_cats.append(cat_obj)
                     seen_ids.add(cat_obj.get("id"))
 
+        if not clean_cats:
+            for alias, canonical in category_alias_map.items():
+                if len(alias) >= 3 and re.search(rf'\b{re.escape(alias)}\b', text_low):
+                    if canonical.lower() in valid_cat_names:
+                        cat_obj = valid_cat_names[canonical.lower()]
+                        if cat_obj.get("id") not in seen_ids:
+                            clean_cats.append(cat_obj)
+                            seen_ids.add(cat_obj.get("id"))
+
     return clean_cats
+
 
 
 def auto_embed_images_in_summary(
@@ -3108,13 +3128,13 @@ async def edit_approved_document(
             except Exception as rechunk_err:
                 logger.warning(f"Update approved re-chunking failed: {rechunk_err}")
 
-        approved_doc_structure = {
+        pending_doc_structure = {
             "knowledge_id": knowledge_id,
             "batch_id": existing_doc.get("batch_id") if isinstance(existing_doc, dict) else None,
             "file_name": existing_doc.get("file_name", ""),
             "file_hash": existing_doc.get("file_hash") if isinstance(existing_doc, dict) else None,
             "title": updated_title,
-            "status": "Approved",
+            "status": "On review",
             "document_type": updated_doc_type,
             "valid_from": updated_valid_from,
             "valid_until": updated_valid_until,
@@ -3127,44 +3147,32 @@ async def edit_approved_document(
             "timing_metrics": existing_doc.get("timing_metrics") if isinstance(existing_doc, dict) else None,
             "batch_summary": existing_doc.get("batch_summary") if isinstance(existing_doc, dict) else None,
             "categories": updated_categories,
+            "suggested_categories": updated_categories,
             "visibility_settings": vis_settings,
-            "chunks": updated_chunks
+            "chunks": updated_chunks,
+            "is_revision": True
         }
-        with open(approved_file, "w", encoding="utf-8") as f:
-            json.dump(approved_doc_structure, f, indent=4, ensure_ascii=False)
+
+        # Save pending draft revision to data/pending/{knowledge_id}.json without overwriting active approved document
+        os.makedirs("data/pending", exist_ok=True)
+        pending_file = os.path.join("data/pending", f"{knowledge_id}.json")
+        with open(pending_file, "w", encoding="utf-8") as f:
+            json.dump(pending_doc_structure, f, indent=4, ensure_ascii=False)
 
         try:
-            from app.services.storage import upload_approved_json
-            upload_approved_json(knowledge_id, approved_doc_structure)
-        except Exception as app_err:
-            logger.debug(f"MinIO approved upload note: {app_err}")
+            from app.services.storage import upload_staging_json
+            upload_staging_json(knowledge_id, pending_doc_structure)
+        except Exception as st_err:
+            logger.debug(f"MinIO staging upload note: {st_err}")
 
-        target_store = (pipeline.vector_store if pipeline and pipeline.vector_store else vector_store)
-        if target_store:
-            logger.info(f"Re-indexing PGVector for knowledge_id '{knowledge_id}'...")
-            target_store.delete_document(knowledge_id)
-            target_store.insert_chunks(updated_chunks)
-
-        if bm25:
-            logger.info(f"Re-indexing BM25 for knowledge_id '{knowledge_id}'...")
-            bm25.remove_file_chunks(knowledge_id)
-            bm25.add_chunks(updated_chunks)
-            bm25.save(settings.bm25_index_path)
-
-        if target_store and hasattr(target_store, "upsert_knowledge_category"):
-            target_store.upsert_knowledge_category(
-                knowledge_id=knowledge_id,
-                file_name=updated_title,
-                categories=updated_categories,
-                summary=updated_summary
-            )
-
-        return approved_doc_structure
+        logger.info(f"📝 Staged edit revision for approved document '{knowledge_id}' to pending queue (status: 'On review'). Active approved document remains searchable until approved.")
+        return pending_doc_structure
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Edit approved document failed for '{knowledge_id}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update approved document: {e}")
+
 
 
 @router.put("/ingest/pending/{knowledge_id}", tags=["Ingestion"], summary="Edit Pending Document")
@@ -4933,16 +4941,16 @@ async def query_general_endpoint(
         # -------------------------------------------------------------
         # PHASE 2: Operation Intent Classifier (EDIT / DELETE Intent Detection)
         # -------------------------------------------------------------
-        # Check if user explicitly requests DELETE
+        delete_verbs = r'(?:hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase)'
         is_delete_cmd = (
-            bool(re.search(r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase)\b', clean_user_prompt))
-            or bool(re.search(r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase)\s+(?:dokumen|produk|item|bagian|tahapan|parameter|indikator|data|knowledge)\b', clean_user_prompt))
+            bool(re.search(rf'\b{delete_verbs}\b', clean_user_prompt))
+            or bool(re.search(rf'\b{delete_verbs}\b', effective_prompt.lower()))
         ) and not bool(re.search(r'\b(apakah|bagaimana|mengapa|kenapa|bisa kah|kapan)\b', clean_user_prompt))
 
         if is_delete_cmd:
             matched_res = (
-                await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
-                or await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
+                await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
+                or await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
             )
             if not matched_res:
                 return QueryGeneralResponse(
@@ -5049,24 +5057,18 @@ async def query_general_endpoint(
             )
 
         # Check if user explicitly requests EDIT
-        edit_verbs = r'(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi|terapkan|pasang|masukkan|tambahkan|sisipkan|gantikan|set|sesuaikan)'
+        edit_verbs = r'(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi|terapkan|pasang|masukkan|tambahkan|sisipkan|gantikan|gantiin|set|sesuaikan|modifikasi|perbaiki)'
         is_edit_cmd = (
-            bool(re.search(rf'^\s*(?:tolong\s+|mohon\s+|coba\s+)?{edit_verbs}\b', clean_user_prompt))
-            or (
-                bool(re.search(rf'\b{edit_verbs}\b', clean_user_prompt))
-                and (
-                    bool(re.search(r'\b(?:menjadi|ke|sebagai|jadi|dengan|sebesar|berupa)\b|=', clean_user_prompt))
-                    or bool(re.search(r'(?:rp\.?\s*\d+|\b\d+\s*(?:k|rb|ribu|gr|gram|ml|l|mg|pcs|sachet|botol|pack)\b)', clean_user_prompt))
-                    or bool(re.search(r'\b(?:foto|gambar|image|picture|tabel|section|bagian|halaman|sebelum|sesudah|before|after)\b', clean_user_prompt))
-                )
-            )
+            bool(re.search(rf'\b{edit_verbs}\b', clean_user_prompt))
+            or bool(re.search(rf'\b{edit_verbs}\b', effective_prompt.lower()))
         ) and not bool(re.search(r'\b(apakah|bagaimana|mengapa|kenapa|bisa kah|kapan)\b', clean_user_prompt))
 
         if is_edit_cmd:
             matched_res = (
-                await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
-                or await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
+                await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
+                or await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
             )
+
             if matched_res:
                 target_item, matched_docs = matched_res
                 top_doc = matched_docs[0]

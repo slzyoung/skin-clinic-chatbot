@@ -103,7 +103,10 @@ class QueryIntent(str, Enum):
     COMPARISON = "COMPARISON"
     AVAILABILITY = "AVAILABILITY"
     PRICE = "PRICE"
+    EDIT = "EDIT"
+    DELETE = "DELETE"
     UNKNOWN = "UNKNOWN"
+
 
 
 _INTENT_PATTERNS = [
@@ -132,12 +135,26 @@ _INTENT_PATTERNS = [
             r"^\s*(oke|ok|okay)\s+(dok|dokter|sip|siap|baik|noted)\s*[\.\,\!\?]*\s*$"
         ]
     ),
-    # 1. PRICE
+    # 1. EDIT KNOWLEDGE
+    (
+        QueryIntent.EDIT,
+        [
+            r"\b(ganti|ubah|edit|tukar|salin|revisi|pembaruan|perbarui|modifikasi|perbaiki|gantikan|gantiin|update|pasang|set|sesuaikan)\b"
+        ]
+    ),
+    # 2. DELETE KNOWLEDGE
+    (
+        QueryIntent.DELETE,
+        [
+            r"\b(hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase)\b"
+        ]
+    ),
+    # 3. PRICE
     (
         QueryIntent.PRICE,
         [r"\bharga\b", r"\bberapa harga\b", r"\bbiaya\b", r"\bprice\b", r"\bharganya\b"]
     ),
-    # 2. PRODUCT_NAME
+    # 4. PRODUCT_NAME
     (
         QueryIntent.PRODUCT_NAME,
         [
@@ -147,7 +164,7 @@ _INTENT_PATTERNS = [
             r"\bsebutkan nama produk\b"
         ]
     ),
-    # 3. INGREDIENTS
+    # 5. INGREDIENTS
     (
         QueryIntent.INGREDIENTS,
         [
@@ -156,7 +173,7 @@ _INTENT_PATTERNS = [
             r"\bterbuat dari\b", r"\bmengandung apa\b"
         ]
     ),
-    # 4. HOW_TO_USE / PROCEDURE / TAHAPAN TREATMENT
+    # 6. HOW_TO_USE / PROCEDURE / TAHAPAN TREATMENT
     (
         QueryIntent.HOW_TO_USE,
         [
@@ -166,7 +183,7 @@ _INTENT_PATTERNS = [
             r"\b(tahapan|tahapan treatment|tahapan tindakan|prosedur|prosedur tindakan|prosedur treatment|langkah[- ]langkah|protokol|step[- ]by[- ]step|alur tindakan|alur treatment)\b"
         ]
     ),
-    # 5. WARNING / CONTRAINDICATION / PREGNANCY
+    # 7. WARNING / CONTRAINDICATION / PREGNANCY
     (
         QueryIntent.WARNING,
         [
@@ -175,7 +192,7 @@ _INTENT_PATTERNS = [
             r"\biritasi\b", r"\balergi\b", r"\bpantangan\b"
         ]
     ),
-    # 6. COMPARISON
+    # 8. COMPARISON
     (
         QueryIntent.COMPARISON,
         [
@@ -183,7 +200,7 @@ _INTENT_PATTERNS = [
             r"\bdibandingkan\b", r"\bvs\b", r"\bmana yang lebih\b"
         ]
     ),
-    # 7. SUITABLE_FOR
+    # 9. SUITABLE_FOR
     (
         QueryIntent.SUITABLE_FOR,
         [
@@ -191,14 +208,14 @@ _INTENT_PATTERNS = [
             r"\bjenis kulit\b", r"\bindikasi pasien\b", r"\bsuitable for\b"
         ]
     ),
-    # 8. BENEFITS
+    # 10. BENEFITS
     (
         QueryIntent.BENEFITS,
         [
             r"\bkeunggulan\b", r"\bkelebihan\b", r"\bbenefit\b", r"\badvantages\b"
         ]
     ),
-    # 9. PRODUCT_FUNCTION
+    # 11. PRODUCT_FUNCTION
     (
         QueryIntent.PRODUCT_FUNCTION,
         [
@@ -207,7 +224,7 @@ _INTENT_PATTERNS = [
             r"\bberfungsi untuk\b"
         ]
     ),
-    # 10. AVAILABILITY
+    # 12. AVAILABILITY
     (
         QueryIntent.AVAILABILITY,
         [
@@ -216,6 +233,7 @@ _INTENT_PATTERNS = [
         ]
     ),
 ]
+
 
 
 class QueryIntentDetector:

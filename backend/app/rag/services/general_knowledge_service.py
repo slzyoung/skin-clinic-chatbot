@@ -93,8 +93,9 @@ class GeneralKnowledgeService:
         # Extract explicit command structure: <action> <item> (dari|pada|di|dalam) <container>
         container_candidate = None
         explicit_item_candidate = None
+        action_verbs_regex = r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase|ubah|ganti|edit|tukar|salin|revisi|pembaruan|perbarui|modifikasi|perbaiki|gantikan|gantiin|update|pasang|set|sesuaikan)\b'
         cmd_match = re.search(
-            r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|wipe|erase|ubah|ganti|edit|tukar|salin|update|perbarui|revisi)\s+(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:dari|pada|di|dalam)\s+["\'“]?([^"\'”\n]+)["\'”]?',
+            rf'{action_verbs_regex}\s+(?:bagian|item|produk|tahapan|parameter|indikator|baris|kolom|tabel)?\s*["\'“]?([^"\'”\n]+?)["\'”?]?\s+(?:dari|pada|di|dalam)\s+["\'“]?([^"\'”\n]+)["\'”]?',
             query,
             re.IGNORECASE
         )
@@ -113,14 +114,14 @@ class GeneralKnowledgeService:
                 )
                 if keyword_match:
                     candidate = keyword_match.group(1).strip()
-                    if len(candidate) > 2 and candidate.lower() not in ("dokumen", "doc", "kb", "knowledge"):
+                    if len(candidate) > 2 and candidate.lower() not in ("dokumen", "doc", "kb", "knowledge", "tersebut", "ini", "itu"):
                         explicit_item_candidate = candidate
 
         # Clean core entity extraction for edit/update patterns:
         # e.g.: "edit ukuran ERHA Acneact Gentle Acne Moisturizer ke 40 g"
         if not explicit_item_candidate:
             core = re.sub(
-                r'^\s*(?:tolong\s+|mohon\s+|coba\s+)?(?:ubah|ganti|edit|tukar|salin|update|perbarui|revisi|hapus|delete|hilangkan|remove|buang|bersihkan)\s+',
+                rf'^\s*(?:tolong\s+|mohon\s+|coba\s+)?{action_verbs_regex}\s+',
                 '',
                 query,
                 flags=re.IGNORECASE
@@ -153,6 +154,13 @@ class GeneralKnowledgeService:
             core = re.sub(r'\s*(?:pada|di|dari|dalam|untuk|bagian|item|produk|treatment|dokumen)\s*$', '', core, flags=re.IGNORECASE).strip()
             if len(core) > 2 and not re.match(r'^[0-9a-fA-F\-]{10,}$', core):
                 explicit_item_candidate = core
+
+        # Filter out purely anaphoric terms from explicit_item_candidate
+        if explicit_item_candidate:
+            anaphoric_clean = explicit_item_candidate.lower().strip()
+            if anaphoric_clean in ("tersebut", "produk tersebut", "item tersebut", "dokumen tersebut", "ini", "itu", "nya", "produk ini", "produk itu"):
+                explicit_item_candidate = None
+
 
         search_folders = [output_dir, os.path.join("backend", output_dir)]
         seen_doc_ids = set()
@@ -779,42 +787,31 @@ class GeneralKnowledgeService:
                             except Exception:
                                 pass
 
-            # Save local JSON file
-            with open(approved_file, "w", encoding="utf-8") as f:
+            # Save pending draft revision to data/pending/{doc_kid}.json (Priority 4 versioning rule)
+            existing_doc["status"] = "On review"
+            existing_doc["is_revision"] = True
+            os.makedirs("data/pending", exist_ok=True)
+            pending_file = os.path.join("data/pending", f"{doc_kid}.json")
+            with open(pending_file, "w", encoding="utf-8") as f:
                 json.dump(existing_doc, f, indent=4, ensure_ascii=False)
 
-            # Re-index PGVector
-            if vector_store:
-                logger.info(f"[DedicatedService] Re-indexing PGVector for '{doc_kid}'...")
-                vector_store.delete_document(doc_kid)
-                vector_store.insert_chunks(chunks)
-
-            # Re-index BM25
-            if bm25_index:
-                logger.info(f"[DedicatedService] Re-indexing BM25 for '{doc_kid}'...")
-                bm25_index.remove_file_chunks(doc_kid)
-                bm25_index.add_chunks(chunks)
-                bm25_index.save(settings.bm25_index_path)
-
-            # Sync MinIO approved JSON
             try:
-                from app.services.storage import upload_approved_json
-                upload_approved_json(doc_kid, existing_doc)
+                from app.services.storage import upload_staging_json
+                upload_staging_json(doc_kid, existing_doc)
             except Exception as s3_err:
-                logger.debug(f"[DedicatedService] MinIO approved sync note: {s3_err}")
+                logger.debug(f"[DedicatedService] MinIO staging sync note: {s3_err}")
 
-            # Sync PostgreSQL Knowledge DB record directly and commit
-            await GeneralKnowledgeService.sync_knowledge_db(doc_kid, existing_doc=existing_doc, db=db)
-
-            logger.info(f"[DedicatedService] Successfully applied edit to '{doc_kid}' field='{field}' target_item='{target_item}'")
+            logger.info(f"[DedicatedService] Staged edit revision for '{doc_kid}' to pending queue (status: 'On review'). Active approved document remains searchable until approved.")
             return {
                 "success": True,
                 "knowledge_id": doc_kid,
                 "field": field,
                 "target_item": target_item,
                 "old_value": str(old_value)[:200] if old_value else None,
-                "new_value": str(new_value)[:200]
+                "new_value": str(new_value)[:200],
+                "message": f"Perubahan pada '{target_item or doc_kid}' berhasil disimpan sebagai draft peninjauan (PENDING). Dokumen aktif tetap diretrieve RAG sampai diapprove."
             }
+
 
         except Exception as e:
             logger.error(f"[DedicatedService] Failed to apply edit for '{knowledge_id}': {e}")

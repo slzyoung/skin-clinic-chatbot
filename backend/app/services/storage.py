@@ -117,9 +117,9 @@ def _get_client():
                 config=Config(
                     signature_version="s3v4",
                     s3={"addressing_style": "path" if use_path_style else "auto"},
-                    connect_timeout=0.8,
-                    read_timeout=1.5,
-                    retries={'max_attempts': 0}
+                    connect_timeout=2.0,
+                    read_timeout=15.0,
+                    retries={'max_attempts': 2}
                 ),
                 region_name=region,
             )
@@ -259,17 +259,26 @@ def _generate_presigned_url(bucket_name: str, s3_key: str, expires: int = 604800
 
 def _format_browser_url(raw_url: str = None, s3_key: str = "") -> str:
     """
-    Ensures image URL is accessible by the user's browser across all environments:
-    1. If S3_PUBLIC_URL is configured (e.g. 'https://dokterpedia.aryanoble.co.id/api/storage' or CDN), use that.
-    2. Otherwise, returns universal relative backend proxy path '/api/storage/{s3_key}'.
+    Ensures image URL is accessible by the doctor's browser across all network environments:
+    1. If S3_PUBLIC_URL is configured (e.g. 'https://domain.com/api/storage' or CDN), use that.
+    2. If raw_url is a valid external HTTP(S) URL (not internal minio:9000 or localhost:9000), use that.
+    3. Otherwise, returns universal relative backend proxy path '/api/storage/{s3_key}' streamed via FastAPI.
     """
     clean_key = (s3_key or "").lstrip("/")
     if hasattr(settings, "S3_PUBLIC_URL") and settings.S3_PUBLIC_URL and str(settings.S3_PUBLIC_URL).strip():
         base = str(settings.S3_PUBLIC_URL).rstrip("/")
-        return f"{base}/{clean_key}"
-    
-    # Universal fallback proxy path via FastAPI
-    return f"/api/storage/{clean_key}"
+        if clean_key:
+            return f"{base}/{clean_key}"
+
+    if raw_url and isinstance(raw_url, str) and raw_url.startswith("http"):
+        if not any(internal_host in raw_url for internal_host in ["minio:9000", "localhost:9000", "127.0.0.1:9000"]):
+            return raw_url
+
+    # Universal proxy path served by FastAPI backend (supports doctor interface across all IP addresses)
+    if clean_key:
+        return f"/api/storage/{clean_key}"
+    return raw_url or ""
+
 
 
 def get_s3_object_stream(s3_key: str, chunk_size: int = 65536) -> tuple:
@@ -502,6 +511,27 @@ def delete_image(s3_key: str) -> None:
         logger.info(f"Deleted image key '{s3_key}' from MinIO")
     except Exception as e:
         logger.debug(f"Failed to delete image key '{s3_key}' from MinIO: {e}")
+
+
+def replace_image(old_s3_key_or_url: str, new_content: bytes, new_filename: str, content_type: str = "image/png") -> dict:
+    """
+    Replaces an existing image asset with new binary content.
+    Deletes old S3 key if present and uploads new image.
+    """
+    clean_old_key = (old_s3_key_or_url or "").strip()
+    if clean_old_key.startswith("/api/storage/"):
+        clean_old_key = clean_old_key.replace("/api/storage/", "")
+    elif "images/" in clean_old_key:
+        clean_old_key = "images/" + clean_old_key.split("images/")[-1]
+
+    if clean_old_key:
+        try:
+            delete_image(clean_old_key)
+        except Exception as del_err:
+            logger.debug(f"Could not delete old image asset '{clean_old_key}': {del_err}")
+
+    return upload_image(new_content, new_filename, content_type=content_type)
+
 
 
 # ─── DOCUMENT STORAGE (bucket: knowledge-documents) ──────────────────────────
@@ -998,8 +1028,12 @@ def clear_all_buckets() -> dict:
         return {"status": "skipped", "reason": "boto3 not installed"}
 
     deleted_counts = {}
+    global _cached_client
     try:
         client = _get_client()
+        if not client:
+            logger.info("MinIO is offline; clear_all_buckets operating in local disk fallback mode.")
+            return {"status": "success", "deleted_counts": {}, "mode": "local_fallback"}
 
         # Scan ALL buckets currently in MinIO
         all_b_res = client.list_buckets()
@@ -1032,6 +1066,7 @@ def clear_all_buckets() -> dict:
         return {"status": "success", "deleted_counts": deleted_counts}
     except Exception as e:
         logger.error(f"clear_all_buckets failed: {e}")
+        _cached_client = None  # Reset client cache so next attempt re-evaluates endpoint connectivity
         return {"status": "error", "message": str(e)}
 
 

@@ -622,20 +622,130 @@ class HybridRetriever:
                 vu = meta.get("valid_until") or meta.get("expiry_date")
                 logger.info(f"Filtered out expired promotional chunk: '{p_name}' (valid_until: {vu})")
 
-        # Target ingredient extraction for precision filtering & anti-contamination
-        target_ingredient = None
-        ing_match = re.search(r'\b(?:kandungan|mengandung|bahan\s+aktif|komposisi|ingredients?|dengan\s+kandungan)\s+([a-zA-Z0-9\-\s]{3,30})\b', q_lower)
+    @staticmethod
+    def _extract_target_ingredient(query: str) -> Optional[str]:
+        """Extracts active ingredient / chemical component name from query for strict precision filtering."""
+        if not query:
+            return None
+        q_lower = query.lower().strip()
+
+        # 1. Explicit ingredient prefix matches
+        ing_match = re.search(r'\b(?:kandungan|mengandung|bahan\s+aktif|komposisi|ingredients?|dengan\s+kandungan|dengan\s+komposisi|berbahan|formula)\s+([a-zA-Z0-9\-\s]{3,30})\b', q_lower)
         if ing_match:
             cand = ing_match.group(1).strip()
-            cand = re.sub(r'\b(apa\s+saja|adakah|ada|saja|ya|dong|tolong|di\s+erha|ini|itu|tersebut)\b', '', cand).strip()
+            cand = re.sub(r'\b(apa\s+saja|adakah|ada|saja|ya|dong|tolong|di\s+erha|ini|itu|tersebut|yang|bisa|untuk)\b', '', cand).strip()
             if re.match(r'^(dan|atau|serta|pada|dari|dalam|tentang|apakah|bagaimana)\b', cand):
                 cand = ""
-            if len(cand) >= 3 and cand not in ("produk", "skincare", "obat", "cream", "krim", "serum"):
-                target_ingredient = cand
-        elif re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', q_lower):
-            prod_cand = re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', q_lower).group(1).strip()
-            if any(prod_cand.endswith(suf) for suf in ["ine", "ide", "acid", "ol", "ate", "oil"]) or prod_cand in ("centella", "retinol", "ceramide", "niacinamide", "betaine", "salicylic", "glycolic", "hyaluronic"):
-                target_ingredient = prod_cand
+            if len(cand) >= 3 and cand not in ("produk", "skincare", "obat", "cream", "krim", "serum", "cleanser", "wash"):
+                return cand
+
+        # 2. General product ingredient queries: "apakah ada produk betaine", "produk centella", "pilihan betaine"
+        prod_match = re.search(r'\b(?:produk|pilihan|rekomendasi|katalog|stok)\s+(?:dengan\s+)?([a-zA-Z0-9\-]{4,25})\b', q_lower)
+        if prod_match:
+            cand = prod_match.group(1).strip()
+            known_ingredients = {
+                "centella", "retinol", "ceramide", "niacinamide", "betaine", "salicylic",
+                "glycolic", "hyaluronic", "allantoin", "panthenol", "azelaic", "benzoyl",
+                "clindamycin", "adapalene", "tretinoin", "squalane", "glycerin", "tocopherol"
+            }
+            if cand in known_ingredients or any(cand.endswith(suf) for suf in ["ine", "ide", "acid", "ol", "ate", "oil"]):
+                return cand
+
+        # 3. Direct chemical ingredient mention in query
+        known_ingredients = [
+            "centella", "retinol", "ceramide", "niacinamide", "betaine", "salicylic acid", "salicylic",
+            "glycolic acid", "glycolic", "hyaluronic acid", "hyaluronic", "allantoin", "panthenol",
+            "azelaic acid", "azelaic", "benzoyl peroxide", "benzoyl", "clindamycin", "tea tree", "cica"
+        ]
+        for ing in known_ingredients:
+            if re.search(rf'\b{re.escape(ing)}\b', q_lower):
+                return ing
+
+        return None
+
+    def retrieve(
+        self, 
+        query: str, 
+        top_k: int = 8, 
+        filter_metadata: Optional[Dict[str, Any]] = None,
+        rerank: bool = True,
+        rerank_top_n: int = 6,
+        confidence_threshold: Optional[float] = None,
+        include_expired: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Executes Advanced Retrieval Pipeline:
+        1. Clinical Synonym & Slang Expansion
+        2. Dynamic Hybrid Router (Alpha Weight Tuning)
+        3. Parallel Dense (PGVector) & Sparse (BM25)
+        4. Reciprocal Rank Fusion (RRF) with weighted alpha
+        5. Temporal Validity Filtering
+        6. Cross-Encoder Reranking with Clinical Indication Boost
+        """
+        # 1. Clinical Query Expansion
+        expanded_query = expand_clinical_query(query)
+        if expanded_query != query:
+            logger.info(f"🔍 [Query Expansion] '{query}' -> '{expanded_query}'")
+        else:
+            logger.debug(f"Retrieving for query: '{query}' with top_k={top_k}")
+
+        # 2. Dynamic Hybrid Router (Alpha Weight Tuning)
+        q_lower = query.lower()
+        exact_indicators = ["sku", "harga", "berapa", "kandungan", "komposisi", "nama produk", "kode", "brand", "netto", "isi"]
+        is_exact_lookup = any(ind in q_lower for ind in exact_indicators)
+
+        if is_exact_lookup:
+            dense_weight = 0.7
+            sparse_weight = 1.3
+            logger.debug("🎯 [Dynamic Router] Exact lookup detected -> Boosting BM25 sparse weight (1.3)")
+        else:
+            dense_weight = 1.2
+            sparse_weight = 0.8
+            logger.debug("🩺 [Dynamic Router] Clinical query detected -> Boosting PGVector dense weight (1.2)")
+
+        candidate_k = top_k * 2
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_dense = executor.submit(self.vector_store.search, expanded_query, candidate_k, filter_metadata) if self.vector_store else None
+            future_sparse = executor.submit(self.bm25_index.search, expanded_query, candidate_k, filter_metadata, include_expired) if self.bm25_index else None
+            
+            dense_hits = future_dense.result() if future_dense else []
+            sparse_hits = future_sparse.result() if future_sparse else []
+
+        if self.vector_store:
+            logger.debug(f"Dense retrieval returned {len(dense_hits)} candidates.")
+        if self.bm25_index:
+            logger.debug(f"Sparse retrieval returned {len(sparse_hits)} candidates.")
+        
+        fused_hits = reciprocal_rank_fusion(dense_hits, sparse_hits, dense_weight=dense_weight, sparse_weight=sparse_weight)
+        logger.debug(f"RRF Fusion completed. Fused {len(fused_hits)} candidates.")
+
+        # Deduplicate
+        seen_texts = set()
+        deduplicated_hits = []
+        for hit in fused_hits:
+            text = hit.get("text", "").strip()
+            norm_text = " ".join(text.split()).lower()
+            if norm_text not in seen_texts:
+                seen_texts.add(norm_text)
+                deduplicated_hits.append(hit)
+        logger.debug(f"Deduplicated fused hits from {len(fused_hits)} to {len(deduplicated_hits)} unique candidates.")
+
+        # Temporal filtering: exclude expired promotional chunks when include_expired=False
+        today = datetime.now(timezone.utc).date()
+        active_hits = []
+        for hit in deduplicated_hits:
+            meta = hit.get("metadata", {})
+            if is_chunk_valid_temporal(meta, current_date=today, include_expired=include_expired):
+                active_hits.append(hit)
+            else:
+                p_name = meta.get("product_name") or meta.get("source_file", "unknown")
+                vu = meta.get("valid_until") or meta.get("expiry_date")
+                logger.info(f"Filtered out expired promotional chunk: '{p_name}' (valid_until: {vu})")
+
+        # Target ingredient extraction for precision filtering & anti-contamination
+        target_ingredient = self._extract_target_ingredient(query)
 
         if target_ingredient:
             target_ing_lower = target_ingredient.lower()
@@ -670,19 +780,8 @@ class HybridRetriever:
             is_product_intent = any(k in query_lower for k in product_keywords)
 
             # Target ingredient extraction for precision filtering & anti-contamination
-            target_ingredient = None
-            ing_match = re.search(r'\b(?:kandungan|mengandung|bahan\s+aktif|komposisi|ingredients?|dengan\s+kandungan)\s+([a-zA-Z0-9\-\s]{3,30})\b', query_lower)
-            if ing_match:
-                cand = ing_match.group(1).strip()
-                cand = re.sub(r'\b(apa\s+saja|adakah|ada|saja|ya|dong|tolong|di\s+erha|ini|itu|tersebut)\b', '', cand).strip()
-                if re.match(r'^(dan|atau|serta|pada|dari|dalam|tentang|apakah|bagaimana)\b', cand):
-                    cand = ""
-                if len(cand) >= 3 and cand not in ("produk", "skincare", "obat", "cream", "krim", "serum"):
-                    target_ingredient = cand
-            elif re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', query_lower):
-                prod_cand = re.search(r'\bproduk\s+([a-zA-Z0-9\-]{4,25})\b', query_lower).group(1).strip()
-                if any(prod_cand.endswith(suf) for suf in ["ine", "ide", "acid", "ol", "ate", "oil"]) or prod_cand in ("centella", "retinol", "ceramide", "niacinamide", "betaine", "salicylic", "glycolic", "hyaluronic"):
-                    target_ingredient = prod_cand
+            target_ingredient = self._extract_target_ingredient(query)
+
 
             # Clinical indication keywords for automatic medical cross-referencing
             clinical_indications_query = []
