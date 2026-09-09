@@ -81,12 +81,12 @@ def resolve_approved_file(knowledge_id: str, output_dir: str = "data/output") ->
         from sqlalchemy import text
         with engine.connect() as conn:
             row = conn.execute(
-                text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE id::text = :k_id AND deleted_at IS NULL LIMIT 1"),
+                text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE id::text = :k_id AND status = 'APPROVED' AND deleted_at IS NULL LIMIT 1"),
                 {"k_id": k_id}
             ).fetchone()
             if not row:
                 row = conn.execute(
-                    text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE (LOWER(title) = LOWER(:k_id) OR LOWER(file_name) = LOWER(:k_id)) AND deleted_at IS NULL LIMIT 1"),
+                    text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE (LOWER(title) = LOWER(:k_id) OR LOWER(file_name) = LOWER(:k_id)) AND status = 'APPROVED' AND deleted_at IS NULL LIMIT 1"),
                     {"k_id": k_id}
                 ).fetchone()
 
@@ -144,11 +144,17 @@ class GeneralKnowledgeService:
         # 1. Check for ingredient-based delete query:
         # e.g.: "hapus seluruh produk dengan yang mengandung Hyaluronic Acid"
         ingredient_delete_match = re.search(
-            r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase)\s+(?:seluruh|semua|setiap)?\s*(?:produk|item|barang|treatment)?\s*(?:dengan\s+)?(?:yang\s+)?(?:mengandung|ada\s+kandungan|kandungan|bahan|komposisi|berisi)\s+["\'“]?([^"\'”\n\?\.]+?)["\'”\?]?$',
+            r'\b(?:hapus|delete|hilangkan|remove|buang|bersihkan|tiadakan|drop|clear|wipe|erase)\s+(?:seluruh|semua|setiap)?\s*(?:produk|item|barang|treatment)?\s*(?:dengan\s+)?(?:yang\s+)?(?:mengandung|ada\s+kandungan|kandungan|bahan|komposisi|berisi)\s+["\'“]?([^"\'”\n\?\.\(]+)',
             query,
             re.IGNORECASE
         )
-        ingredient_filter = ingredient_delete_match.group(1).strip() if ingredient_delete_match else None
+        ingredient_filter = None
+        if ingredient_delete_match:
+            raw_ing = ingredient_delete_match.group(1).strip().strip('"\'“”`')
+            raw_ing = re.sub(r'\s+(?:dari|pada|di|dalam|ke)\s+.*$', '', raw_ing, flags=re.IGNORECASE).strip()
+            raw_ing = re.sub(r'[\s,\.]+(?:ya|dong|tolong|mohon|terima\s*kasih|thanks)$', '', raw_ing, flags=re.IGNORECASE).strip()
+            if len(raw_ing) > 1:
+                ingredient_filter = raw_ing
 
         # 2. Check for edit with transition word:
         # e.g.: "Ubah informasi kandungan Hyaluronic Acid menjadi Polyglutamic Acid (PGA) pada semua produk"
@@ -262,12 +268,18 @@ class GeneralKnowledgeService:
                     summary = str(doc.get("summary") or "")
                     batch_summary = str(doc.get("batch_summary") or "")
 
-                    # Helper to search inside staging_history if summary is abbreviated
-                    full_text_corpus = summary + " " + batch_summary
+                    # Document's own content corpus (summary + chunks)
+                    doc_own_corpus = summary
+                    for chunk in doc.get("chunks", []):
+                        if isinstance(chunk, dict):
+                            doc_own_corpus += "\n" + str(chunk.get("text", ""))
+
+                    # Full text corpus including batch and staging
+                    full_text_corpus = doc_own_corpus + "\n" + batch_summary
                     if doc.get("staging_history") and isinstance(doc.get("staging_history"), list):
                         for t in doc.get("staging_history"):
                             if isinstance(t, dict) and t.get("role") == "assistant":
-                                full_text_corpus += " " + str(t.get("content", ""))
+                                full_text_corpus += "\n" + str(t.get("content", ""))
 
                     # Collect candidate items/sections from this document
                     doc_candidates = []
@@ -313,9 +325,11 @@ class GeneralKnowledgeService:
                         match_type = "explicit_uuid"
 
                     # 2. Ingredient filter match (e.g. "Hyaluronic Acid", "Retinol", "BHA")
+                    # Check document's own corpus so cross-document batch summaries don't cause false positives
                     if ingredient_filter:
                         ing_low = ingredient_filter.lower()
-                        if ing_low in full_text_corpus.lower() or ing_low in json.dumps(doc).lower():
+                        ing_regex = re.compile(rf'\b{re.escape(ing_low)}\b', re.IGNORECASE)
+                        if ing_regex.search(doc_own_corpus):
                             score += 450
                             match_type = "ingredient_match"
                             # Identify specific product sections containing this ingredient
@@ -324,11 +338,30 @@ class GeneralKnowledgeService:
                                 m_h = re.match(r'^#{1,3}\s+([^\n]+)', s)
                                 if m_h:
                                     h_name = re.sub(r'[\*\_]', '', m_h.group(1)).strip()
-                                    if ing_low in s.lower() and h_name.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
+                                    if ing_regex.search(s) and h_name.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
                                         target_sub_items.append(h_name)
 
-                            if target_sub_items:
-                                matched_item_for_doc = ", ".join(target_sub_items)
+                            # Also check markdown table rows for product name
+                            for line in full_text_corpus.splitlines():
+                                if ing_regex.search(line) and "|" in line:
+                                    cols = [c.strip() for c in line.split("|") if c.strip()]
+                                    for col in cols:
+                                        col_clean = re.sub(r'!\[.*?\]\(.*?\)', '', col).strip()
+                                        if len(col_clean) > 3 and not col_clean.startswith("http") and not col_clean.startswith("/api/storage"):
+                                            if any(kw in col_clean.lower() for kw in ["erha", "serum", "gel", "cream", "wash", "lotion", "moisturizer", "toner", "sabun"]):
+                                                target_sub_items.append(col_clean)
+                                                break
+
+                            # Deduplicate preserving order
+                            seen_items = set()
+                            unique_sub_items = []
+                            for it in target_sub_items:
+                                if it.lower() not in seen_items:
+                                    seen_items.add(it.lower())
+                                    unique_sub_items.append(it)
+
+                            if unique_sub_items:
+                                matched_item_for_doc = ", ".join(unique_sub_items)
                             else:
                                 matched_item_for_doc = f"Produk dengan kandungan {ingredient_filter}"
 
@@ -399,14 +432,17 @@ class GeneralKnowledgeService:
                 except Exception as e:
                     logger.debug(f"[DedicatedService] scan error {f}: {e}")
 
-        # DB Hydration fallback: scan active PostgreSQL Knowledge records if disk scan yields no matches
+        # DB Hydration fallback: scan active APPROVED PostgreSQL Knowledge records if disk scan yields no matches
         if not matched_docs:
             try:
-                from app.models.knowledge import Knowledge
-                from sqlalchemy import select
+                from app.models.knowledge import Knowledge, KnowledgeStatus
+                from sqlalchemy import select, or_
 
                 async def _scan_db(session):
-                    stmt = select(Knowledge).where(Knowledge.deleted_at.is_(None))
+                    stmt = select(Knowledge).where(
+                        or_(Knowledge.status == KnowledgeStatus.APPROVED, Knowledge.status == 'APPROVED'),
+                        Knowledge.deleted_at.is_(None)
+                    )
                     res = await session.execute(stmt)
                     return res.scalars().all()
 
@@ -451,6 +487,17 @@ class GeneralKnowledgeService:
                     if explicit_uuid and (explicit_uuid == doc_id.lower()):
                         score += 1000
                         match_type = "explicit_uuid"
+
+                    if ingredient_filter:
+                        ing_low = ingredient_filter.lower()
+                        ing_regex = re.compile(rf'\b{re.escape(ing_low)}\b', re.IGNORECASE)
+                        full_txt = summary + " " + doc_title
+                        if ing_regex.search(full_txt):
+                            score += 450
+                            match_type = "ingredient_match"
+                            matched_item_for_doc = f"Produk dengan kandungan {ingredient_filter}"
+                            if not resolved_entity_name:
+                                resolved_entity_name = matched_item_for_doc
 
                     if explicit_item_candidate:
                         cand_low = explicit_item_candidate.lower()
@@ -1117,22 +1164,48 @@ class GeneralKnowledgeService:
 
                 ing_m = re.search(r'(?:produk\s+(?:dengan\s+)?(?:yang\s+)?(?:mengandung|kandungan|bahan)\s+|kandungan\s+)(.+)', target_item, re.IGNORECASE)
                 ing_keyword = ing_m.group(1).strip().lower() if ing_m else None
+                if not ing_keyword and len(target_item_clean.split()) <= 4 and target_item_clean.lower() not in (str(existing_doc.get("title", "")).lower(), str(existing_doc.get("file_name", "")).lower()):
+                    ing_keyword = target_item_clean.lower()
 
-                if ing_keyword and summary:
-                    sections = re.split(r'(?=^#{1,3}\s+)', summary, flags=re.MULTILINE)
-                    for s in sections:
-                        m_h = re.match(r'^#{1,3}\s+([^\n]+)', s)
-                        if m_h and ing_keyword in s.lower():
-                            h_name = re.sub(r'[\*\_]', '', m_h.group(1)).strip()
-                            if h_name.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
-                                delete_targets.append(h_name)
+                # If ingredient keyword is present, collect all specific product names containing it
+                if ing_keyword:
+                    corpus = summary + " " + str(existing_doc.get("batch_summary", ""))
+                    if existing_doc.get("staging_history") and isinstance(existing_doc.get("staging_history"), list):
+                        for t in existing_doc.get("staging_history"):
+                            if isinstance(t, dict) and t.get("role") == "assistant":
+                                corpus += "\n" + str(t.get("content", ""))
+                    ing_re = re.compile(rf'\b{re.escape(ing_keyword)}\b', re.IGNORECASE)
+                    for line in corpus.splitlines():
+                        if ing_re.search(line):
+                            # Check for heading
+                            m_h = re.match(r'^#{1,3}\s+([^\n]+)', line)
+                            if m_h:
+                                h_name = re.sub(r'[\*\_]', '', m_h.group(1)).strip()
+                                if len(h_name) > 2 and h_name.lower() not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
+                                    delete_targets.append(h_name)
+                            # Check for bullet or table row product name
+                            m_b = re.match(r'^[|\-\*]\s*([^\n|→]+?)(?:\s*→|\s*\||\s*:\s*Sabun|\s*:\s*Pelembap|\s*:\s*Perawatan)', line)
+                            if m_b:
+                                b_name = re.sub(r'[\*\_#]', '', m_b.group(1)).strip()
+                                if len(b_name) > 3 and not b_name.lower().startswith("http") and not b_name.lower().startswith("/api/storage"):
+                                    delete_targets.append(b_name)
 
                 if not delete_targets:
                     delete_targets = [target_item_clean]
 
+                # Deduplicate delete_targets
+                unique_delete_targets = []
+                seen_dt = set()
+                for dt in delete_targets:
+                    if dt.lower() not in seen_dt:
+                        seen_dt.add(dt.lower())
+                        unique_delete_targets.append(dt)
+                delete_targets = unique_delete_targets
+
                 original_chunks = existing_doc.get("chunks", [])
                 filtered_chunks = []
                 removed_count = 0
+                ing_re = re.compile(rf'\b{re.escape(ing_keyword)}\b', re.IGNORECASE) if ing_keyword else None
 
                 for chunk in original_chunks:
                     chunk_text = chunk.get("text", "") if isinstance(chunk, dict) else ""
@@ -1150,7 +1223,7 @@ class GeneralKnowledgeService:
                             should_remove = True
                             break
 
-                    if not should_remove and ing_keyword and ing_keyword in chunk_lower:
+                    if not should_remove and ing_re and ing_re.search(chunk_lower):
                         should_remove = True
 
                     if should_remove:
@@ -1158,46 +1231,82 @@ class GeneralKnowledgeService:
                     else:
                         filtered_chunks.append(chunk)
 
+                # Helper to clean markdown sections, bullets, and table rows
+                def _clean_md(text: str, targets: list[str], ing_kw: Optional[str]) -> str:
+                    if not text:
+                        return ""
+                    res = text
+                    for t in targets:
+                        if not t or len(t.strip()) < 2:
+                            continue
+                        esc = re.escape(t.strip())
+                        res = re.sub(
+                            r'(?:^|\n)(#{1,4}\s*[^\n]*' + esc + r'[^\n]*\n(?:(?!^#{1,4}\s)[^\n]*\n?)*)',
+                            '\n',
+                            res,
+                            flags=re.MULTILINE | re.IGNORECASE
+                        )
+                        res = re.sub(
+                            rf'^[|\-\*\d\.]+\s*[^\n]*{esc}[^\n]*$\n?',
+                            '',
+                            res,
+                            flags=re.MULTILINE | re.IGNORECASE
+                        )
+                    if ing_kw and len(ing_kw.strip()) > 1:
+                        esc_ing = re.escape(ing_kw.strip())
+                        res = re.sub(
+                            rf'^[|\-\*\d\.]+\s*[^\n]*\b{esc_ing}\b[^\n]*$\n?',
+                            '',
+                            res,
+                            flags=re.MULTILINE | re.IGNORECASE
+                        )
+                    return re.sub(r'\n{3,}', '\n\n', res).strip()
+
+                # Clean summary
+                if summary:
+                    existing_doc["summary"] = _clean_md(summary, delete_targets, ing_keyword)
+
+                # Clean batch_summary
+                if existing_doc.get("batch_summary"):
+                    existing_doc["batch_summary"] = _clean_md(existing_doc["batch_summary"], delete_targets, ing_keyword)
+                    if "metadata" in existing_doc and isinstance(existing_doc["metadata"], dict):
+                        existing_doc["metadata"]["batch_summary"] = existing_doc["batch_summary"]
+
+                # Clean staging_history
+                for hist_key in ("staging_history", "history"):
+                    if hist_key in existing_doc and isinstance(existing_doc[hist_key], list):
+                        for turn in existing_doc[hist_key]:
+                            if isinstance(turn, dict) and turn.get("role") == "assistant":
+                                orig_c = turn.get("content", "")
+                                if orig_c:
+                                    turn["content"] = _clean_md(orig_c, delete_targets, ing_keyword)
+
                 existing_doc["chunks"] = filtered_chunks
 
-                # Remove target item sections from summary
-                if summary:
-                    for dt in delete_targets:
-                        escaped_name = re.escape(dt.strip())
-                        section_pattern = re.compile(
-                            r'(?:^|\n)(#{1,4}\s*[^\n]*' + escaped_name + r'[^\n]*\n(?:(?!^#{1,4}\s)[^\n]*\n?)*)',
-                            re.MULTILINE | re.IGNORECASE
-                        )
-                        summary = section_pattern.sub('\n', summary)
-                        line_pattern = re.compile(
-                            rf'^[|\-\*]\s*[^\n]*{escaped_name}[^\n]*$\n?',
-                            re.MULTILINE | re.IGNORECASE
-                        )
-                        summary = line_pattern.sub('', summary)
-
-                    # Also remove any remaining section that explicitly contains ingredient keyword
-                    if ing_keyword:
-                        sections = re.split(r'(?=^#{1,3}\s+)', summary, flags=re.MULTILINE)
-                        kept_sections = []
-                        for s in sections:
-                            m_h = re.match(r'^#{1,3}\s+([^\n]+)', s)
-                            if m_h and ing_keyword in s.lower():
-                                h_name = re.sub(r'[\*\_]', '', m_h.group(1)).strip().lower()
-                                if h_name not in ("ringkasan dokumen", "penutup", "evaluasi hasil", "profil pasien", "detail perawatan"):
-                                    continue
-                            kept_sections.append(s)
-                        summary = "".join(kept_sections)
-
-                    summary = re.sub(r'\n{3,}', '\n\n', summary).strip()
-                    existing_doc["summary"] = summary
-
-                if summary:
-                    for hist_key in ("staging_history", "history"):
-                        if hist_key in existing_doc and isinstance(existing_doc[hist_key], list) and existing_doc[hist_key]:
-                            for turn in reversed(existing_doc[hist_key]):
-                                if isinstance(turn, dict) and turn.get("role") == "assistant":
-                                    turn["content"] = summary
-                                    break
+                if not filtered_chunks:
+                    # All chunks were removed -> Full document deletion
+                    if approved_file and os.path.exists(approved_file):
+                        try:
+                            os.remove(approved_file)
+                        except Exception:
+                            pass
+                    if vector_store:
+                        vector_store.delete_document(doc_kid)
+                    if bm25_index:
+                        bm25_index.remove_file_chunks(doc_kid)
+                        bm25_index.save(settings.bm25_index_path)
+                    try:
+                        from app.services.storage import delete_knowledge_images_and_assets
+                        delete_knowledge_images_and_assets(doc_kid, doc_data=existing_doc)
+                    except Exception as s3_err:
+                        logger.debug(f"[DedicatedService] MinIO delete note: {s3_err}")
+                    await GeneralKnowledgeService.sync_knowledge_db(doc_kid, deleted=True, db=db)
+                    return {
+                        "success": True,
+                        "knowledge_id": doc_kid,
+                        "target_item": target_item_clean,
+                        "title": f"Seluruh item ({', '.join(delete_targets)}) dan dokumen '{doc_kid}' berhasil dihapus dari basis pengetahuan."
+                    }
 
                 with open(approved_file, "w", encoding="utf-8") as f:
                     json.dump(existing_doc, f, indent=4, ensure_ascii=False)

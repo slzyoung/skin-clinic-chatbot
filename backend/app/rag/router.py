@@ -874,12 +874,12 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
         from sqlalchemy import text
         with engine.connect() as conn:
             row = conn.execute(
-                text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE id::text = :k_id AND deleted_at IS NULL LIMIT 1"),
+                text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE id::text = :k_id AND status = 'APPROVED' AND deleted_at IS NULL LIMIT 1"),
                 {"k_id": knowledge_id}
             ).fetchone()
             if not row:
                 row = conn.execute(
-                    text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE (LOWER(title) = LOWER(:k_id) OR LOWER(file_name) = LOWER(:k_id)) AND deleted_at IS NULL LIMIT 1"),
+                    text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE (LOWER(title) = LOWER(:k_id) OR LOWER(file_name) = LOWER(:k_id)) AND status = 'APPROVED' AND deleted_at IS NULL LIMIT 1"),
                     {"k_id": knowledge_id}
                 ).fetchone()
 
@@ -4989,8 +4989,8 @@ async def query_general_endpoint(
 
         if is_delete_cmd:
             matched_res = (
-                await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
-                or await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+                await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+                or await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
             )
             if not matched_res:
                 return QueryGeneralResponse(
@@ -5106,8 +5106,8 @@ async def query_general_endpoint(
 
         if is_edit_cmd:
             matched_res = (
-                await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
-                or await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+                await GeneralKnowledgeService.find_all_target_documents_and_item(user_prompt)
+                or await GeneralKnowledgeService.find_all_target_documents_and_item(effective_prompt)
             )
 
             if matched_res:
