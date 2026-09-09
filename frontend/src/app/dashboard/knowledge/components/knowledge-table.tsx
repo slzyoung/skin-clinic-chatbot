@@ -44,7 +44,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useKnowledgeBaseList, useDeleteKnowledge } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { useCategories } from "@/app/dashboard/category/hooks/use-categories";
-import { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
+import { KnowledgeResponse, extractKnowledgeCategories } from "@/app/dashboard/knowledge/api/types";
 import { AttachProjectDialog } from "./attach-project-dialog";
 import { ConfirmationModal } from "@/components/shared/confirmation-modal";
 import { usePagination } from "@/hooks/use-pagination";
@@ -171,34 +171,10 @@ export function KnowledgeTable({
 
 		const rows: DisplayRowItem[] = [];
 
-		const extractCategories = (doc: KnowledgeResponse): string[] => {
-			const catSet = new Set<string>();
-			const rawList = (doc.metadata?.categories as string[]) || [];
-			const suggested =
-				(doc.metadata?.suggested_categories as Array<{ name: string } | string>) || [];
-			for (const c of rawList) {
-				if (typeof c === "string" && c.trim()) catSet.add(c.trim());
-			}
-			for (const s of suggested) {
-				if (typeof s === "string" && s.trim()) {
-					catSet.add(s.trim());
-				} else if (
-					s &&
-					typeof s === "object" &&
-					"name" in s &&
-					typeof (s as { name: unknown }).name === "string" &&
-					(s as { name: string }).name.trim()
-				) {
-					catSet.add((s as { name: string }).name.trim());
-				}
-			}
-			return Array.from(catSet);
-		};
-
 		// 1. Process Batch Groups
 		for (const [batchId, docs] of batchMap.entries()) {
 			const combinedCategories = Array.from(
-				new Set(docs.flatMap((d) => extractCategories(d))),
+				new Set(docs.flatMap((d) => extractKnowledgeCategories(d))),
 			);
 
 			if (docs.length === 1) {
@@ -281,7 +257,7 @@ export function KnowledgeTable({
 				documentCount: 1,
 				rawItem: doc,
 				allFileNames: [doc.file_name],
-				categories: extractCategories(doc),
+				categories: extractKnowledgeCategories(doc),
 				projectId: doc.project_id,
 				allDocIds: [doc.id],
 			});

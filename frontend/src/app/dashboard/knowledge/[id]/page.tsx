@@ -9,7 +9,7 @@ import { use, useState, useEffect } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail, useEditKnowledge } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
 import { useSafeBack } from "@/hooks/use-safe-back";
-import { VisibilitySettings, KnowledgeChunkItem } from "../api/types";
+import { VisibilitySettings, KnowledgeChunkItem, extractKnowledgeCategories } from "../api/types";
 
 export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
 	const unwrappedParams = use(params);
@@ -30,7 +30,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 		: "/dashboard/knowledge";
 	const handleBack = useSafeBack(fallbackPath);
 
-	const initialCategories = (data?.metadata?.categories as string[]) || (data?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
+	const initialCategories = extractKnowledgeCategories(data);
 	const initialVisibility = (data?.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
 	const initialChunks = (data?.metadata?.chunks as KnowledgeChunkItem[]) || [];
 	
@@ -43,7 +43,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 	useEffect(() => {
 		if (!isEditMode && data) {
 			const timer = setTimeout(() => {
-				const cats = (data.metadata?.categories as string[]) || (data.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
+				const cats = extractKnowledgeCategories(data);
 				const vis = (data.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
 				const chunks = (data.metadata?.chunks as KnowledgeChunkItem[]) || [];
 				setPendingCategories(cats);

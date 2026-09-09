@@ -40,13 +40,11 @@ export function SectionCategoriesEditor({
 	const [backupChunks, setBackupChunks] = useState<KnowledgeChunkItem[]>(chunks);
 	const [prevChunks, setPrevChunks] = useState<KnowledgeChunkItem[]>(chunks);
 
-	// Sync local chunks when parent prop updates and not actively editing
+	// Sync local chunks when parent prop updates (e.g. background chunking finishes or switching doc)
 	if (chunks !== prevChunks) {
 		setPrevChunks(chunks);
-		if (!isEditMode && !isEditing) {
-			setLocalChunks(chunks);
-			setBackupChunks(chunks);
-		}
+		setLocalChunks(chunks);
+		setBackupChunks(chunks);
 	}
 
 	// Sync local edit state with parent when prop changes
@@ -75,23 +73,37 @@ export function SectionCategoriesEditor({
 		}));
 	};
 
-	// Calculate bottom-up aggregated categories from a chunks list
-	const deriveAggregatedCategories = (chunkList: KnowledgeChunkItem[]) => {
+	// Calculate bottom-up aggregated categories from a chunks list and top-level categories
+	const deriveAggregatedCategories = (
+		chunkList: KnowledgeChunkItem[],
+		fallbackCats: string[] = categories,
+	) => {
 		const allCats = new Set<string>();
-		for (const ch of chunkList) {
-			const cList =
-				ch.metadata?.categories ||
-				(ch.metadata?.category ? [ch.metadata.category] : []);
-			for (const c of cList) {
+		if (Array.isArray(chunkList)) {
+			for (const ch of chunkList) {
+				const cList =
+					ch.metadata?.categories ||
+					(ch.metadata?.category ? [ch.metadata.category] : []);
+				if (Array.isArray(cList)) {
+					for (const c of cList) {
+						if (c && typeof c === "string" && c.trim()) {
+							allCats.add(c.trim());
+						}
+					}
+				}
+			}
+		}
+		if (Array.isArray(fallbackCats)) {
+			for (const c of fallbackCats) {
 				if (c && typeof c === "string" && c.trim()) {
 					allCats.add(c.trim());
 				}
 			}
 		}
-		return allCats.size > 0 ? Array.from(allCats) : categories;
+		return Array.from(allCats);
 	};
 
-	const displayCategories = deriveAggregatedCategories(localChunks);
+	const displayCategories = deriveAggregatedCategories(localChunks, categories);
 
 	const handleAddCategory = (chunkIdx: number, catName: string) => {
 		const targetChunk = localChunks[chunkIdx];
@@ -120,7 +132,7 @@ export function SectionCategoriesEditor({
 		setOpenDropdowns((prev) => ({ ...prev, [chunkIdx]: false }));
 
 		// Real-time synchronization to parent state
-		const nextAggregated = deriveAggregatedCategories(updatedChunks);
+		const nextAggregated = deriveAggregatedCategories(updatedChunks, categories);
 		onChangeChunks?.(updatedChunks);
 		onChangeCategories?.(nextAggregated);
 	};
@@ -148,21 +160,21 @@ export function SectionCategoriesEditor({
 		setLocalChunks(updatedChunks);
 
 		// Real-time synchronization to parent state
-		const nextAggregated = deriveAggregatedCategories(updatedChunks);
+		const nextAggregated = deriveAggregatedCategories(updatedChunks, categories);
 		onChangeChunks?.(updatedChunks);
 		onChangeCategories?.(nextAggregated);
 	};
 
 	const handleCancelCard = () => {
 		setLocalChunks(backupChunks);
-		const backupAggregated = deriveAggregatedCategories(backupChunks);
+		const backupAggregated = deriveAggregatedCategories(backupChunks, categories);
 		onChangeChunks?.(backupChunks);
 		onChangeCategories?.(backupAggregated);
 		setIsEditing(false);
 	};
 
 	const handleSaveCard = () => {
-		const finalAggregated = deriveAggregatedCategories(localChunks);
+		const finalAggregated = deriveAggregatedCategories(localChunks, categories);
 		onChangeChunks?.(localChunks);
 		onChangeCategories?.(finalAggregated);
 		setBackupChunks(localChunks);

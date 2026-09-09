@@ -3,6 +3,7 @@ import { api } from "@/lib/axios";
 import { getErrorMessage } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { categoryKeys } from "@/app/dashboard/category/api/keys";
 import { knowledgeKeys, projectKeys } from "../api/keys";
 import type {
 	KnowledgeResponse,
@@ -91,6 +92,7 @@ export const useUploadKnowledge = () => {
 			toast.success("Files uploaded successfully!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
 		},
@@ -114,6 +116,7 @@ export const useIngestTextKnowledge = () => {
 			toast.success("Knowledge text ingestion initiated!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
 		},
@@ -135,6 +138,7 @@ export const useUpdateKnowledgeStatus = () => {
 			toast.success("Status updated successfully!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			if (variables?.id) {
 				queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
 			}
@@ -159,6 +163,7 @@ export const useApproveKnowledge = () => {
 			toast.success("Document approved and indexed into AI Knowledge Base!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(id) });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
@@ -181,6 +186,7 @@ export const useApproveBatchKnowledge = () => {
 			toast.success("All documents approved and indexed into AI Knowledge Base!");
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
 		},
@@ -206,6 +212,7 @@ export const useDeleteKnowledge = () => {
 			}
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
 			const id = typeof variables === "string" ? variables : variables.id;
@@ -241,6 +248,7 @@ export const useEditKnowledge = () => {
 			}
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
 			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: categoryKeys.all });
 			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.id) });
 			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
 		},
@@ -249,6 +257,7 @@ export const useEditKnowledge = () => {
 		},
 	});
 };
+
 
 export const useIngestionQuota = () => {
 	return useQuery({

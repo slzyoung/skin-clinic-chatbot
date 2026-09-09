@@ -8,7 +8,7 @@ import {
 	useEditKnowledge,
 	useDeleteKnowledge,
 } from "../../hooks/use-knowledge";
-import { KnowledgeResponse, VisibilitySettings, KnowledgeChunkItem } from "../../api/types";
+import { KnowledgeResponse, VisibilitySettings, KnowledgeChunkItem, extractKnowledgeCategories } from "../../api/types";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
@@ -49,10 +49,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 
 		const doc = data || initialKnowledge;
 
-		const initialCategories =
-			(doc?.metadata?.categories as string[]) ||
-			(doc?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) ||
-			[];
+		const initialCategories = extractKnowledgeCategories(doc);
 		const initialVisibility = (doc?.metadata?.visibility_settings as VisibilitySettings) || {
 			clinics: ["all"],
 			doctor_types: ["all"],
@@ -72,13 +69,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 		useEffect(() => {
 			if (doc && !isEditMode) {
 				const timer = setTimeout(() => {
-					setPendingCategories(
-						(doc.metadata?.categories as string[]) ||
-							(doc.metadata?.suggested_categories as Array<{ name: string }>)?.map(
-								(c) => c.name,
-							) ||
-							[],
-					);
+					setPendingCategories(extractKnowledgeCategories(doc));
 					setPendingVisibilitySettings(
 						(doc.metadata?.visibility_settings as VisibilitySettings) || {
 							clinics: ["all"],

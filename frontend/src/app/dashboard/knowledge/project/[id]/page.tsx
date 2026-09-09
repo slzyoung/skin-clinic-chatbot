@@ -58,7 +58,7 @@ import {
 	RiCheckLine,
 	RiArrowDownSLine,
 } from "@remixicon/react";
-import type { KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
+import { extractKnowledgeCategories, type KnowledgeResponse } from "@/app/dashboard/knowledge/api/types";
 
 interface DisplayRowItem {
 	id: string;
@@ -177,34 +177,10 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
 		const rows: DisplayRowItem[] = [];
 
-		const extractCategories = (doc: KnowledgeResponse): string[] => {
-			const catSet = new Set<string>();
-			const rawList = (doc.metadata?.categories as string[]) || [];
-			const suggested =
-				(doc.metadata?.suggested_categories as Array<{ name: string } | string>) || [];
-			for (const c of rawList) {
-				if (typeof c === "string" && c.trim()) catSet.add(c.trim());
-			}
-			for (const s of suggested) {
-				if (typeof s === "string" && s.trim()) {
-					catSet.add(s.trim());
-				} else if (
-					s &&
-					typeof s === "object" &&
-					"name" in s &&
-					typeof (s as { name: unknown }).name === "string" &&
-					(s as { name: string }).name.trim()
-				) {
-					catSet.add((s as { name: string }).name.trim());
-				}
-			}
-			return Array.from(catSet);
-		};
-
 		// 1. Process Batch Groups
 		for (const [batchId, docs] of batchMap.entries()) {
 			const combinedCategories = Array.from(
-				new Set(docs.flatMap((d) => extractCategories(d))),
+				new Set(docs.flatMap((d) => extractKnowledgeCategories(d))),
 			);
 
 			if (docs.length === 1) {
@@ -282,7 +258,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 				documentCount: 1,
 				rawItem: doc,
 				allFileNames: [doc.file_name],
-				categories: extractCategories(doc),
+				categories: extractKnowledgeCategories(doc),
 				allDocIds: [doc.id],
 			});
 		}

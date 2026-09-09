@@ -124,3 +124,63 @@ export interface ProjectUpdate {
 	name?: string;
 	description?: string | null;
 }
+
+export function extractKnowledgeCategories(doc?: KnowledgeResponse | null): string[] {
+	if (!doc || !doc.metadata) return [];
+	const meta = doc.metadata as Record<string, unknown>;
+	const catSet = new Set<string>();
+
+	// 1. Per-section categories from chunks
+	const chunks = (meta.chunks as KnowledgeChunkItem[]) || [];
+	if (Array.isArray(chunks)) {
+		for (const ch of chunks) {
+			const chMeta = ch?.metadata as Record<string, unknown> | undefined;
+			const chCats = chMeta?.categories || (chMeta?.category ? [chMeta.category] : []);
+			if (Array.isArray(chCats)) {
+				for (const c of chCats) {
+					if (typeof c === "string" && c.trim()) {
+						catSet.add(c.trim());
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Direct categories
+	const directCats = meta.categories;
+	if (Array.isArray(directCats)) {
+		for (const c of directCats) {
+			if (typeof c === "string" && c.trim()) {
+				catSet.add(c.trim());
+			} else if (
+				c &&
+				typeof c === "object" &&
+				"name" in c &&
+				typeof (c as { name: unknown }).name === "string"
+			) {
+				const n = (c as { name: string }).name.trim();
+				if (n) catSet.add(n);
+			}
+		}
+	}
+
+	// 3. Suggested categories
+	const suggestedCats = meta.suggested_categories;
+	if (Array.isArray(suggestedCats)) {
+		for (const c of suggestedCats) {
+			if (typeof c === "string" && c.trim()) {
+				catSet.add(c.trim());
+			} else if (
+				c &&
+				typeof c === "object" &&
+				"name" in c &&
+				typeof (c as { name: unknown }).name === "string"
+			) {
+				const n = (c as { name: string }).name.trim();
+				if (n) catSet.add(n);
+			}
+		}
+	}
+
+	return Array.from(catSet);
+}

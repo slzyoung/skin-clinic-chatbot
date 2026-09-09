@@ -33,10 +33,8 @@ export function CategorySettings({
 
 	if (categories !== prevCategories) {
 		setPrevCategories(categories);
-		if (!isEditMode && !isEditing) {
-			setLocalCategories(categories);
-			setBackupCategories(categories);
-		}
+		setLocalCategories(categories);
+		setBackupCategories(categories);
 	}
 
 	// Sync local edit state with parent when prop changes
