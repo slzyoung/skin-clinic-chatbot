@@ -49,7 +49,7 @@ import {
 	RiUser3Line,
 } from "@remixicon/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
 	VisibilitySettings as IVisibilitySettings,
@@ -760,6 +760,7 @@ export function ChatPreview({
 
 	const [input, setInput] = useState("");
 	const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+	const [fileInputKey, setFileInputKey] = useState(0);
 	const [isLoading, setIsLoading] = useState(false);
 	const [optimisticUserMsg, setOptimisticUserMsg] = useState<Message | null>(null);
 	const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -769,6 +770,7 @@ export function ChatPreview({
 	const currentTab =
 		activeTab || (files && files.length > 0 ? (files[0].file_name as string) : null);
 
+	const fileInputId = useId();
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const queryClient = useQueryClient();
@@ -801,12 +803,19 @@ export function ChatPreview({
 		toast.info("AI generation stopped.");
 	};
 
-	// Reset scroll position to top (below tabs) when switching documents in knowledge mode
+	// Always ensure viewport scroll starts at the very top (0) in knowledge mode on mount and on document/file switch
 	useEffect(() => {
 		if (mode === "knowledge" && viewportRef.current) {
 			viewportRef.current.scrollTop = 0;
+			const raf = requestAnimationFrame(() => {
+				if (viewportRef.current) {
+					viewportRef.current.scrollTop = 0;
+					viewportRef.current.scrollTo({ top: 0, behavior: "instant" });
+				}
+			});
+			return () => cancelAnimationFrame(raf);
 		}
-	}, [knowledgeId, mode]);
+	}, [knowledgeId, fileName, mode]);
 
 	// Focus manual editor textarea without auto-scrolling the viewport when entering manual edit mode
 	useEffect(() => {
@@ -999,6 +1008,7 @@ export function ChatPreview({
 
 		if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
 			setAttachedFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)]);
+			setFileInputKey((k) => k + 1);
 			textareaRef.current?.focus({ preventScroll: true });
 		}
 	};
@@ -1008,6 +1018,7 @@ export function ChatPreview({
 		if (e.clipboardData.files && e.clipboardData.files.length > 0) {
 			e.preventDefault();
 			setAttachedFiles((prev) => [...prev, ...Array.from(e.clipboardData.files)]);
+			setFileInputKey((k) => k + 1);
 			textareaRef.current?.focus({ preventScroll: true });
 		}
 	};
@@ -1241,11 +1252,13 @@ export function ChatPreview({
 			setAttachedFiles((prev) => [...prev, ...Array.from(files)]);
 			textareaRef.current?.focus({ preventScroll: true });
 		}
-		e.target.value = "";
+		setFileInputKey((k) => k + 1);
 	};
 
 	const removeAttachedFile = (indexToRemove: number) => {
 		setAttachedFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+		setFileInputKey((k) => k + 1);
+		textareaRef.current?.focus({ preventScroll: true });
 	};
 
 	const handleSend = async () => {
@@ -1268,6 +1281,7 @@ export function ChatPreview({
 		}
 		setInput("");
 		setAttachedFiles([]);
+		setFileInputKey((k) => k + 1);
 		setIsLoading(true);
 		if (textareaRef.current) {
 			textareaRef.current.style.height = "auto";
@@ -2197,9 +2211,13 @@ export function ChatPreview({
 										</AttachmentContent>
 										<AttachmentActions>
 											<AttachmentAction
+												type="button"
 												variant="ghost"
-												className="hover:bg-zinc-100 text-zinc-500 hover:text-zinc-950 ml-1"
-												onClick={() => removeAttachedFile(idx)}
+												className="hover:bg-zinc-100 text-zinc-500 hover:text-zinc-950 ml-1 cursor-pointer"
+												onClick={(e) => {
+													e.stopPropagation();
+													removeAttachedFile(idx);
+												}}
 											>
 												<RiCloseLine className="w-4 h-4" />
 											</AttachmentAction>
@@ -2213,7 +2231,6 @@ export function ChatPreview({
 					<textarea
 						ref={textareaRef}
 						rows={1}
-						autoFocus={!isInputDisabled}
 						value={input}
 						onChange={(e) => {
 							setInput(e.target.value);
@@ -2242,28 +2259,31 @@ export function ChatPreview({
 					/>
 
 					<input
+						key={fileInputKey}
+						id={fileInputId}
 						type="file"
 						ref={fileInputRef}
 						onChange={handleFileSelect}
+						disabled={isInputDisabled}
 						multiple
-						className="hidden"
+						className="sr-only"
 					/>
 
 					<div
 						className={`flex items-center ${mode === "general" ? "justify-end" : "justify-between"} pt-1`}
 					>
 						{mode !== "general" && (
-							<Button
-								type="button"
-								variant="ghost"
-								size="icon-sm"
-								onClick={() => fileInputRef.current?.click()}
-								disabled={isInputDisabled}
-								className="text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 disabled:opacity-40"
-								title="Attach files"
+							<label
+								htmlFor={isInputDisabled ? undefined : fileInputId}
+								className={`inline-flex items-center justify-center size-8 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors ${
+									isInputDisabled
+										? "opacity-40 cursor-not-allowed pointer-events-none"
+										: "cursor-pointer"
+								}`}
+								title={isInputDisabled ? "Input disabled" : "Attach files"}
 							>
-								<RiAttachment2 className="size-4" />
-							</Button>
+								<RiAttachment2 className="size-4 pointer-events-none shrink-0" />
+							</label>
 						)}
 						{isProcessing ? (
 							<Button
