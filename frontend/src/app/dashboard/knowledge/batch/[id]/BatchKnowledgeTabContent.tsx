@@ -8,7 +8,7 @@ import {
 	useEditKnowledge,
 	useDeleteKnowledge,
 } from "../../hooks/use-knowledge";
-import { KnowledgeResponse, VisibilitySettings } from "../../api/types";
+import { KnowledgeResponse, VisibilitySettings, KnowledgeChunkItem } from "../../api/types";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
@@ -58,12 +58,14 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 			doctor_types: ["all"],
 			doctors: ["all"],
 		};
+		const initialChunks = (doc?.metadata?.chunks as KnowledgeChunkItem[]) || [];
 
 		const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
 		const [pendingVisibilitySettings, setPendingVisibilitySettings] =
 			useState<VisibilitySettings>(initialVisibility);
 		const [pendingTitle, setPendingTitle] = useState(doc?.title || "");
 		const [pendingSummary, setPendingSummary] = useState(doc?.ai_summary || "");
+		const [pendingChunks, setPendingChunks] = useState<KnowledgeChunkItem[]>(initialChunks);
 		const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 		const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
 
@@ -86,6 +88,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 					);
 					setPendingTitle(doc.title || "");
 					setPendingSummary(doc.ai_summary || "");
+					setPendingChunks((doc.metadata?.chunks as KnowledgeChunkItem[]) || []);
 				}, 0);
 				return () => clearTimeout(timer);
 			}
@@ -99,6 +102,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 					categories: pendingCategories,
 					visibility_settings: pendingVisibilitySettings,
 					title: typeof newTitle === "string" ? newTitle : pendingTitle,
+					chunks: pendingChunks.length > 0 ? pendingChunks : undefined,
 				},
 			});
 			setIsEditMode(false);
@@ -138,6 +142,7 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 			setPendingVisibilitySettings(initialVisibility);
 			setPendingTitle(doc?.title || "");
 			setPendingSummary(doc?.ai_summary || "");
+			setPendingChunks(initialChunks);
 			setIsEditMode(false);
 		};
 
@@ -161,12 +166,13 @@ export const BatchKnowledgeTabContent = forwardRef<BatchTabHandle, BatchKnowledg
 						isEditMode={isEditMode}
 						categories={pendingCategories}
 						onChangeCategories={setPendingCategories}
+						chunks={pendingChunks}
+						onChangeChunks={setPendingChunks}
 						visibilitySettings={pendingVisibilitySettings}
 						onChangeVisibilitySettings={setPendingVisibilitySettings}
 						title={pendingTitle}
 						onChangeTitle={setPendingTitle}
 						onSave={() => setIsSaveModalOpen(true)}
-						onCancel={handleCancel}
 						headerNode={headerNode}
 						preHeaderNode={preHeaderNode}
 					/>

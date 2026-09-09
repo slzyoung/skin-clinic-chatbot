@@ -1,4 +1,4 @@
-import { KnowledgeResponse, VisibilitySettings } from "@/app/dashboard/knowledge/api/types";
+import { KnowledgeResponse, VisibilitySettings, KnowledgeChunkItem } from "@/app/dashboard/knowledge/api/types";
 import {
 	useApproveKnowledge,
 	useEditKnowledge,
@@ -17,6 +17,7 @@ interface ApprovalActionsProps {
 	pendingVisibilitySettings?: VisibilitySettings;
 	pendingTitle?: string;
 	pendingSummary?: string;
+	pendingChunks?: KnowledgeChunkItem[];
 }
 
 export function ApprovalActions({
@@ -25,6 +26,7 @@ export function ApprovalActions({
 	pendingVisibilitySettings,
 	pendingTitle,
 	pendingSummary,
+	pendingChunks,
 }: ApprovalActionsProps) {
 	const router = useRouter();
 	const approveKnowledge = useApproveKnowledge();
@@ -41,6 +43,7 @@ export function ApprovalActions({
 			(pendingCategories && pendingCategories.length > 0) ||
 			pendingVisibilitySettings ||
 			pendingTitle ||
+			(pendingChunks && pendingChunks.length > 0) ||
 			(pendingSummary && pendingSummary !== knowledge.ai_summary)
 		) {
 			await editKnowledge.mutateAsync({
@@ -50,6 +53,7 @@ export function ApprovalActions({
 					categories: pendingCategories || [],
 					visibility_settings: pendingVisibilitySettings,
 					title: pendingTitle,
+					chunks: pendingChunks && pendingChunks.length > 0 ? pendingChunks : undefined,
 				},
 				hideToast: true,
 			});

@@ -7,6 +7,7 @@ import {
 	RiFilePdf2Line,
 	RiFileWord2Line,
 	RiFileExcel2Line,
+	RiFilePpt2Line,
 	RiImage2Line,
 	RiFileTextLine,
 	RiCloseLine,
@@ -203,10 +204,19 @@ export function PromptInput({
 			case "xlsx":
 			case "csv":
 				return { Icon: RiFileExcel2Line, bgColor: "bg-emerald-50", textColor: "text-emerald-600" };
+			case "ppt":
+			case "pptx":
+			case "pps":
+			case "ppsx":
+			case "pot":
+			case "potx":
+			case "odp":
+				return { Icon: RiFilePpt2Line, bgColor: "bg-orange-50", textColor: "text-orange-600" };
 			case "png":
 			case "jpg":
 			case "jpeg":
 			case "gif":
+			case "webp":
 				return { Icon: RiImage2Line, bgColor: "bg-purple-50", textColor: "text-purple-600" };
 			case "txt":
 			default:

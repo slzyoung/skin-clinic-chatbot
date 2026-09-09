@@ -9,7 +9,7 @@ import { use, useState, useEffect } from "react";
 import { useDeleteKnowledge, useKnowledgeDetail, useEditKnowledge } from "../hooks/use-knowledge";
 import { useSession } from "@/hooks/use-session";
 import { useSafeBack } from "@/hooks/use-safe-back";
-import { VisibilitySettings } from "../api/types";
+import { VisibilitySettings, KnowledgeChunkItem } from "../api/types";
 
 export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: string }> }) {
 	const unwrappedParams = use(params);
@@ -32,21 +32,25 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 
 	const initialCategories = (data?.metadata?.categories as string[]) || (data?.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
 	const initialVisibility = (data?.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
+	const initialChunks = (data?.metadata?.chunks as KnowledgeChunkItem[]) || [];
 	
 	const [pendingCategories, setPendingCategories] = useState<string[]>(initialCategories);
 	const [pendingVisibilitySettings, setPendingVisibilitySettings] = useState<VisibilitySettings>(initialVisibility);
 	const [pendingTitle, setPendingTitle] = useState(data?.title || "");
 	const [pendingSummary, setPendingSummary] = useState(data?.ai_summary || "");
+	const [pendingChunks, setPendingChunks] = useState<KnowledgeChunkItem[]>(initialChunks);
 
 	useEffect(() => {
 		if (!isEditMode && data) {
 			const timer = setTimeout(() => {
 				const cats = (data.metadata?.categories as string[]) || (data.metadata?.suggested_categories as Array<{ name: string }>)?.map((c) => c.name) || [];
 				const vis = (data.metadata?.visibility_settings as VisibilitySettings) || { clinics: ["all"], doctor_types: ["all"], doctors: ["all"] };
+				const chunks = (data.metadata?.chunks as KnowledgeChunkItem[]) || [];
 				setPendingCategories(cats);
 				setPendingVisibilitySettings(vis);
 				setPendingTitle(data.title || "");
 				setPendingSummary(data.ai_summary || "");
+				setPendingChunks(chunks);
 			}, 0);
 			return () => clearTimeout(timer);
 		}
@@ -73,6 +77,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 				categories: pendingCategories,
 				visibility_settings: pendingVisibilitySettings,
 				title: typeof newTitle === "string" ? newTitle : pendingTitle,
+				chunks: pendingChunks.length > 0 ? pendingChunks : undefined,
 			},
 		});
 		setIsEditMode(false);
@@ -83,6 +88,7 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 		setPendingVisibilitySettings(initialVisibility);
 		setPendingTitle(data?.title || "");
 		setPendingSummary(data?.ai_summary || "");
+		setPendingChunks(initialChunks);
 		setIsEditMode(false);
 	};
 
@@ -109,19 +115,10 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					>
 						<RiArrowLeftLine className="size-5" />
 					</Button>
-					<div className="flex-1 min-w-0 max-w-2xl">
-						{isEditMode ? (
-							<input
-								value={pendingTitle}
-								onChange={(e) => setPendingTitle(e.target.value)}
-								className="w-full text-base font-semibold text-zinc-900 border-b border-blue-500 focus:border-blue-600 focus:outline-none bg-transparent py-0.5"
-								placeholder="Knowledge Document Title"
-							/>
-						) : (
-							<h1 className="text-base font-semibold text-zinc-900 truncate" title={formatDisplayTitle(data?.title)}>
-								{formatDisplayTitle(data?.title)}
-							</h1>
-						)}
+					<div className="flex-1 min-w-0 max-w-xl">
+						<h1 className="text-base font-semibold text-zinc-900 truncate" title={formatDisplayTitle(isEditMode ? (pendingTitle || data?.title) : data?.title)}>
+							{formatDisplayTitle(isEditMode ? (pendingTitle || data?.title) : data?.title)}
+						</h1>
 					</div>
 				</div>
 
@@ -199,12 +196,13 @@ export default function KnowledgeDetailPage({ params }: { params: Promise<{ id: 
 					isEditMode={isEditMode}
 					categories={pendingCategories}
 					onChangeCategories={setPendingCategories}
+					chunks={pendingChunks}
+					onChangeChunks={setPendingChunks}
 					visibilitySettings={pendingVisibilitySettings}
 					onChangeVisibilitySettings={setPendingVisibilitySettings}
 					title={pendingTitle}
 					onChangeTitle={setPendingTitle}
 					onSave={() => setIsSaveModalOpen(true)}
-					onCancel={handleCancel}
 				/>
 			</div>
 

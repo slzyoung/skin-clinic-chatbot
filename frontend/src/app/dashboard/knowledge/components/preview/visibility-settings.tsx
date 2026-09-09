@@ -196,16 +196,12 @@ interface VisibilitySettingsProps {
 	onChange: (settings: IVisibilitySettings) => void;
 	isEditMode?: boolean;
 	showSaveActions?: boolean;
-	onSave?: () => void;
-	onCancel?: () => void;
 }
 
 export function VisibilitySettings({
 	settings,
 	onChange,
 	isEditMode = false,
-	showSaveActions = false,
-	onSave,
 }: VisibilitySettingsProps) {
 	const { data: branches = [] } = useBranches();
 	const { data: doctors = [] } = useUsers("DOCTOR");
@@ -229,9 +225,6 @@ export function VisibilitySettings({
 	const handleSaveModal = () => {
 		onChange(tempSettings);
 		setIsModalOpen(false);
-		if (showSaveActions) {
-			onSave?.();
-		}
 	};
 
 	const handleCancelModal = () => {
@@ -307,36 +300,36 @@ export function VisibilitySettings({
 	return (
 		<>
 			<div className="bg-zinc-100/50 rounded-lg p-4 w-full text-zinc-950">
-				<div className="flex items-center gap-2 text-blue-600 mb-2">
-					<RiEyeLine className="size-5" />
-					<h3 className="font-semibold text-sm">Visibility Settings</h3>
+				<div className="flex items-center gap-2 text-blue-700 mb-2">
+					<RiEyeLine className="size-5 text-blue-600 shrink-0" />
+					<h3 className="font-bold text-sm text-zinc-950">Visibility Settings</h3>
 				</div>
-				<p className="text-xs text-zinc-500 mb-4">
+				<p className="text-xs text-zinc-600 font-medium mb-4">
 					Limit access to your medical insights so only authorized doctors can view this knowledge.
 				</p>
 
 				<div className="flex flex-col gap-3">
 					<div>
-						<label className="text-xs text-zinc-600 font-medium">Clinic</label>
-						<p className="text-sm font-medium">{formatDisplay("clinics", "Clinic")}</p>
+						<label className="text-xs text-zinc-700 font-semibold block mb-0.5">Clinic</label>
+						<p className="text-sm font-semibold text-zinc-900">{formatDisplay("clinics", "Clinic")}</p>
 					</div>
 					<div>
-						<label className="text-xs text-zinc-600 font-medium">Doctor Type</label>
-						<p className="text-sm font-medium">{formatDisplay("doctor_types", "Doctor Type")}</p>
+						<label className="text-xs text-zinc-700 font-semibold block mb-0.5">Doctor Type</label>
+						<p className="text-sm font-semibold text-zinc-900">{formatDisplay("doctor_types", "Doctor Type")}</p>
 					</div>
 					<div>
-						<label className="text-xs text-zinc-600 font-medium">Doctor</label>
-						<p className="text-sm font-medium">{formatDisplay("doctors", "Doctor")}</p>
+						<label className="text-xs text-zinc-700 font-semibold block mb-0.5">Doctor</label>
+						<p className="text-sm font-semibold text-zinc-900">{formatDisplay("doctors", "Doctor")}</p>
 					</div>
 
 					{isEditMode && (
 						<Button
 							type="button"
 							variant="outline"
-							className="w-fit mt-2 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-9 font-medium text-sm transition-colors cursor-pointer shadow-none gap-2"
+							className="w-fit mt-2 border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100 font-semibold rounded-lg px-4 h-9 text-sm transition-colors cursor-pointer shadow-none gap-2"
 							onClick={handleOpenModal}
 						>
-							<RiEdit2Line className="size-4" />
+							<RiEdit2Line className="size-4 text-zinc-700" />
 							Edit Visibility
 						</Button>
 					)}

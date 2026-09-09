@@ -9,7 +9,7 @@ import type {
 	KnowledgeStatus,
 	KnowledgeTextIngestRequest,
 	KnowledgeTextIngestResponse,
-	VisibilitySettings,
+	KnowledgeEditRequest,
 } from "../api/types";
 
 export const useKnowledgeBaseList = () => {
@@ -229,12 +229,7 @@ export const useEditKnowledge = () => {
 			hideToast,
 		}: {
 			id: string;
-			data: {
-				summary: string;
-				categories: string[];
-				visibility_settings?: VisibilitySettings;
-				title?: string;
-			};
+			data: KnowledgeEditRequest;
 			hideToast?: boolean;
 		}) => {
 			const response = await api.put(`/knowledge/${id}`, data);

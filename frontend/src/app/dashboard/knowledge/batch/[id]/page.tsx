@@ -25,6 +25,7 @@ import {
 	RiEdit2Line,
 	RiFileExcel2Line,
 	RiFilePdf2Line,
+	RiFilePpt2Line,
 	RiFileTextLine,
 	RiFileWord2Line,
 	RiImage2Line,
@@ -158,10 +159,23 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 					bgColor: "bg-emerald-50",
 					textColor: "text-emerald-600",
 				};
+			case "ppt":
+			case "pptx":
+			case "pps":
+			case "ppsx":
+			case "pot":
+			case "potx":
+			case "odp":
+				return {
+					Icon: RiFilePpt2Line,
+					bgColor: "bg-orange-50",
+					textColor: "text-orange-600",
+				};
 			case "png":
 			case "jpg":
 			case "jpeg":
 			case "gif":
+			case "webp":
 				return {
 					Icon: RiImage2Line,
 					bgColor: "bg-purple-50",

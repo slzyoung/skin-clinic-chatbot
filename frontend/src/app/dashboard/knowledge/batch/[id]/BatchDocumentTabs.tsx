@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import {
 	RiFileExcel2Line,
 	RiFilePdf2Line,
+	RiFilePpt2Line,
 	RiFileTextLine,
 	RiFileWord2Line,
 	RiImage2Line,
@@ -32,6 +33,14 @@ const getFileIconAndColor = (filename?: string | null) => {
 		case "xlsx":
 		case "csv":
 			return { Icon: RiFileExcel2Line, textColor: "text-emerald-600" };
+		case "ppt":
+		case "pptx":
+		case "pps":
+		case "ppsx":
+		case "pot":
+		case "potx":
+		case "odp":
+			return { Icon: RiFilePpt2Line, textColor: "text-orange-600" };
 		case "png":
 		case "jpg":
 		case "jpeg":

@@ -35,6 +35,34 @@ export interface VisibilitySettings {
 	doctors: string[];
 }
 
+export interface KnowledgeChunkMetadata {
+	knowledge_id?: string;
+	chunk_index?: number;
+	section?: string;
+	section_name?: string;
+	heading?: string;
+	heading_path?: string | string[];
+	page?: number;
+	title?: string;
+	categories?: string[];
+	category?: string;
+	is_custom?: boolean;
+	[key: string]: unknown;
+}
+
+export interface KnowledgeChunkItem {
+	text: string;
+	metadata?: KnowledgeChunkMetadata;
+}
+
+export interface KnowledgeEditRequest {
+	summary: string;
+	categories: string[];
+	visibility_settings?: VisibilitySettings;
+	title?: string;
+	chunks?: KnowledgeChunkItem[];
+}
+
 export interface KnowledgeResponse {
 	id: string; // UUID
 	title: string;
@@ -52,6 +80,9 @@ export interface KnowledgeResponse {
 	project_id?: string | null; // UUID
 	metadata?: {
 		visibility_settings?: VisibilitySettings;
+		categories?: string[];
+		suggested_categories?: Array<{ id?: string | null; name: string }>;
+		chunks?: KnowledgeChunkItem[];
 		[key: string]: unknown;
 	} | null;
 	created_at: string;

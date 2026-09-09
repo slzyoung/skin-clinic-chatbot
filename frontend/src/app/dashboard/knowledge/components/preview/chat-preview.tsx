@@ -19,8 +19,8 @@ import {
 } from "@/components/ui/message-scroller";
 import { api } from "@/lib/axios";
 import {
-	RiAttachment2,
 	RiAlertLine,
+	RiAttachment2,
 	RiBold,
 	RiCheckLine,
 	RiCloseLine,
@@ -30,6 +30,7 @@ import {
 	RiEyeLine,
 	RiFileExcel2Line,
 	RiFilePdf2Line,
+	RiFilePpt2Line,
 	RiFileTextLine,
 	RiFileWord2Line,
 	RiH1,
@@ -52,19 +53,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
 	VisibilitySettings as IVisibilitySettings,
+	KnowledgeChunkItem,
 	KnowledgeResponse,
 } from "@/app/dashboard/knowledge/api/types";
 import {
-	useConfirmOperation,
 	useCancelOperation,
+	useConfirmOperation,
 	useGeneralChatSession,
 	useSendGeneralChatMessage,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { MarkdownContent } from "@/components/shared/markdown-content";
 import { cleanMessageTurn } from "@/components/shared/markdown/utils";
 import { toast } from "sonner";
-import { CategorySettings } from "./category-settings";
 import { ApprovalActions } from "./approval-actions";
+import { CategorySettings } from "./category-settings";
+import { SectionCategoriesEditor } from "./section-categories-editor";
 import { TitleSettings } from "./title-settings";
 import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
 
@@ -84,12 +87,13 @@ interface ChatPreviewProps {
 	isEditMode?: boolean;
 	categories?: string[];
 	onChangeCategories?: (newCategories: string[]) => void;
+	chunks?: KnowledgeChunkItem[];
+	onChangeChunks?: (newChunks: KnowledgeChunkItem[]) => void;
 	visibilitySettings?: IVisibilitySettings;
 	onChangeVisibilitySettings?: (settings: IVisibilitySettings) => void;
 	title?: string;
 	onChangeTitle?: (title: string) => void;
 	onSave?: (newTitle?: string) => void;
-	onCancel?: () => void;
 	headerNode?: React.ReactNode;
 	preHeaderNode?: React.ReactNode;
 }
@@ -132,7 +136,12 @@ function getInitialMessages(
 
 	const meta = knowledge?.metadata as Record<string, unknown> | undefined;
 	const history = (meta?.history || meta?.chat_history) as
-		| Array<{ role: "user" | "assistant"; content: string; attachmentName?: string; attachmentNames?: string[] }>
+		| Array<{
+				role: "user" | "assistant";
+				content: string;
+				attachmentName?: string;
+				attachmentNames?: string[];
+		  }>
 		| undefined;
 
 	const effectivePrompt =
@@ -200,10 +209,7 @@ function getInitialMessages(
 			return mapped;
 		}
 
-		const mapped = [
-			...turn0,
-			...history.map(mapTurn),
-		];
+		const mapped = [...turn0, ...history.map(mapTurn)];
 		if (currentSummary) {
 			for (let i = mapped.length - 1; i >= 0; i--) {
 				if (mapped[i].role === "assistant") {
@@ -244,12 +250,13 @@ export function ChatPreview({
 	isEditMode = false,
 	categories = [],
 	onChangeCategories,
+	chunks = [],
+	onChangeChunks,
 	visibilitySettings,
 	onChangeVisibilitySettings,
 	title,
 	onChangeTitle,
 	onSave,
-	onCancel,
 	headerNode,
 	preHeaderNode,
 }: ChatPreviewProps) {
@@ -265,6 +272,7 @@ export function ChatPreview({
 	const [prevIncomingSummary, setPrevIncomingSummary] = useState(incomingSummary);
 	const [localSummary, setLocalSummary] = useState(incomingSummary);
 	const manualTextareaRef = useRef<HTMLTextAreaElement>(null);
+	const [backupManualSummary, setBackupManualSummary] = useState<string>("");
 
 	if (incomingSummary !== prevIncomingSummary) {
 		setPrevIncomingSummary(incomingSummary);
@@ -276,6 +284,27 @@ export function ChatPreview({
 	const handleSummaryChange = (val: string) => {
 		setLocalSummary(val);
 		onChangeSummary?.(val);
+	};
+
+	const handleStartManualEdit = (currentDisplayContent: string) => {
+		const initialText = localSummary || currentDisplayContent;
+		setBackupManualSummary(initialText);
+		if (!localSummary) {
+			setLocalSummary(initialText);
+		}
+		setIsManualEditing(true);
+	};
+
+	const handleCancelManualEdit = () => {
+		setLocalSummary(backupManualSummary);
+		onChangeSummary?.(backupManualSummary);
+		setIsManualEditing(false);
+	};
+
+	const handleSaveManualEdit = () => {
+		onChangeSummary?.(localSummary);
+		setBackupManualSummary(localSummary);
+		setIsManualEditing(false);
 	};
 
 	// 1. Smart Inline formatting (Bold, Italic)
@@ -313,13 +342,15 @@ export function ChatPreview({
 			end <= text.length - wrapperLen &&
 			text.substring(start - wrapperLen, start) === wrapper &&
 			text.substring(end, end + wrapperLen) === wrapper &&
-			!(wrapper === "*" && text.substring(start - 2, start) === "**" && text.substring(end, end + 2) === "**");
+			!(
+				wrapper === "*" &&
+				text.substring(start - 2, start) === "**" &&
+				text.substring(end, end + 2) === "**"
+			);
 
 		if (isSurrounded) {
 			const newText =
-				text.substring(0, start - wrapperLen) +
-				selected +
-				text.substring(end + wrapperLen);
+				text.substring(0, start - wrapperLen) + selected + text.substring(end + wrapperLen);
 			handleSummaryChange(newText);
 			setTimeout(() => {
 				textarea.focus({ preventScroll: true });
@@ -363,7 +394,10 @@ export function ChatPreview({
 		// Case C: Normal wrap or placeholder insert, trimming leading/trailing whitespace from selection
 		const leadingSpace = selected.match(/^\s*/)?.[0] || "";
 		const trailingSpace = selected.match(/\s*$/)?.[0] || "";
-		const coreText = selected.substring(leadingSpace.length, selected.length - trailingSpace.length);
+		const coreText = selected.substring(
+			leadingSpace.length,
+			selected.length - trailingSpace.length,
+		);
 
 		const contentToWrap = coreText || defaultPlaceholder;
 		const replacement = `${leadingSpace}${wrapper}${contentToWrap}${wrapper}${trailingSpace}`;
@@ -381,7 +415,9 @@ export function ChatPreview({
 	};
 
 	// 2. Line-aware Block formatting (Headings, Lists, Checklist, Quote)
-	const applyBlockFormatting = (type: "h1" | "h2" | "h3" | "bullet" | "numbered" | "task" | "quote") => {
+	const applyBlockFormatting = (
+		type: "h1" | "h2" | "h3" | "bullet" | "numbered" | "task" | "quote",
+	) => {
 		const textarea = manualTextareaRef.current;
 		const text = localSummary ?? "";
 		if (!textarea) return;
@@ -478,7 +514,9 @@ export function ChatPreview({
 		setTimeout(() => {
 			textarea.focus({ preventScroll: true });
 			if (isSingleCursor && selectedBlock.trim().length === 0) {
-				const placeholderMatch = replacement.match(/^(?:#{1,3}\s*|-\s*\[\s*\]\s*|-\s*|\d+\.\s*|>\s*)(.*)$/);
+				const placeholderMatch = replacement.match(
+					/^(?:#{1,3}\s*|-\s*\[\s*\]\s*|-\s*|\d+\.\s*|>\s*)(.*)$/,
+				);
 				const placeholder = placeholderMatch ? placeholderMatch[1] : replacement;
 				const selStart = lineStart + replacement.length - placeholder.length;
 				textarea.setSelectionRange(selStart, selStart + placeholder.length);
@@ -501,8 +539,10 @@ export function ChatPreview({
 		const before = text.substring(0, start);
 		const after = text.substring(end);
 
-		const padBefore = before.length > 0 && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
-		const padAfter = after.length > 0 && !after.startsWith("\n\n") ? (after.startsWith("\n") ? "\n" : "\n\n") : "";
+		const padBefore =
+			before.length > 0 && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
+		const padAfter =
+			after.length > 0 && !after.startsWith("\n\n") ? (after.startsWith("\n") ? "\n" : "\n\n") : "";
 
 		const dividerTemplate = `${padBefore}---${padAfter}`;
 		const newText = before + dividerTemplate + after;
@@ -562,7 +602,10 @@ export function ChatPreview({
 						handleSummaryChange(newText);
 						setTimeout(() => {
 							textarea.focus();
-							textarea.setSelectionRange(Math.max(lineStart, start - 2), Math.max(lineStart, end - 2));
+							textarea.setSelectionRange(
+								Math.max(lineStart, start - 2),
+								Math.max(lineStart, end - 2),
+							);
 						}, 0);
 					}
 				} else {
@@ -628,7 +671,17 @@ export function ChatPreview({
 			initialPrompt,
 			knowledgeId ? initialSnapshotMap[knowledgeId] : undefined,
 		);
-	}, [mode, knowledge, knowledgeStatus, isEditMode, aiSummary, fileName, initialPrompt, knowledgeId, initialSnapshotMap]);
+	}, [
+		mode,
+		knowledge,
+		knowledgeStatus,
+		isEditMode,
+		aiSummary,
+		fileName,
+		initialPrompt,
+		knowledgeId,
+		initialSnapshotMap,
+	]);
 
 	const sessionMessages = generalSession?.messages;
 	const dbMessages: Message[] = useMemo(() => {
@@ -677,8 +730,7 @@ export function ChatPreview({
 			const restored: Record<string, "confirmed" | "cancelled"> = {};
 			for (const m of dbMessages) {
 				const opId = m.operation_id || (m.attachments?.operation_id as string);
-				const opStatus =
-					m.operation_status || (m.attachments?.operation_status as string);
+				const opStatus = m.operation_status || (m.attachments?.operation_status as string);
 				if (opId) {
 					if (opStatus === "confirmed" || opStatus === "cancelled") {
 						restored[opId] = opStatus as "confirmed" | "cancelled";
@@ -729,11 +781,13 @@ export function ChatPreview({
 	const isFailedState =
 		knowledgeStatus === "REJECTED" ||
 		(knowledge?.metadata as Record<string, unknown> | undefined)?.status === "FAILED" ||
-		(typeof knowledge?.ai_summary === "string" && knowledge.ai_summary.startsWith("[Gagal Diproses]"));
+		(typeof knowledge?.ai_summary === "string" &&
+			knowledge.ai_summary.startsWith("[Gagal Diproses]"));
 
 	const failureErrorMsg =
 		((knowledge?.metadata as Record<string, unknown> | undefined)?.error as string) ||
-		(typeof knowledge?.ai_summary === "string" && knowledge.ai_summary.startsWith("[Gagal Diproses]")
+		(typeof knowledge?.ai_summary === "string" &&
+		knowledge.ai_summary.startsWith("[Gagal Diproses]")
 			? knowledge.ai_summary
 			: "Document processing failed. The file format may be corrupted, password-protected, or unsupported.");
 
@@ -789,7 +843,9 @@ export function ChatPreview({
 					try {
 						await sendGeneralMsg.mutateAsync({ prompt: initialPrompt, signal: controller.signal });
 					} catch (err: unknown) {
-						const isCanceled = (err as { name?: string; code?: string })?.name === "CanceledError" || (err as { name?: string; code?: string })?.code === "ERR_CANCELED";
+						const isCanceled =
+							(err as { name?: string; code?: string })?.name === "CanceledError" ||
+							(err as { name?: string; code?: string })?.code === "ERR_CANCELED";
 						if (!isCanceled) {
 							toast.error("Failed to send message to AI.");
 						}
@@ -817,10 +873,14 @@ export function ChatPreview({
 					const controller = new AbortController();
 					abortControllerRef.current = controller;
 					try {
-						const response = await api.post("/knowledge/query-general", {
-							prompt: initialPrompt,
-							history: [],
-						}, { signal: controller.signal });
+						const response = await api.post(
+							"/knowledge/query-general",
+							{
+								prompt: initialPrompt,
+								history: [],
+							},
+							{ signal: controller.signal },
+						);
 						const data = response.data;
 						setChatTurns([
 							userMsg,
@@ -833,7 +893,9 @@ export function ChatPreview({
 							},
 						]);
 					} catch (err: unknown) {
-						const isCanceled = (err as { name?: string; code?: string })?.name === "CanceledError" || (err as { name?: string; code?: string })?.code === "ERR_CANCELED";
+						const isCanceled =
+							(err as { name?: string; code?: string })?.name === "CanceledError" ||
+							(err as { name?: string; code?: string })?.code === "ERR_CANCELED";
 						if (!isCanceled) {
 							toast.error("Failed to send message to AI.");
 						}
@@ -862,10 +924,19 @@ export function ChatPreview({
 			case "xlsx":
 			case "csv":
 				return { Icon: RiFileExcel2Line, bgColor: "bg-emerald-50", textColor: "text-emerald-600" };
+			case "ppt":
+			case "pptx":
+			case "pps":
+			case "ppsx":
+			case "pot":
+			case "potx":
+			case "odp":
+				return { Icon: RiFilePpt2Line, bgColor: "bg-orange-50", textColor: "text-orange-600" };
 			case "png":
 			case "jpg":
 			case "jpeg":
 			case "gif":
+			case "webp":
 				return { Icon: RiImage2Line, bgColor: "bg-purple-50", textColor: "text-purple-600" };
 			case "txt":
 			default:
@@ -928,7 +999,7 @@ export function ChatPreview({
 
 		if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
 			setAttachedFiles((prev) => [...prev, ...Array.from(e.dataTransfer.files)]);
-			scrollToBottomAndFocus();
+			textareaRef.current?.focus({ preventScroll: true });
 		}
 	};
 
@@ -937,7 +1008,7 @@ export function ChatPreview({
 		if (e.clipboardData.files && e.clipboardData.files.length > 0) {
 			e.preventDefault();
 			setAttachedFiles((prev) => [...prev, ...Array.from(e.clipboardData.files)]);
-			scrollToBottomAndFocus();
+			textareaRef.current?.focus({ preventScroll: true });
 		}
 	};
 
@@ -1036,9 +1107,7 @@ export function ChatPreview({
 			<div className="flex flex-col gap-3 mb-6 w-full">
 				{/* Title and Status Row */}
 				<div className="flex items-start justify-between gap-4 w-full">
-					<h2 className="text-base font-semibold text-zinc-900 leading-snug">
-						{docTitle}
-					</h2>
+					<h2 className="text-base font-semibold text-zinc-900 leading-snug">{docTitle}</h2>
 					<div className="shrink-0">{renderStatusBadge()}</div>
 				</div>
 
@@ -1049,7 +1118,7 @@ export function ChatPreview({
 				</div>
 
 				{/* Text Accuracy & Progress Bar */}
-				{(confidence !== null && confidence !== undefined || isProcessing) && (
+				{((confidence !== null && confidence !== undefined) || isProcessing) && (
 					<div className="flex flex-col gap-2 w-full mt-1">
 						<div className="flex items-center justify-between text-sm w-full font-medium">
 							<span className="text-zinc-800">Text Accuracy</span>
@@ -1081,24 +1150,33 @@ export function ChatPreview({
 				(isEditMode && knowledgeStatus === "APPROVED") ||
 				knowledgeStatus === "PENDING");
 
+		const hasMultipleChunks = chunks && chunks.length > 1;
+
 		const content = (
 			<div className={`flex flex-col gap-4 w-full mt-4 ${!shouldShow ? "hidden" : ""}`}>
-				<CategorySettings
-					categories={categories}
-					onChangeCategories={(c) => onChangeCategories?.(c)}
-					isEditMode={isEditMode || knowledgeStatus === "PENDING"}
-					showSaveActions={isEditMode}
-					onSave={onSave}
-					onCancel={onCancel}
-				/>
+				{hasMultipleChunks ? (
+					<SectionCategoriesEditor
+						chunks={chunks}
+						onChangeChunks={onChangeChunks}
+						categories={categories}
+						onChangeCategories={onChangeCategories}
+						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+						showSaveActions={isEditMode}
+					/>
+				) : (
+					<CategorySettings
+						categories={categories}
+						onChangeCategories={(c) => onChangeCategories?.(c)}
+						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+						showSaveActions={isEditMode}
+					/>
+				)}
 				{visibilitySettings && onChangeVisibilitySettings && (
 					<VisibilitySettingsUI
 						settings={visibilitySettings}
 						onChange={onChangeVisibilitySettings}
 						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
 						showSaveActions={isEditMode}
-						onSave={onSave}
-						onCancel={onCancel}
 					/>
 				)}
 
@@ -1109,6 +1187,7 @@ export function ChatPreview({
 						pendingVisibilitySettings={visibilitySettings}
 						pendingTitle={title}
 						pendingSummary={localSummary || summaryValue || aiSummary || undefined}
+						pendingChunks={chunks}
 					/>
 				)}
 				{files && files.length > 0 && (
@@ -1160,7 +1239,7 @@ export function ChatPreview({
 		const files = e.target.files;
 		if (files && files.length > 0) {
 			setAttachedFiles((prev) => [...prev, ...Array.from(files)]);
-			scrollToBottomAndFocus();
+			textareaRef.current?.focus({ preventScroll: true });
 		}
 		e.target.value = "";
 	};
@@ -1207,10 +1286,14 @@ export function ChatPreview({
 						signal: controller.signal,
 					});
 				} else {
-					const response = await api.post("/knowledge/query-general", {
-						prompt: userMsg.content,
-						history: messages.map((m) => ({ role: m.role, content: m.content })),
-					}, { signal: controller.signal });
+					const response = await api.post(
+						"/knowledge/query-general",
+						{
+							prompt: userMsg.content,
+							history: messages.map((m) => ({ role: m.role, content: m.content })),
+						},
+						{ signal: controller.signal },
+					);
 					const data = response.data;
 					setChatTurns((prev) => [
 						...prev,
@@ -1236,7 +1319,11 @@ export function ChatPreview({
 					}
 				}
 			} else if (
-				(mode === "knowledge" || knowledgeStatus === "PENDING" || knowledgeStatus === "APPROVED" || isEditMode || filesToSend.length > 0) &&
+				(mode === "knowledge" ||
+					knowledgeStatus === "PENDING" ||
+					knowledgeStatus === "APPROVED" ||
+					isEditMode ||
+					filesToSend.length > 0) &&
 				knowledgeId
 			) {
 				const endpoint = `/knowledge/${knowledgeId}/refine`;
@@ -1253,10 +1340,14 @@ export function ChatPreview({
 						signal: controller.signal,
 					});
 				} else {
-					response = await api.post(endpoint, {
-						prompt: userMsg.content,
-						history: [...messages, userMsg],
-					}, { signal: controller.signal });
+					response = await api.post(
+						endpoint,
+						{
+							prompt: userMsg.content,
+							history: [...messages, userMsg],
+						},
+						{ signal: controller.signal },
+					);
 				}
 				const chatResponse = response.data.summary
 					? response.data.summary
@@ -1266,7 +1357,10 @@ export function ChatPreview({
 				setChatTurns((prev) => [...prev, { role: "assistant", content: chatResponse }]);
 				if (response.data.summary) {
 					handleSummaryChange(response.data.summary);
-				} else if (chatResponse && chatResponse !== "I've updated the document summary based on your instructions.") {
+				} else if (
+					chatResponse &&
+					chatResponse !== "I've updated the document summary based on your instructions."
+				) {
 					handleSummaryChange(chatResponse);
 				}
 
@@ -1277,21 +1371,25 @@ export function ChatPreview({
 					queryClient.invalidateQueries({ queryKey: ["projects"] });
 				}
 			} else {
-				const response = await api.post("/knowledge/chat", {
-					query: userMsg.content,
-					knowledge_id: knowledgeId,
-					history: messages,
-				}, { signal: controller.signal });
+				const response = await api.post(
+					"/knowledge/chat",
+					{
+						query: userMsg.content,
+						knowledge_id: knowledgeId,
+						history: messages,
+					},
+					{ signal: controller.signal },
+				);
 
-				setChatTurns((prev) => [
-					...prev,
-					{ role: "assistant", content: response.data.answer },
-				]);
+				setChatTurns((prev) => [...prev, { role: "assistant", content: response.data.answer }]);
 			}
 		} catch (err: unknown) {
-			const isCanceled = (err as { name?: string; code?: string })?.name === "CanceledError" || (err as { name?: string; code?: string })?.code === "ERR_CANCELED";
+			const isCanceled =
+				(err as { name?: string; code?: string })?.name === "CanceledError" ||
+				(err as { name?: string; code?: string })?.code === "ERR_CANCELED";
 			if (!isCanceled) {
-				const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+				const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data
+					?.detail;
 				toast.error(detail || "Failed to send message to AI.");
 			}
 		} finally {
@@ -1356,9 +1454,7 @@ export function ChatPreview({
 		if (!msg.operation_id || msg.role !== "assistant") return null;
 		const opId = msg.operation_id;
 		const status =
-			completedOps[opId] ||
-			msg.operation_status ||
-			(msg.attachments?.operation_status as string);
+			completedOps[opId] || msg.operation_status || (msg.attachments?.operation_status as string);
 		const isPending = activeOpId === opId;
 		const isDelete = msg.action?.toLowerCase().includes("delete");
 
@@ -1442,12 +1538,7 @@ export function ChatPreview({
 								type="button"
 								size="default"
 								variant="default"
-								onClick={() => {
-									if (!localSummary) {
-										handleSummaryChange(displayContent);
-									}
-									setIsManualEditing(true);
-								}}
+								onClick={() => handleStartManualEdit(displayContent)}
 								className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-10 px-4 font-medium text-sm transition-colors cursor-pointer"
 							>
 								<RiEdit2Line className="size-4" />
@@ -1464,7 +1555,7 @@ export function ChatPreview({
 			// Manual Direct Edit Mode
 			return (
 				<div className="flex flex-col gap-2.5 w-full">
-					{/* Header bar with Tabs and Done button */}
+					{/* Header bar with Tabs and Cancel/Save Edit buttons */}
 					<div className="flex items-center justify-between border-b border-zinc-200 pb-2.5">
 						<div className="flex items-center gap-1 bg-zinc-100 p-1 rounded-lg border border-zinc-200">
 							<button
@@ -1493,16 +1584,27 @@ export function ChatPreview({
 							</button>
 						</div>
 
-						<Button
-							type="button"
-							size="default"
-							variant="default"
-							onClick={() => setIsManualEditing(false)}
-							className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-10 px-4 font-medium text-sm transition-colors cursor-pointer"
-						>
-							<RiCheckLine className="size-4" />
-							Done Manual Edit
-						</Button>
+						<div className="flex items-center gap-2">
+							<Button
+								type="button"
+								size="default"
+								variant="outline"
+								onClick={handleCancelManualEdit}
+								className="border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100 rounded-lg shadow-none h-9 px-4 font-semibold text-sm transition-colors cursor-pointer"
+							>
+								Cancel
+							</Button>
+							<Button
+								type="button"
+								size="default"
+								variant="default"
+								onClick={handleSaveManualEdit}
+								className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-9 px-4 font-semibold text-sm transition-colors cursor-pointer"
+							>
+								<RiCheckLine className="size-4" />
+								Save Edit
+							</Button>
+						</div>
 					</div>
 
 					{/* Industry Standard Markdown Formatting Toolbar */}
@@ -1631,8 +1733,16 @@ export function ChatPreview({
 					)}
 
 					<div className="flex items-center justify-between text-[11px] text-zinc-500 pt-1">
-						<span>Use the toolbar buttons above to format text without typing raw markdown symbols.</span>
-						<span className="hidden sm:inline">Press <kbd className="px-1 py-0.5 bg-zinc-100 border border-zinc-200 rounded text-[10px] text-zinc-600 font-mono">Ctrl+Enter</kbd> to save</span>
+						<span>
+							Use the toolbar buttons above to format text without typing raw markdown symbols.
+						</span>
+						<span className="hidden sm:inline">
+							Press{" "}
+							<kbd className="px-1 py-0.5 bg-zinc-100 border border-zinc-200 rounded text-[10px] text-zinc-600 font-mono">
+								Ctrl+Enter
+							</kbd>{" "}
+							to save
+						</span>
 					</div>
 				</div>
 			);
@@ -1657,7 +1767,14 @@ export function ChatPreview({
 				isDetailLoading;
 
 	return (
-		<div className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full">
+		<div
+			className="flex flex-col flex-1 bg-white overflow-hidden min-h-0 h-full relative"
+			onDragEnter={handleDragEnter}
+			onDragLeave={handleDragLeave}
+			onDragOver={handleDragOver}
+			onDrop={handleDrop}
+			onPaste={handlePaste}
+		>
 			<MessageScrollerProvider>
 				<MessageScroller className="flex-1 min-h-0">
 					<MessageScrollerViewport ref={viewportRef} className="px-6 sm:px-8">
@@ -1688,13 +1805,17 @@ export function ChatPreview({
 											</div>
 											<div className="bg-red-50/70 text-zinc-950 p-4 rounded-lg text-sm w-full min-w-0 max-w-full border border-red-200 flex flex-col gap-2">
 												<div className="flex items-center justify-between">
-													<span className="font-semibold text-red-700 text-sm">Dokumen Gagal Diekstrak / Diproses</span>
+													<span className="font-semibold text-red-700 text-sm">
+														Dokumen Gagal Diekstrak / Diproses
+													</span>
 												</div>
 												<p className="text-xs text-zinc-700 leading-relaxed font-mono bg-white p-2.5 rounded border border-red-200">
 													{failureErrorMsg}
 												</p>
 												<p className="text-[11px] text-zinc-500">
-													Silakan periksa apakah file memiliki proteksi kata sandi, rusak, atau coba upload kembali dokumen dalam format standar (PDF, DOCX, XLSX, TXT, Gambar).
+													Silakan periksa apakah file memiliki proteksi kata sandi, rusak, atau coba
+													upload kembali dokumen dalam format standar (PDF, DOCX, XLSX, TXT,
+													Gambar).
 												</p>
 											</div>
 										</div>
@@ -1702,68 +1823,70 @@ export function ChatPreview({
 								</MessageScrollerItem>
 							)}
 
-							{!isDetailLoading && !isFailedState && messages.length === 0 && knowledgeStatus !== "PROCESSING" && (
-								<MessageScrollerItem>
-									{mode === "general" ? (
-										<div className="flex flex-col items-center justify-center text-center py-16 px-4 max-w-lg mx-auto space-y-3">
-											<div className="size-12 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center">
-												<RiRobot2Line className="size-6" />
+							{!isDetailLoading &&
+								!isFailedState &&
+								messages.length === 0 &&
+								knowledgeStatus !== "PROCESSING" && (
+									<MessageScrollerItem>
+										{mode === "general" ? (
+											<div className="flex flex-col items-center justify-center text-center py-16 px-4 max-w-lg mx-auto space-y-3">
+												<div className="size-12 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center">
+													<RiRobot2Line className="size-6" />
+												</div>
+												<h2 className="text-base font-semibold text-zinc-950">
+													Knowledge Base Assistant
+												</h2>
+												<p className="text-xs text-zinc-500 leading-relaxed">
+													Ask questions about clinic products and treatments, instruct updates, or
+													clean expired records. The assistant maintains context across your
+													conversation.
+												</p>
 											</div>
-											<h2 className="text-base font-semibold text-zinc-950">
-												Knowledge Base Assistant
-											</h2>
-											<p className="text-xs text-zinc-500 leading-relaxed">
-												Ask questions about clinic products and treatments, instruct updates, or
-												clean expired records. The assistant maintains context across your
-												conversation.
-											</p>
-										</div>
-									) : (
-										<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
-											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-												<RiRobot2Line className="size-4" />
+										) : (
+											<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
+												<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+													<RiRobot2Line className="size-4" />
+												</div>
+												<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full min-w-0 max-w-full border border-blue-100 flex flex-col gap-3">
+													{headerNode}
+													{renderConfidenceScore()}
+													<p className="text-zinc-500 italic">No summary available.</p>
+												</div>
 											</div>
-											<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full min-w-0 max-w-full border border-blue-100 flex flex-col gap-3">
-												{headerNode}
-												{renderConfidenceScore()}
-												<p className="text-zinc-500 italic">No summary available.</p>
-											</div>
-										</div>
-									)}
-								</MessageScrollerItem>
-							)}
+										)}
+									</MessageScrollerItem>
+								)}
 
 							{!isDetailLoading && knowledgeStatus === "PROCESSING" && (
 								<MessageScrollerItem>
 									<div className="flex flex-col w-full min-w-0 max-w-full items-start">
 										{/* Attached Document Badge OUTSIDE & ABOVE bubble if no user message shown */}
-										{preHeaderNode ? (
-											preHeaderNode
-										) : (
-											fileName && messages.length === 0 &&
-											(() => {
-												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
-												return (
-													<div className="flex flex-col gap-2 mb-4 self-end">
-														<Attachment className="bg-white border border-zinc-200 shadow-none p-1.5 w-fit min-w-40 max-w-sm rounded-lg">
-															<AttachmentMedia
-																className={`${bgColor} ${textColor} shrink-0 rounded-lg p-2`}
-															>
-																<Icon className="size-5" />
-															</AttachmentMedia>
-															<AttachmentContent className="overflow-hidden min-w-0 pr-2">
-																<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
-																	{fileName}
-																</AttachmentTitle>
-																<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
-																	DOCUMENT
-																</AttachmentDescription>
-															</AttachmentContent>
-														</Attachment>
-													</div>
-												);
-											})()
-										)}
+										{preHeaderNode
+											? preHeaderNode
+											: fileName &&
+												messages.length === 0 &&
+												(() => {
+													const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
+													return (
+														<div className="flex flex-col gap-2 mb-4 self-end">
+															<Attachment className="bg-white border border-zinc-200 shadow-none p-1.5 w-fit min-w-40 max-w-sm rounded-lg">
+																<AttachmentMedia
+																	className={`${bgColor} ${textColor} shrink-0 rounded-lg p-2`}
+																>
+																	<Icon className="size-5" />
+																</AttachmentMedia>
+																<AttachmentContent className="overflow-hidden min-w-0 pr-2">
+																	<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
+																		{fileName}
+																	</AttachmentTitle>
+																	<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+																		DOCUMENT
+																	</AttachmentDescription>
+																</AttachmentContent>
+															</Attachment>
+														</div>
+													);
+												})()}
 
 										<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
 											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
@@ -1811,7 +1934,10 @@ export function ChatPreview({
 							)}
 
 							{messages.length > 0 && (
-								<MessageScrollerItem key="msg-0" scrollAnchor={isLiveChat && messages.length === 1 && !isLoading}>
+								<MessageScrollerItem
+									key="msg-0"
+									scrollAnchor={isLiveChat && messages.length === 1 && !isLoading}
+								>
 									<div
 										className={`flex flex-col w-full min-w-0 max-w-full ${messages[0].role === "user" ? "items-end" : "items-start"}`}
 									>
@@ -1821,12 +1947,14 @@ export function ChatPreview({
 													<TitleSettings
 														title={title}
 														onChangeTitle={onChangeTitle}
-														onSave={onSave}
+														isEditMode={isEditMode || knowledgeStatus === "PENDING"}
 													/>
 												</div>
 											</div>
 										)}
-										{fileName && !preHeaderNode && messages[0].role !== "user" &&
+										{fileName &&
+											!preHeaderNode &&
+											messages[0].role !== "user" &&
 											(() => {
 												const { Icon, bgColor, textColor } = getFileIconAndColor(fileName);
 												return (
@@ -1896,11 +2024,9 @@ export function ChatPreview({
 											<div
 												className={`${messages[0].role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap max-w-[85%] sm:max-w-[75%] rounded-md" : "bg-transparent border border-zinc-200 text-zinc-950 w-full rounded-md"} p-3.5 text-sm min-w-0 overflow-hidden`}
 											>
-												{messages[0].role === "assistant" ? (
-													renderAssistantContent(0, messages[0])
-												) : (
-													messages[0].content
-												)}
+												{messages[0].role === "assistant"
+													? renderAssistantContent(0, messages[0])
+													: messages[0].content}
 												{/* Inject Categories below initial summary if it's the latest assistant message */}
 												{0 === lastAssistantIndex && renderCategoriesBlock()}
 											</div>
@@ -1968,11 +2094,9 @@ export function ChatPreview({
 												<div
 													className={`${msg.role === "user" ? "bg-primary text-primary-foreground whitespace-pre-wrap max-w-[85%] sm:max-w-[75%] rounded-md" : "bg-transparent border border-zinc-200 text-zinc-950 w-full rounded-md"} p-3.5 text-sm min-w-0 overflow-hidden`}
 												>
-													{msg.role === "assistant" ? (
-														renderAssistantContent(actualIndex, msg)
-													) : (
-														msg.content
-													)}
+													{msg.role === "assistant"
+														? renderAssistantContent(actualIndex, msg)
+														: msg.content}
 													{/* Inject Categories below this AI message if it's the latest assistant message */}
 													{actualIndex === lastAssistantIndex && renderCategoriesBlock()}
 												</div>
@@ -2036,6 +2160,9 @@ export function ChatPreview({
 								</span>
 								<span className="px-1.5 py-0.5 rounded bg-white border border-blue-200 font-medium text-zinc-700">
 									DOCX
+								</span>
+								<span className="px-1.5 py-0.5 rounded bg-white border border-blue-200 font-medium text-zinc-700">
+									PPTX
 								</span>
 								<span className="px-1.5 py-0.5 rounded bg-white border border-blue-200 font-medium text-zinc-700">
 									XLSX
