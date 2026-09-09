@@ -401,7 +401,8 @@ async def confirm_pending_operation(
                 bm25_index=bm25,
                 pipeline=pipeline,
                 target_item=op.target_item,
-                db=db
+                db=db,
+                auto_approve=True  # General Prompt confirm = auto-approve, immediately active in RAG
             )
             edit_results.append(res)
 
@@ -448,10 +449,14 @@ async def confirm_pending_operation(
 
     elif op.action == "delete":
         del_results = []
+        meta_dict = op.metadata_ or {}
+        affected_docs_map = {d["knowledge_id"]: d.get("target_item") for d in meta_dict.get("affected_docs", []) if isinstance(d, dict) and "knowledge_id" in d}
+
         for kid in affected_kids:
+            doc_target = affected_docs_map.get(kid) or op.target_item
             res = await GeneralKnowledgeService.apply_delete(
                 knowledge_id=kid,
-                target_item=op.target_item,
+                target_item=doc_target,
                 vector_store=vector_store,
                 bm25_index=bm25,
                 db=db

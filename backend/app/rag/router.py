@@ -868,6 +868,43 @@ def resolve_approved_file(knowledge_id: str) -> Optional[str]:
     except Exception as e:
         logger.debug(f"MinIO approved hydration note: {e}")
 
+    # PostgreSQL Database Hydration fallback
+    try:
+        from app.core.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE id::text = :k_id AND deleted_at IS NULL LIMIT 1"),
+                {"k_id": knowledge_id}
+            ).fetchone()
+            if not row:
+                row = conn.execute(
+                    text("SELECT id, title, file_name, ai_summary, metadata FROM knowledge WHERE (LOWER(title) = LOWER(:k_id) OR LOWER(file_name) = LOWER(:k_id)) AND deleted_at IS NULL LIMIT 1"),
+                    {"k_id": knowledge_id}
+                ).fetchone()
+
+            if row:
+                row_id, title, fname, summary, meta_val = row[0], row[1], row[2], row[3], row[4]
+                m_dict = meta_val if isinstance(meta_val, dict) else (json.loads(meta_val) if isinstance(meta_val, str) else {})
+                doc = {
+                    "knowledge_id": str(row_id),
+                    "batch_id": m_dict.get("batch_id"),
+                    "file_name": fname or str(row_id),
+                    "title": title or fname or str(row_id),
+                    "status": "Approved",
+                    "summary": summary or "",
+                    "chunks": m_dict.get("chunks", []),
+                    "images": m_dict.get("images", []),
+                    "image_urls": m_dict.get("image_urls", []),
+                    "categories": m_dict.get("categories", []),
+                    "visibility_settings": m_dict.get("visibility_settings", {})
+                }
+                with open(clean_p, "w", encoding="utf-8") as fp:
+                    json.dump(doc, fp, indent=4, ensure_ascii=False)
+                return clean_p
+    except Exception as db_e:
+        logger.debug(f"DB hydration fallback note: {db_e}")
+
     return None
 
 
@@ -4895,10 +4932,13 @@ async def query_general_endpoint(
 
                         elif latest_op.action == "delete":
                             del_results = []
+                            meta_dict = latest_op.metadata_ or {}
+                            affected_docs_map = {d["knowledge_id"]: d.get("target_item") for d in meta_dict.get("affected_docs", []) if isinstance(d, dict) and "knowledge_id" in d}
                             for kid in affected_kids:
+                                doc_target = affected_docs_map.get(kid) or latest_op.target_item
                                 r_del = await GeneralKnowledgeService.apply_delete(
                                     knowledge_id=kid,
-                                    target_item=latest_op.target_item,
+                                    target_item=doc_target,
                                     vector_store=target_vs,
                                     bm25_index=target_bm25,
                                     db=db_session
@@ -5012,7 +5052,8 @@ async def query_general_endpoint(
                     b_id = d.get("batch_id")
                     link = f"[{kid}](/dashboard/knowledge/batch/{b_id})" if b_id else f"[{kid}](/dashboard/knowledge/{kid})"
                     badge = " *(Dokumen Utama)*" if d.get("match_type") == "dedicated_document" else " *(Katalog Produk)*"
-                    doc_list_items.append(f"{idx}. {link} — *{t}*{badge}")
+                    item_note = f" — *Item*: `{d.get('target_item')}`" if d.get("target_item") and d.get("target_item") != target_item else ""
+                    doc_list_items.append(f"{idx}. {link} — *{t}*{badge}{item_note}")
                 doc_list_str = "\n".join(doc_list_items)
 
                 preview_text = (
@@ -5079,14 +5120,19 @@ async def query_general_endpoint(
                 context_label = doc_data.get("_matched_context_label") or target_item or doc_title
 
                 # Extract new value
-                val_m = re.search(r'(?:\b(?:menjadi|ke|sebagai|jadi|dengan|sebesar|berupa)\b|=)\s*[`"]?([^\n\r`"]+)[`"]?', user_prompt, re.IGNORECASE)
+                val_m = re.search(r'(?:\b(?:menjadi|ke|sebagai|jadi|dengan|sebesar|berupa)\b|=)\s*[`"\'“]?([^\n\r`"\'”]+)[`"\'”]?$', user_prompt, re.IGNORECASE)
+                if not val_m:
+                    val_m = re.search(r'(?:\b(?:menjadi|ke|sebagai|jadi|dengan|sebesar|berupa)\b|=)\s*[`"\'“]?([^\n\r`"\'”]+)[`"\'”]?', user_prompt, re.IGNORECASE)
                 new_val = val_m.group(1).strip() if val_m else ""
                 if not new_val:
                     unit_m = re.search(r'(?:rp\.?\s*[\d\.,]+|\b\d+\s*(?:k|rb|ribu|gr|gram|ml|l|mg|pcs|sachet|botol|pack)\b)', user_prompt, re.IGNORECASE)
                     if unit_m:
                         new_val = unit_m.group(0).strip()
                 if new_val:
+                    # Strip trailing scope modifiers: e.g. "pada semua produk", "di semua produk", "di kb"
+                    new_val = re.sub(r'\s+(?:pada|di|dalam|untuk|bagi)\s+(?:semua|seluruh|setiap)?\s*(?:produk|item|dokumen|kb|knowledge|data)?$', '', new_val, flags=re.IGNORECASE).strip()
                     new_val = re.sub(r'[\s,\.]+(?:ya|dong|tolong|mohon|terima\s*kasih|thanks)$', '', new_val, flags=re.IGNORECASE).strip()
+                    new_val = re.sub(r'^[`"\'“]+|[`"\'”]+$', '', new_val).strip()
                 else:
                     new_val = user_prompt.strip()
 
