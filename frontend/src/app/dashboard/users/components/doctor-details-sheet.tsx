@@ -36,13 +36,18 @@ export function DoctorDetailsSheet({
 	const isGP = drTypeUpper.includes("GP") || drTypeUpper.includes("UMUM");
 	const effectiveGlobalLimit = isSpDVE ? Number(spdveLimit) : isGP ? Number(gpPlusLimit) : 0;
 
+	const assignedBranchLimit =
+		doctor?.branches && doctor.branches.length > 0
+			? Math.max(...doctor.branches.map((b) => b.token_limit ?? 0))
+			: 0;
+
 	const hasCustomLimit =
 		doctor?.token_limit !== null && doctor?.token_limit !== undefined && doctor.token_limit > 0;
 	const effectiveLimit = hasCustomLimit
 		? doctor.token_limit!
 		: isGlobalLimitActive
 			? effectiveGlobalLimit
-			: (doctor?.token_limit ?? 0);
+			: (doctor?.token_limit ?? assignedBranchLimit);
 	const tokensUsed = doctor?.tokens_used ?? 0;
 	const tokensRemaining = Math.max(0, effectiveLimit - tokensUsed);
 
@@ -80,10 +85,12 @@ export function DoctorDetailsSheet({
 								</div>
 
 								{/* 1. Doctor Information Tab */}
-								<TabsContent value="information" className="p-6 m-0 flex flex-col gap-6">
+								<TabsContent value="information" className="p-6 m-0 flex flex-col gap-4">
 									<div className="flex flex-col gap-1">
 										<span className="text-sm text-black-300">Name</span>
-										<span className="text-sm font-medium text-black-500">{doctor.name}</span>
+										<span className="text-sm font-medium text-black-500">
+											{doctor.name}
+										</span>
 									</div>
 
 									<div className="flex flex-col gap-1">
@@ -129,6 +136,20 @@ export function DoctorDetailsSheet({
 									</div>
 
 									<div className="flex flex-col gap-1">
+										<span className="text-sm text-black-300">Monthly Tokens Used</span>
+										<div className="flex items-center gap-2">
+											<span className="text-sm font-medium text-black-500">
+												{tokensUsed.toLocaleString()} tokens
+											</span>
+											{!hasCustomLimit && !isGlobalLimitActive && (
+												<span className="text-[11px] bg-zinc-100 text-zinc-600 px-2 py-0.5 rounded-full font-medium">
+													Drawing from Branch Pool
+												</span>
+											)}
+										</div>
+									</div>
+
+									<div className="flex flex-col gap-1">
 										<span className="text-sm text-black-300">Ecosystem</span>
 										<span className="text-sm font-medium text-black-500">
 											{doctor.ecosystem || "ERHA"}
@@ -161,6 +182,11 @@ export function DoctorDetailsSheet({
 														Custom Override
 													</span>
 												)}
+												{!isGlobalLimitActive && !hasCustomLimit && (
+													<span className="text-[11px] bg-zinc-100 text-zinc-600 px-2 py-0.5 rounded-full font-medium">
+														Branch Pool (Used: {tokensUsed.toLocaleString()})
+													</span>
+												)}
 											</div>
 										</div>
 										<Button
@@ -176,23 +202,30 @@ export function DoctorDetailsSheet({
 
 									{/* Branch Setting */}
 									<div className="flex flex-col gap-2">
-										<span className="text-sm text-black-300">Branches</span>
+										<span className="text-sm text-black-300">
+											Assigned Branches ({doctor.branches?.length || 0})
+										</span>
 										{doctor.branches && doctor.branches.length > 0 ? (
 											<div className="flex flex-col gap-3">
 												{doctor.branches.map((branch) => (
 													<div
 														key={branch.id}
-														className="border border-black-50 rounded-md p-3 flex flex-col gap-1 bg-white"
+														className="border border-black-50 rounded-md p-3 flex flex-col gap-1.5 bg-white"
 													>
-														<span className="text-sm font-medium text-black-500">
-															{branch.name}
-														</span>
-														<span className="text-xs text-black-300">
-															Branch Token Pool:{" "}
-															{branch.token_limit
-																? `${branch.token_limit.toLocaleString()} tokens/mo`
-																: "Default"}
-														</span>
+														<div className="flex items-center justify-between">
+															<span className="text-sm font-medium text-black-500">
+																{branch.name}
+															</span>
+															<span className="text-xs text-zinc-500">
+																Pool: {branch.token_limit ? `${branch.token_limit.toLocaleString()} tokens/mo` : "Default"}
+															</span>
+														</div>
+														<div className="flex items-center justify-between text-xs text-black-300">
+															<span>Usage in this branch:</span>
+															<span className="font-medium text-zinc-700">
+																{(branch.tokens_used ?? 0).toLocaleString()} tokens
+															</span>
+														</div>
 													</div>
 												))}
 											</div>

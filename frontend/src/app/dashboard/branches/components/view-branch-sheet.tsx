@@ -170,12 +170,17 @@ export function ViewBranchSheet({ branch }: ViewBranchSheetProps) {
 														<span className="text-sm font-medium text-black-500">{doc.name}</span>
 														<span className="text-xs text-zinc-600">{doc.dr_type || doc.speciality}</span>
 													</div>
-													<span className="text-xs text-black-300">
-														<span className="text-blue-600 font-medium">
-															{doc.tokensLeft?.toLocaleString() || 0} / {doc.maxTokens?.toLocaleString() || 0}
-														</span>{" "}
-														tokens remaining
-													</span>
+													<div className="flex items-center justify-between text-xs text-black-300">
+														<span>
+															Used: <span className="text-zinc-700 font-medium">{(doc.tokens_used ?? 0).toLocaleString()}</span> tokens
+														</span>
+														<span>
+															<span className="text-blue-600 font-medium">
+																{doc.tokensLeft?.toLocaleString() || 0} / {doc.maxTokens?.toLocaleString() || 0}
+															</span>{" "}
+															tokens left
+														</span>
+													</div>
 												</div>
 											</div>
 										))}

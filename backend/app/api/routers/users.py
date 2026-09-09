@@ -69,19 +69,27 @@ async def _hydrate_user(user: User, db: AsyncSession) -> dict:
         )
         result_branch = await db.execute(stmt_branch)
         branches = result_branch.scalars().all()
-        user_dict["branches"] = [
-            {
+        current_ym = datetime.now(timezone.utc).strftime("%Y-%m")
+        user_dict["branches"] = []
+        for b in branches:
+            b_usage_stmt = select(func.sum(UserTokenUsage.tokens_used)).where(
+                UserTokenUsage.user_id == user.id,
+                UserTokenUsage.branch_id == b.id,
+                UserTokenUsage.year_month == current_ym
+            )
+            b_used_res = await db.execute(b_usage_stmt)
+            doc_branch_used = b_used_res.scalar() or 0
+            user_dict["branches"].append({
                 "id": b.id,
                 "external_id": b.external_id,
                 "name": b.name,
                 "code": b.code,
                 "ecosystem": b.ecosystem,
                 "token_limit": b.token_limit,
+                "tokens_used": doc_branch_used,
                 "created_at": b.created_at,
                 "updated_at": b.updated_at
-            }
-            for b in branches
-        ]
+            })
         
         stmt_cat = select(Category).where(
             Category.deleted_at.is_(None),

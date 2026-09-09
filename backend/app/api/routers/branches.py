@@ -74,9 +74,10 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
     doctors = result.scalars().all()
     
     for doc in doctors:
-        # Get doctor's total tokens used
+        # Get doctor's tokens used specifically in this branch
         stmt_token = select(func.sum(UserTokenUsage.tokens_used)).where(
             UserTokenUsage.user_id == doc.id,
+            UserTokenUsage.branch_id == branch.id,
             UserTokenUsage.year_month == current_ym
         )
         result_token = await db.execute(stmt_token)
@@ -109,9 +110,11 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
                 status = "Warning"
         else:
             status = "Active"
-            max_tokens = doc.token_limit or 0
-            tokens_left = max(0, max_tokens - doc_tokens_used)
+            max_tokens = doc.token_limit if (doc.token_limit and doc.token_limit > 0) else (effective_branch_limit or 0)
+            tokens_left = max(0, (doc.token_limit - doc_tokens_used) if (doc.token_limit and doc.token_limit > 0) else ((effective_branch_limit or 0) - branch_used))
             if doc.token_limit and doc.token_limit > 0 and doc_tokens_used >= doc.token_limit * 0.9:
+                status = "Warning"
+            elif branch_used >= (effective_branch_limit or 1) * 0.9:
                 status = "Warning"
             
         branch_dict["doctors"].append({
@@ -119,6 +122,7 @@ async def _hydrate_branch(branch: Branch, db: AsyncSession) -> dict:
             "name": doc.name,
             "speciality": speciality,
             "tokensLeft": tokens_left,
+            "tokens_used": doc_tokens_used,
             "status": status,
             "maxTokens": max_tokens,
             "employee_id": doc.employee_id,
