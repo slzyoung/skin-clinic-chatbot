@@ -2,6 +2,15 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.3.4] - 2026-09-10
+
+### BM25 Sparse Search Metadata Visibility Filtering Fix
+- **BM25 Whitelist Enforcement (`app/rag/services/rag_retriever.py`)**:
+  - Corrected `BM25Index.search` metadata filtering logic to ensure user context `['all']` does not bypass chunk-level whitelist restrictions (`doctors`, `clinics`, `doctor_types`).
+  - Fixed check to verify specific user attributes against chunk whitelist when `chunk_val` does not contain `'all'`, matching PGVector SQL filtering behavior and eliminating knowledge leakage across doctor profiles.
+
+---
+
 ## [1.3.3] - 2026-09-09
 
 ### Document Title Synchronization & Chunk Cascade

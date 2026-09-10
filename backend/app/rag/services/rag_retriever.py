@@ -185,14 +185,17 @@ class BM25Index:
                             break
                     elif isinstance(v, list):
                         chunk_val = meta.get(k)
-                        # If chunk has no restriction, or has 'all', or query filter allows 'all', it matches
-                        if chunk_val is None or chunk_val == [] or "all" in v:
+                        # If chunk has no restriction, it matches
+                        if chunk_val is None or chunk_val == []:
                             continue
                         if not isinstance(chunk_val, list):
                             chunk_val = [chunk_val]
+                        # If chunk explicitly allows everyone ('all'), it matches
                         if "all" in chunk_val:
                             continue
-                        if not any(item in chunk_val for item in v if item):
+                        # If chunk has specific restrictions, check if user's specific attributes match
+                        user_specific_items = [item for item in v if item and item != "all"]
+                        if not any(item in chunk_val for item in user_specific_items):
                             match = False
                             break
                     elif meta.get(k) != v:
