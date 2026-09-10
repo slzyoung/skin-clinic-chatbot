@@ -25,13 +25,13 @@ import { useBranches } from "@/app/dashboard/branches/hooks/use-branches";
 import { useUsers } from "@/app/dashboard/users/hooks/use-users";
 import { VisibilitySettings as IVisibilitySettings } from "@/app/dashboard/knowledge/api/types";
 
-interface DropdownOption {
+export interface DropdownOption {
 	label: string;
 	value: string;
 	subtitle?: string;
 }
 
-interface SearchableDropdownProps {
+export interface SearchableDropdownProps {
 	title: string;
 	options: DropdownOption[];
 	selected: string[];
@@ -39,7 +39,7 @@ interface SearchableDropdownProps {
 	displayText: string;
 }
 
-function SearchableDropdown({
+export function SearchableDropdown({
 	title,
 	options,
 	selected,

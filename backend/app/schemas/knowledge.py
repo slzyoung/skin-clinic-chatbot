@@ -87,3 +87,7 @@ class GeneralChatSessionResponse(BaseModel):
 class GeneralChatMessageSendRequest(BaseModel):
     prompt: str
     attachments: Optional[Dict[str, Any]] = None
+
+class BatchVisibilityUpdateRequest(BaseModel):
+    visibility_settings: Dict[str, Any]
+

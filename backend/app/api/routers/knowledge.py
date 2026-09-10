@@ -21,7 +21,8 @@ from app.models.chat import ChatSession, ChatMessage as DBChatMessage, ChatRole,
 from app.schemas.knowledge import (
     KnowledgeCreate, KnowledgeUpdateStatus, KnowledgeResponse, KnowledgeProjectUpdate,
     KnowledgeTextIngestRequest, KnowledgeTextIngestResponse,
-    GeneralChatSessionResponse, GeneralChatMessageItem, GeneralChatMessageSendRequest
+    GeneralChatSessionResponse, GeneralChatMessageItem, GeneralChatMessageSendRequest,
+    BatchVisibilityUpdateRequest
 )
 from app.services.token_service import check_ingestion_quota, record_ingestion_token_usage
 from datetime import datetime, timezone, timedelta
@@ -1209,6 +1210,156 @@ async def approve_batch_knowledge(
 
     await db.commit()
     return res
+
+@router.put("/batch/{batch_id}/visibility")
+async def update_batch_visibility(
+    request: Request,
+    batch_id: str,
+    payload: BatchVisibilityUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write"))
+):
+    """Update visibility settings for all documents in a batch ingestion session with MinIO as source of truth."""
+    from sqlalchemy.orm.attributes import flag_modified
+    from app.services.storage import (
+        _get_client, _staging_bucket, _approved_bucket,
+        get_staging_json, get_approved_json,
+        upload_staging_json, upload_approved_json
+    )
+
+    # 1. Query Postgres DB for documents in this batch
+    stmt = select(Knowledge).where(
+        Knowledge.deleted_at.is_(None),
+        or_(
+            Knowledge.metadata_.op("->>")("batch_id") == batch_id,
+            Knowledge.metadata_.op("->>")("upload_batch_id") == batch_id
+        )
+    )
+    result = await db.execute(stmt)
+    db_docs = list(result.scalars().all())
+
+    vis_dict = payload.visibility_settings
+    target_ids = set()
+    for d in db_docs:
+        target_ids.add(str(d.id))
+
+    # 2. MinIO-First Scan: Find all batch documents directly from MinIO buckets
+    try:
+        s3 = _get_client()
+        if s3:
+            # Check staging bucket in MinIO
+            res_staging = s3.list_objects_v2(Bucket=_staging_bucket())
+            for obj in res_staging.get("Contents", []):
+                k = obj["Key"]
+                if k.endswith(".json"):
+                    try:
+                        resp = s3.get_object(Bucket=_staging_bucket(), Key=k)
+                        data = json.loads(resp["Body"].read().decode("utf-8"))
+                        b_id = data.get("batch_id") or data.get("upload_batch_id")
+                        if not b_id and data.get("chunks"):
+                            b_id = data["chunks"][0].get("metadata", {}).get("batch_id") or data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                        if b_id == batch_id:
+                            k_id = data.get("knowledge_id") or k.replace(".json", "")
+                            if k_id:
+                                target_ids.add(str(k_id))
+                    except Exception:
+                        pass
+
+            # Check approved bucket in MinIO
+            res_approved = s3.list_objects_v2(Bucket=_approved_bucket())
+            for obj in res_approved.get("Contents", []):
+                k = obj["Key"]
+                if k.endswith(".json"):
+                    try:
+                        resp = s3.get_object(Bucket=_approved_bucket(), Key=k)
+                        data = json.loads(resp["Body"].read().decode("utf-8"))
+                        b_id = data.get("batch_id") or data.get("upload_batch_id")
+                        if not b_id and data.get("chunks"):
+                            b_id = data["chunks"][0].get("metadata", {}).get("batch_id") or data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                        if b_id == batch_id:
+                            k_id = data.get("knowledge_id") or k.replace(".json", "")
+                            if k_id:
+                                target_ids.add(str(k_id))
+                    except Exception:
+                        pass
+    except Exception as s3_scan_err:
+        logger.debug(f"MinIO batch scan note: {s3_scan_err}")
+
+    # Fallback scan of local pending directory if MinIO was empty or offline
+    pending_dir = "data/pending"
+    if os.path.exists(pending_dir):
+        for f in os.listdir(pending_dir):
+            if f.endswith(".json") and f != "bm25_index.pkl":
+                fp = os.path.join(pending_dir, f)
+                try:
+                    with open(fp, "r", encoding="utf-8") as jf:
+                        data = json.load(jf)
+                    if isinstance(data, dict):
+                        b_id = data.get("batch_id") or data.get("upload_batch_id")
+                        if not b_id and data.get("chunks"):
+                            b_id = data["chunks"][0].get("metadata", {}).get("batch_id") or data["chunks"][0].get("metadata", {}).get("upload_batch_id")
+                        if b_id == batch_id:
+                            k_id = data.get("knowledge_id") or f.replace("_parsed.json", "").replace(".json", "")
+                            if k_id:
+                                target_ids.add(str(k_id))
+                except Exception:
+                    pass
+
+    # 3. Update MinIO Objects (Source of Truth) for all identified documents
+    for tid in target_ids:
+        # A. Update Staging JSON (MinIO 'staging' bucket as source of truth)
+        p_data = get_staging_json(tid)
+        if p_data:
+            p_data["visibility_settings"] = vis_dict
+            if isinstance(p_data.get("chunks"), list):
+                for ch in p_data["chunks"]:
+                    if isinstance(ch, dict):
+                        if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                            ch["metadata"] = {}
+                        ch["metadata"]["clinics"] = vis_dict.get("clinics", ["all"])
+                        ch["metadata"]["doctor_types"] = vis_dict.get("doctor_types", ["all"])
+                        ch["metadata"]["doctors"] = vis_dict.get("doctors", ["all"])
+                        ch["metadata"]["visibility_settings"] = vis_dict
+            upload_staging_json(tid, p_data)
+
+        # B. Update Approved JSON (MinIO 'approved' bucket as source of truth)
+        a_data = get_approved_json(tid)
+        if a_data:
+            a_data["visibility_settings"] = vis_dict
+            if isinstance(a_data.get("chunks"), list):
+                for ch in a_data["chunks"]:
+                    if isinstance(ch, dict):
+                        if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                            ch["metadata"] = {}
+                        ch["metadata"]["clinics"] = vis_dict.get("clinics", ["all"])
+                        ch["metadata"]["doctor_types"] = vis_dict.get("doctor_types", ["all"])
+                        ch["metadata"]["doctors"] = vis_dict.get("doctors", ["all"])
+                        ch["metadata"]["visibility_settings"] = vis_dict
+            upload_approved_json(tid, a_data)
+
+    # 4. Sync PostgreSQL database records and chunks metadata
+    for doc in db_docs:
+        if doc.metadata_ is None:
+            doc.metadata_ = {}
+        doc.metadata_["visibility_settings"] = vis_dict
+        if isinstance(doc.metadata_.get("chunks"), list):
+            for ch in doc.metadata_["chunks"]:
+                if isinstance(ch, dict):
+                    if "metadata" not in ch or not isinstance(ch["metadata"], dict):
+                        ch["metadata"] = {}
+                    ch["metadata"]["clinics"] = vis_dict.get("clinics", ["all"])
+                    ch["metadata"]["doctor_types"] = vis_dict.get("doctor_types", ["all"])
+                    ch["metadata"]["doctors"] = vis_dict.get("doctors", ["all"])
+                    ch["metadata"]["visibility_settings"] = vis_dict
+        flag_modified(doc, "metadata_")
+
+    await db.commit()
+    return {
+        "status": "success",
+        "message": f"Updated visibility settings for {len(target_ids) or len(db_docs)} document(s) in batch",
+        "batch_id": batch_id,
+        "visibility_settings": vis_dict
+    }
 
 @router.post("/chat", response_model=ChatResponse)
 async def knowledge_chat(

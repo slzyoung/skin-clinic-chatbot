@@ -11,6 +11,7 @@ import type {
 	KnowledgeTextIngestRequest,
 	KnowledgeTextIngestResponse,
 	KnowledgeEditRequest,
+	VisibilitySettings,
 } from "../api/types";
 
 export const useKnowledgeBaseList = () => {
@@ -192,6 +193,35 @@ export const useApproveBatchKnowledge = () => {
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to approve batch documents."));
+		},
+	});
+};
+
+export const useUpdateBatchVisibility = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({
+			batchId,
+			visibilitySettings,
+		}: {
+			batchId: string;
+			visibilitySettings: VisibilitySettings;
+		}) => {
+			const response = await api.put(`/knowledge/batch/${batchId}/visibility`, {
+				visibility_settings: visibilitySettings,
+			});
+			return response.data;
+		},
+		onSuccess: (_, variables) => {
+			toast.success("Batch visibility settings updated successfully!");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: projectKeys.all });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch", variables.batchId] });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to update batch visibility settings."));
 		},
 	});
 };

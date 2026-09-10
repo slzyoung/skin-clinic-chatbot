@@ -30,6 +30,7 @@ import {
 	RiFileWord2Line,
 	RiImage2Line,
 	RiStopCircleLine,
+	RiEyeLine,
 } from "@remixicon/react";
 import { useRouter } from "next/navigation";
 import { use, useRef, useState } from "react";
@@ -42,9 +43,11 @@ import {
 	useDeleteKnowledge,
 	useKnowledgeBatch,
 } from "../../hooks/use-knowledge";
+import { VisibilitySettings } from "../../api/types";
 import { BatchKnowledgeTabContent, BatchTabHandle } from "./BatchKnowledgeTabContent";
 import { BatchDocumentTabs } from "./BatchDocumentTabs";
 import { BatchExecutiveSummary } from "./BatchExecutiveSummary";
+import { BatchVisibilityModal } from "./BatchVisibilityModal";
 
 export default function BatchKnowledgePage({ params }: { params: Promise<{ id: string }> }) {
 	const router = useRouter();
@@ -63,6 +66,7 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 	const [isSuccessOpen, setIsSuccessOpen] = useState(false);
 	const [isCancelDocOpen, setIsCancelDocOpen] = useState(false);
 	const [isDeleteDocOpen, setIsDeleteDocOpen] = useState(false);
+	const [isBatchVisibilityOpen, setIsBatchVisibilityOpen] = useState(false);
 	const [isSummaryExpanded, setIsSummaryExpanded] = useState(true);
 	const [editModes, setEditModes] = useState<Record<string, boolean>>({});
 	const tabRefs = useRef<Record<string, BatchTabHandle | null>>({});
@@ -354,6 +358,17 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 							</Button>
 						</div>
 					)}
+					{hasWriteAccess && (
+						<Button
+							variant="outline"
+							className="gap-2 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
+							disabled={isLoading}
+							onClick={() => setIsBatchVisibilityOpen(true)}
+						>
+							<RiEyeLine className="size-4" />
+							Set Visibility
+						</Button>
+					)}
 					{hasWriteAccess && hasApprovableDocs && (
 						<Button
 							variant="default"
@@ -501,6 +516,21 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 				description="All documents in this batch have been approved and indexed into the system."
 				buttonText="Back to Knowledge Base"
 				onAction={() => router.push("/dashboard/knowledge")}
+			/>
+
+			{/* Batch Visibility Settings Modal */}
+			<BatchVisibilityModal
+				isOpen={isBatchVisibilityOpen}
+				onOpenChange={setIsBatchVisibilityOpen}
+				batchId={batchId}
+				documentCount={batchDocuments.length}
+				initialSettings={
+					(activeDoc?.metadata?.visibility_settings as VisibilitySettings) || {
+						clinics: ["all"],
+						doctor_types: ["all"],
+						doctors: ["all"],
+					}
+				}
 			/>
 		</div>
 	);
