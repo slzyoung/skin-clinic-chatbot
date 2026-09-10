@@ -284,6 +284,17 @@ def _format_browser_url(raw_url: str = None, s3_key: str = "") -> str:
     clean_key = clean_key.lstrip("/")
 
     s3_pub = getattr(settings, "S3_PUBLIC_URL", None)
+    if not s3_pub or not str(s3_pub).strip():
+        # Smart fail-safe: if DevOps forgot S3_PUBLIC_URL, determine official public domain based on ENVIRONMENT
+        # to ensure external CIS floating chat always receives valid absolute URLs.
+        env_mode = (getattr(settings, "ENVIRONMENT", "") or "").lower().strip()
+        if env_mode in ("staging", "stage"):
+            s3_pub = "https://dokterpedia-api-staging.aryanoble.web.id/api/storage"
+        elif env_mode in ("production", "prod"):
+            s3_pub = "https://dokterpedia-api.aryanoble.co.id/api/storage"
+        elif env_mode in ("development", "dev"):
+            s3_pub = "https://dokterpedia-api-dev.aryanoble.web.id/api/storage"
+
     if s3_pub and str(s3_pub).strip():
         base = str(s3_pub).strip()
         if base.startswith("S3_PUBLIC_URL="):
@@ -292,7 +303,7 @@ def _format_browser_url(raw_url: str = None, s3_key: str = "") -> str:
         if clean_key:
             return f"{base}/{clean_key}"
 
-    # Universal proxy path served by FastAPI backend
+    # Universal relative proxy path (for local development fallback)
     if clean_key:
         return f"/api/storage/{clean_key}"
     return raw_url or ""

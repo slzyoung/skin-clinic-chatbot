@@ -7,6 +7,7 @@ All notable changes to the Arya Noble AI Chatbot Backend are documented in this 
 ### Backend Dynamic Image URL Expansion for CIS Floating Chat & Frontend
 - **Storage Service URL Expansion (`app/services/storage.py`)**:
   - Enhanced `_format_browser_url()` to intelligently normalize raw S3 keys (`images/...`), relative proxy paths (`/api/storage/images/...`), and already absolute external URLs against the configured `S3_PUBLIC_URL`.
+  - Added smart environment-based domain fallback (`dev`, `staging`, `production`) for `S3_PUBLIC_URL` to guarantee absolute URLs in external CIS chats even without explicit environment configuration.
   - Implemented `expand_image_urls_in_markdown()` to scan and expand markdown image tags `![alt](url)` to absolute URLs dynamically.
 - **RAG Subsystem Dynamic Normalization (`app/rag/services/rag_generator.py`, `app/rag/router.py`)**:
   - Enhanced `build_prompt()` to dynamically expand relative image URLs inside retrieved context chunks prior to LLM synthesis, enabling the model to stream absolute URLs in real time.
