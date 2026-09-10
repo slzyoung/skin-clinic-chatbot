@@ -2,6 +2,37 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.3.8] - 2026-09-11
+
+### General Chat Confirmation Standardization & English Default Messages
+- **Knowledge & RAG Routers (`app/api/routers/knowledge.py`, `app/rag/router.py`)**:
+  - Aligned confirmation, success, and cancellation response messages with English default strings (`Changes to '...' were successfully applied to ... Knowledge Base documents.`, `Item '...' was successfully deleted from ...`, `Operation cancelled. No changes were applied to the Knowledge Base.`).
+  - Standardized JSON responses for all batch and single-item operations with flat styling and full parity across API responses.
+- **Frontend Action Confirmation Card (`action-card.tsx`, `parser.ts`)**:
+  - Replaced all raw emojis with contextual Remix Icons (`RiFileEditLine`, `RiDeleteBin7Line`, `RiFileTextLine`, `RiInputField`, `RiArrowRightLine`).
+  - Applied flat styling with `shadow-none`, `rounded-lg`, and unified header button sizing (`h-9 px-4`).
+
+---
+
+## [1.3.7] - 2026-09-11
+
+### General Chat Confirmation & Response Text Cleanup
+- **Knowledge & RAG Routers (`app/api/routers/knowledge.py`, `app/rag/router.py`)**:
+  - Removed all emoji prefixes (`📋`, `✅`, `🗑️`, `❌`) from confirmation preview prompts and post-action assistant messages.
+  - Ensured all confirmation messages, success messages, and cancellation responses adhere to clean, professional markdown standards without distracting emoji characters.
+
+---
+
+## [1.3.6] - 2026-09-11
+
+### Storage Proxy S3 UUID Prefix Fallback Resolution
+- **Storage Service (`app/services/storage.py`)**:
+  - Enhanced `get_s3_object_stream()` and `get_s3_object_data()` with automatic 32-hex UUID prefix matching against MinIO storage.
+  - Resolved 404 image load issues when LLMs or Markdown summarizers slightly alter, autocomplete, or truncate human-readable image filename suffixes (e.g. `..._Gentle_Ac.jpeg` vs `..._Gentle_Acne.jpeg`).
+  - Guarantees 100% resilient image asset rendering in both Dashboard Knowledge review and Doctor Portal chat streams.
+
+---
+
 ## [1.3.5] - 2026-09-10
 
 ### Backend Dynamic Image URL Expansion for CIS Floating Chat & Frontend

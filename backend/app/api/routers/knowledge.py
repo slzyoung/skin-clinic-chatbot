@@ -413,16 +413,16 @@ async def confirm_pending_operation(
             op.confirmed_at = now_utc
 
             if len(affected_kids) > 1:
-                success_msg = f"Perubahan pada '{op.target_item or op.knowledge_id}' berhasil diterapkan ke {len(affected_kids)} dokumen Knowledge Base."
+                success_msg = f"Changes to '{op.target_item or op.knowledge_id}' were successfully applied to {len(affected_kids)} Knowledge Base documents."
             else:
-                success_msg = edit_results[0].get("message") or f"Perubahan pada '{op.target_item or op.knowledge_id}' berhasil diterapkan ke Knowledge Base."
+                success_msg = edit_results[0].get("message") or f"Changes to '{op.target_item or op.knowledge_id}' were successfully applied to the Knowledge Base."
 
             if session_id:
                 try:
                     db.add(DBChatMessage(
                         session_id=session_id,
                         role=ChatRole.ASSISTANT,
-                        content=f"✅ {success_msg}",
+                        content=success_msg,
                         attachments={"action": "edit_applied", "operation_id": str(op.id), "target_knowledge_id": op.knowledge_id, "affected_knowledge_ids": affected_kids},
                         created_at=now_utc + timedelta(milliseconds=100)
                     ))
@@ -470,16 +470,16 @@ async def confirm_pending_operation(
             op.confirmed_at = now_utc
 
             if len(affected_kids) > 1:
-                success_msg = f"Item '{op.target_item or op.knowledge_id}' berhasil dihapus dari {len(affected_kids)} dokumen Knowledge Base."
+                success_msg = f"Item '{op.target_item or op.knowledge_id}' was successfully deleted from {len(affected_kids)} Knowledge Base documents."
             else:
-                success_msg = del_results[0].get("message") or f"Item/dokumen '{op.target_item or op.knowledge_id}' berhasil dihapus dari Knowledge Base."
+                success_msg = del_results[0].get("message") or f"Item/document '{op.target_item or op.knowledge_id}' was successfully deleted from the Knowledge Base."
 
             if session_id:
                 try:
                     db.add(DBChatMessage(
                         session_id=session_id,
                         role=ChatRole.ASSISTANT,
-                        content=f"🗑️ {success_msg}",
+                        content=success_msg,
                         attachments={"action": "delete_applied", "operation_id": str(op.id), "target_knowledge_id": op.knowledge_id, "affected_knowledge_ids": affected_kids},
                         created_at=now_utc + timedelta(milliseconds=100)
                     ))
@@ -502,11 +502,11 @@ async def confirm_pending_operation(
                 "type": "error",
                 "action": "delete_failed",
                 "operation_id": str(op.id),
-                "message": f"Gagal menghapus item: {'; '.join(errors)}"
+                "message": f"Failed to delete item: {'; '.join(errors)}"
             }
 
     else:
-        raise HTTPException(status_code=400, detail=f"Aksi operasi '{op.action}' tidak didukung.")
+        raise HTTPException(status_code=400, detail=f"Operation action '{op.action}' is not supported.")
 
 @router.post("/operations/{operation_id}/cancel")
 @router.post("/operations/{operation_id}/cancel/")
@@ -524,14 +524,14 @@ async def cancel_pending_operation(
     op = res.scalar_one_or_none()
 
     if not op:
-        raise HTTPException(status_code=404, detail="Operasi tidak ditemukan.")
+        raise HTTPException(status_code=404, detail="Operation not found.")
 
     if op.status == "confirmed":
         return {
             "type": "info",
             "action": "already_confirmed",
             "operation_id": str(op.id),
-            "message": "Operasi sudah terlanjur dikonfirmasi sebelumnya."
+            "message": "Operation has already been confirmed previously."
         }
 
     op.status = "cancelled"
@@ -542,7 +542,7 @@ async def cancel_pending_operation(
             db.add(DBChatMessage(
                 session_id=session_id,
                 role=ChatRole.ASSISTANT,
-                content="❌ Operasi dibatalkan. Tidak ada perubahan yang diterapkan pada Knowledge Base.",
+                content="Operation cancelled. No changes were applied to the Knowledge Base.",
                 attachments={"action": "cancelled", "operation_id": str(op.id)},
                 created_at=now_utc + timedelta(milliseconds=100)
             ))
@@ -554,7 +554,7 @@ async def cancel_pending_operation(
         "type": "cancelled",
         "action": "cancelled",
         "operation_id": str(op.id),
-        "message": "Operasi berhasil dibatalkan. Tidak ada perubahan yang dilakukan pada Knowledge Base."
+        "message": "Operation successfully cancelled. No changes were made to the Knowledge Base."
     }
 
 from app.schemas.pagination import PaginatedResponse

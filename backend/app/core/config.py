@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     COOKIE_DOMAIN: Optional[str] = None # e.g. ".aryanoble.web.id" or ".aryanoble.co.id"
     COOKIE_SECURE: Optional[bool] = None
     COOKIE_SAMESITE: str = "lax"
-    CORS_ORIGINS: list[str] = [
+    CORS_ORIGINS: list[str] | str = [
         "http://localhost:3000",
         "http://localhost:8000",
         "http://localhost:8001",

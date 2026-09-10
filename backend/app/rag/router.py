@@ -4968,9 +4968,9 @@ async def query_general_endpoint(
                                 latest_op.confirmed_at = now_utc
                                 await db_session.commit()
                                 if len(affected_kids) > 1:
-                                    succ_msg = f"Perubahan pada '{latest_op.target_item or latest_op.knowledge_id}' berhasil diterapkan ke {len(affected_kids)} dokumen Knowledge Base."
+                                    succ_msg = f"Changes to '{latest_op.target_item or latest_op.knowledge_id}' were successfully applied to {len(affected_kids)} Knowledge Base documents."
                                 else:
-                                    succ_msg = edit_results[0].get("message") or f"Perubahan pada '{latest_op.target_item or latest_op.knowledge_id}' berhasil diterapkan ke Knowledge Base."
+                                    succ_msg = edit_results[0].get("message") or f"Changes to '{latest_op.target_item or latest_op.knowledge_id}' were successfully applied to the Knowledge Base."
                                 return QueryGeneralResponse(
                                     type="answer",
                                     message=succ_msg,
@@ -4983,7 +4983,7 @@ async def query_general_endpoint(
                                 )
                             else:
                                 errs = [r.get("error", "Unknown error") for r in edit_results if not r.get("success")]
-                                fail_msg = f"Gagal menerapkan perubahan: {'; '.join(errs)}"
+                                fail_msg = f"Failed to apply changes: {'; '.join(errs)}"
                                 return QueryGeneralResponse(
                                     type="answer",
                                     message=fail_msg,
@@ -5016,9 +5016,9 @@ async def query_general_endpoint(
                                 latest_op.confirmed_at = now_utc
                                 await db_session.commit()
                                 if len(affected_kids) > 1:
-                                    succ_msg = f"Item '{latest_op.target_item or latest_op.knowledge_id}' berhasil dihapus dari {len(affected_kids)} dokumen Knowledge Base."
+                                    succ_msg = f"Item '{latest_op.target_item or latest_op.knowledge_id}' was successfully deleted from {len(affected_kids)} Knowledge Base documents."
                                 else:
-                                    succ_msg = del_results[0].get("message") or f"Item/dokumen '{latest_op.target_item or latest_op.knowledge_id}' berhasil dihapus dari Knowledge Base."
+                                    succ_msg = del_results[0].get("message") or f"Item/document '{latest_op.target_item or latest_op.knowledge_id}' was successfully deleted from the Knowledge Base."
                                 return QueryGeneralResponse(
                                     type="answer",
                                     message=succ_msg,
@@ -5302,7 +5302,7 @@ async def query_general_endpoint(
                         doc_list_str = "\n".join(doc_list_items)
 
                         preview_text = (
-                            f"📋 **Pratinjau Perubahan Data Knowledge Base**\n\n"
+                            f"**Pratinjau Perubahan Data Knowledge Base**\n\n"
                             f"Berikut adalah rincian perubahan yang akan diterapkan:\n\n"
                             + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else "") +
                             f"- **Bagian yang Diperbarui**: {field_display}\n"
@@ -5314,7 +5314,7 @@ async def query_general_endpoint(
                     else:
                         batch_link = f"[{target_kid}](/dashboard/knowledge/batch/{batch_id})" if batch_id else f"[{target_kid}](/dashboard/knowledge/{target_kid})"
                         preview_text = (
-                            f"📋 **Pratinjau Perubahan Data Knowledge Base**\n\n"
+                            f"**Pratinjau Perubahan Data Knowledge Base**\n\n"
                             f"Berikut adalah rincian perubahan yang akan diterapkan:\n\n"
                             + (f"- **Target Entitas / Item**: **{target_item}**\n" if target_item else "") +
                             f"- **ID Dokumen**: {batch_link} — *{doc_title}*\n"

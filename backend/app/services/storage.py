@@ -371,6 +371,33 @@ def get_s3_object_stream(s3_key: str, chunk_size: int = 65536) -> tuple:
                     else:
                         logger.warning(f"Failed to fetch S3 object '{cand}' from bucket '{bucket}': {e}")
 
+            # UUID Hex prefix fallback search if filename was slightly altered by LLM/Markdown formatter
+            hex_match = re.search(r'([0-9a-f]{32})_', clean_key)
+            if hex_match:
+                hex_prefix = hex_match.group(1)
+                for prefix_cand in [f"images/{hex_prefix}", hex_prefix]:
+                    try:
+                        list_res = client.list_objects_v2(Bucket=bucket, Prefix=prefix_cand, MaxKeys=1)
+                        contents = list_res.get("Contents", [])
+                        if contents:
+                            found_key = contents[0]["Key"]
+                            logger.info(f"S3 prefix match: resolved '{clean_key}' -> '{found_key}' in bucket '{bucket}'")
+                            resp = client.get_object(Bucket=bucket, Key=found_key)
+                            body = resp.get("Body")
+                            ctype = resp.get("ContentType", "image/png")
+                            content_length = resp.get("ContentLength")
+
+                            def _stream_iterator_found():
+                                try:
+                                    for chunk in body.iter_chunks(chunk_size=chunk_size):
+                                        yield chunk
+                                finally:
+                                    body.close()
+
+                            return _stream_iterator_found(), ctype, content_length
+                    except Exception as prefix_err:
+                        logger.debug(f"S3 prefix lookup for '{hex_prefix}' in '{bucket}' error: {prefix_err}")
+
     return None, None, None
 
 
@@ -405,6 +432,24 @@ def get_s3_object_data(s3_key: str) -> tuple:
                         logger.debug(f"S3 object '{cand}' not found in bucket '{bucket}': {e}")
                     else:
                         logger.warning(f"Failed to fetch S3 object '{cand}' from bucket '{bucket}': {e}")
+
+            # UUID Hex prefix fallback search
+            hex_match = re.search(r'([0-9a-f]{32})_', clean_key)
+            if hex_match:
+                hex_prefix = hex_match.group(1)
+                for prefix_cand in [f"images/{hex_prefix}", hex_prefix]:
+                    try:
+                        list_res = client.list_objects_v2(Bucket=bucket, Prefix=prefix_cand, MaxKeys=1)
+                        contents = list_res.get("Contents", [])
+                        if contents:
+                            found_key = contents[0]["Key"]
+                            logger.info(f"S3 prefix match: resolved '{clean_key}' -> '{found_key}' in bucket '{bucket}'")
+                            resp = client.get_object(Bucket=bucket, Key=found_key)
+                            body = resp["Body"].read()
+                            ctype = resp.get("ContentType", "image/png")
+                            return body, ctype
+                    except Exception as prefix_err:
+                        logger.debug(f"S3 prefix lookup for '{hex_prefix}' in '{bucket}' error: {prefix_err}")
 
     # Fallback: check local disk storage folders
     fname = os.path.basename(clean_key)
