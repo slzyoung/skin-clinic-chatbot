@@ -90,7 +90,7 @@ export function BatchDocumentTabs({
 			{/* Scrollable Tabs Bar */}
 			<div
 				ref={scrollContainerRef}
-				className="w-full min-w-0 max-w-full overflow-x-auto overflow-y-hidden scroll-smooth pb-1.5 [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-zinc-100/80 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-zinc-400"
+				className="w-full min-w-0 max-w-full overflow-x-auto overflow-y-hidden scroll-smooth pb-1.5 snap-x snap-mandatory [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-zinc-100/80 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-300 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-zinc-400"
 			>
 				<Tabs value={activeId} onValueChange={onSelectDoc} className="w-full min-w-0 max-w-full">
 					<TabsList
@@ -107,7 +107,7 @@ export function BatchDocumentTabs({
 									value={tabDoc.id}
 									data-tab-id={tabDoc.id}
 									title={tabDoc.file_name || tabDoc.title || `Document ${tabIndex + 1}`}
-									className="w-48 shrink-0 relative inline-flex items-center justify-between gap-1.5 font-medium text-xs text-zinc-700 hover:text-blue-700 data-active:text-blue-700 data-active:after:bg-blue-700 px-2.5 py-1.5 transition-all cursor-pointer"
+									className="w-48 shrink-0 snap-start relative inline-flex items-center justify-between gap-1.5 font-medium text-xs text-zinc-700 hover:text-blue-700 data-active:text-blue-700 data-active:after:bg-blue-700 px-2.5 py-1.5 transition-all cursor-pointer"
 								>
 									<div className="flex items-center gap-1.5 min-w-0 flex-1">
 										<TabIcon className={cn("size-3.5 shrink-0", tabTextColor)} />

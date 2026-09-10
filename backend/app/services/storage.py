@@ -1332,9 +1332,21 @@ def delete_knowledge_images_and_assets(knowledge_id: str, doc_data: Optional[dic
                     pass
 
     deleted_images = []
+    seen_fnames = set()
     for ref in all_image_refs:
-        if delete_image_by_ref(ref, knowledge_id=kid_str):
-            deleted_images.append(os.path.basename(ref))
+        clean = str(ref).strip()
+        if "/api/storage/" in clean:
+            clean = clean.split("/api/storage/")[-1]
+        elif "/storage/" in clean:
+            clean = clean.split("/storage/")[-1]
+        elif "://" in clean:
+            from urllib.parse import urlparse
+            clean = urlparse(clean).path.lstrip("/")
+        fname = os.path.basename(clean.lstrip("/"))
+        if fname and len(fname) >= 4 and fname not in seen_fnames:
+            seen_fnames.add(fname)
+            if delete_image_by_ref(fname, knowledge_id=kid_str):
+                deleted_images.append(fname)
 
     # Clean MinIO knowledge-documents bucket (originals & canonical)
     if client and kid_str:

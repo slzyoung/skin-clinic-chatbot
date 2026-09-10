@@ -71,9 +71,11 @@ export function ApprovalActions({
 			{knowledge.status === "PENDING" && hasWriteAccess && (
 				<div className="flex items-center justify-end gap-2 shrink-0 w-full pt-1">
 					<Button
+						type="button"
+						size="default"
 						onClick={() => setIsConfirmModalOpen(true)}
 						disabled={approveKnowledge.isPending || editKnowledge.isPending}
-						className="bg-blue-600 hover:bg-blue-700 text-white gap-2 cursor-pointer shadow-none rounded-lg ml-auto"
+						className="bg-blue-600 hover:bg-blue-700 text-white gap-2 cursor-pointer shadow-none rounded-lg px-4 h-10 font-medium text-sm ml-auto transition-colors"
 					>
 						{approveKnowledge.isPending || editKnowledge.isPending ? (
 							<>

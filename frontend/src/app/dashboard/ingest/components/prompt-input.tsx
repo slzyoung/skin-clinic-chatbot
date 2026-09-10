@@ -21,7 +21,6 @@ import {
 	AttachmentMedia,
 	AttachmentContent,
 	AttachmentTitle,
-	AttachmentDescription,
 	AttachmentActions,
 	AttachmentAction,
 } from "@/components/ui/attachment";
@@ -92,6 +91,7 @@ export interface PromptInputProps extends React.HTMLAttributes<HTMLDivElement> {
 	minRows?: number;
 	disabled?: boolean;
 	isLoading?: boolean;
+	uploadProgress?: number;
 	autoFocus?: boolean;
 	enableGlobalSlashFocus?: boolean;
 }
@@ -109,6 +109,7 @@ export function PromptInput({
 	minRows = 1,
 	disabled,
 	isLoading,
+	uploadProgress,
 	autoFocus,
 	enableGlobalSlashFocus = true,
 	...props
@@ -231,14 +232,18 @@ export function PromptInput({
 	const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
 	const handleSend = () => {
-		if (disabled || (!inputValue.trim() && attachedFiles.length === 0)) return;
-		const success = onSend?.(inputValue, undefined, attachedFiles);
+		if (disabled || isLoading || (!inputValue.trim() && attachedFiles.length === 0)) return;
+		const currentFiles = [...attachedFiles];
+		const currentText = inputValue;
+		const success = onSend?.(currentText, undefined, currentFiles);
 		if (success !== false) {
 			if (!isControlled) {
 				setUncontrolledValue("");
 			}
 			onValueChange?.("");
-			setAttachedFiles([]);
+			if (currentFiles.length === 0) {
+				setAttachedFiles([]);
+			}
 			if (textareaRef.current) {
 				textareaRef.current.style.height = "auto";
 			}
@@ -274,7 +279,7 @@ export function PromptInput({
 	return (
 		<div
 			className={cn(
-				"relative w-full rounded-xl p-3 transition-all border",
+				"relative w-full rounded-lg p-3 transition-all border",
 				isDragging
 					? "border-blue-500 bg-blue-50/50"
 					: "border-zinc-200/80 bg-zinc-50/50 hover:border-zinc-300 focus-within:border-zinc-300 focus-within:bg-white",
@@ -304,36 +309,58 @@ export function PromptInput({
 				</div>
 			)}
 
-			{/* Attached Files Preview */}
+			{/* Attached Files Preview with Interactive Progress Bar */}
 			{attachedFiles.length > 0 && (
-				<div className="flex gap-2 mb-2 overflow-x-auto pb-2 custom-scrollbar">
+				<div className="flex gap-2 mb-2.5 overflow-x-auto pb-1.5 custom-scrollbar">
 					{attachedFiles.map((file, idx) => {
 						const { Icon, bgColor, textColor } = getFileIconAndColor(file.name);
 						return (
 							<Attachment
 								key={idx}
-								className="bg-white border border-zinc-200 shadow-none p-1.5 min-w-35 max-w-50 shrink-0 rounded-lg"
+								className={cn(
+									"bg-white border border-zinc-200 shadow-none p-2 min-w-44 max-w-64 shrink-0 rounded-lg transition-all",
+									isLoading && "border-blue-300 bg-blue-50/20",
+								)}
 							>
-								<AttachmentMedia className={cn(bgColor, textColor, "rounded-lg p-2")}>
-									<Icon className="w-5 h-5" />
+								<AttachmentMedia className={cn(bgColor, textColor, "rounded-lg p-2 shrink-0")}>
+									{isLoading ? (
+										<RiLoader4Line className="w-5 h-5 animate-spin text-blue-600" />
+									) : (
+										<Icon className="w-5 h-5" />
+									)}
 								</AttachmentMedia>
-								<AttachmentContent className="overflow-hidden min-w-0 pr-1">
+								<AttachmentContent className="overflow-hidden min-w-0 pr-1 flex-1">
 									<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
 										{file.name}
 									</AttachmentTitle>
-									<AttachmentDescription className="text-[11px] text-zinc-500">
-										{(file.size / 1024).toFixed(1)} KB
-									</AttachmentDescription>
+									<div className="flex items-center justify-between gap-1 text-[11px] text-zinc-500 mt-0.5">
+										<span>{(file.size / 1024).toFixed(1)} KB</span>
+										{isLoading && uploadProgress !== undefined && (
+											<span className="font-semibold text-blue-600">
+												{uploadProgress > 0 ? `${uploadProgress}%` : "Uploading..."}
+											</span>
+										)}
+									</div>
+									{isLoading && uploadProgress !== undefined && (
+										<div className="w-full h-1 bg-blue-100 rounded-full overflow-hidden mt-1.5">
+											<div
+												className="h-full bg-blue-600 transition-all duration-150 rounded-full"
+												style={{ width: `${Math.max(8, uploadProgress)}%` }}
+											/>
+										</div>
+									)}
 								</AttachmentContent>
-								<AttachmentActions>
-									<AttachmentAction
-										variant="ghost"
-										className="hover:bg-zinc-100 text-zinc-500 hover:text-zinc-950 ml-1"
-										onClick={() => removeFile(idx)}
-									>
-										<RiCloseLine className="w-4 h-4" />
-									</AttachmentAction>
-								</AttachmentActions>
+								{!isLoading && (
+									<AttachmentActions>
+										<AttachmentAction
+											variant="ghost"
+											className="hover:bg-zinc-100 text-zinc-500 hover:text-zinc-950 ml-1 rounded-md"
+											onClick={() => removeFile(idx)}
+										>
+											<RiCloseLine className="w-4 h-4" />
+										</AttachmentAction>
+									</AttachmentActions>
+								)}
 							</Attachment>
 						);
 					})}

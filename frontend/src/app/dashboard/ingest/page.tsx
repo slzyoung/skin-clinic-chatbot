@@ -31,6 +31,7 @@ function IngestContent() {
 	const textIngestMutation = useIngestTextKnowledge();
 	const { data: quota } = useIngestionQuota();
 
+	const [uploadProgress, setUploadProgress] = useState<number>(0);
 	const isProcessing = uploadMutation.isPending || textIngestMutation.isPending;
 
 	const [mode, setMode] = useState<"ingest" | "general">("ingest");
@@ -98,20 +99,30 @@ function IngestContent() {
 				formData.append("file", file);
 			});
 
-			uploadMutation.mutate(formData, {
-				onSuccess: (data: { batch_id?: string; upload_batch_id?: string; documents?: { knowledge_id: string }[] }) => {
-					const batchId = data.batch_id || data.upload_batch_id;
-					if (batchId) {
-						router.push(`/dashboard/knowledge/batch/${batchId}`);
-					} else if (data.documents && data.documents.length > 0) {
-						router.push(`/dashboard/knowledge/${data.documents[0].knowledge_id}`);
-					} else if (targetProject) {
-						router.push(`/dashboard/knowledge/project/${targetProject}`);
-					} else {
-						router.push("/dashboard/knowledge");
-					}
+			setUploadProgress(0);
+			uploadMutation.mutate(
+				{
+					formData,
+					onProgress: (percent) => setUploadProgress(percent),
 				},
-			});
+				{
+					onSuccess: (data: { batch_id?: string; upload_batch_id?: string; documents?: { knowledge_id: string }[] }) => {
+						const batchId = data.batch_id || data.upload_batch_id;
+						if (batchId) {
+							router.push(`/dashboard/knowledge/batch/${batchId}`);
+						} else if (data.documents && data.documents.length > 0) {
+							router.push(`/dashboard/knowledge/${data.documents[0].knowledge_id}`);
+						} else if (targetProject) {
+							router.push(`/dashboard/knowledge/project/${targetProject}`);
+						} else {
+							router.push("/dashboard/knowledge");
+						}
+					},
+					onError: () => {
+						setUploadProgress(0);
+					},
+				}
+			);
 			return;
 		}
 
@@ -166,7 +177,9 @@ function IngestContent() {
 						<div className="flex items-start gap-3 p-3.5 rounded-lg border border-amber-300 bg-white text-xs">
 							<RiAlertLine className="size-4 text-amber-600 shrink-0 mt-0.5" />
 							<div className="flex flex-col gap-0.5">
-								<span className="font-semibold text-zinc-900">Monthly Ingestion Limit Reached ({quota.percentage}%)</span>
+								<span className="font-semibold text-zinc-900">
+									Monthly Ingestion Limit Reached ({quota.percentage}%)
+								</span>
 								<span className="text-zinc-600">
 									Used {quota.tokens_used.toLocaleString()} of {quota.token_limit.toLocaleString()} tokens. Ingestion will proceed, but threshold can be adjusted in Configuration.
 								</span>
@@ -196,7 +209,7 @@ function IngestContent() {
 								"Analyze all uploaded documents and treat them as a unified knowledge base. Identify key information and cross-document relationships while ensuring that all findings remain strictly grounded in the provided sources. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
 							)
 						}
-						className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+						className="flex flex-col items-start p-3 text-left rounded-lg border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
 					>
 						<RiGitRepositoryLine className="size-4 text-zinc-950 mb-1.5" />
 						<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Unified Knowledge Analysis</h3>
@@ -211,7 +224,7 @@ function IngestContent() {
 								"Review all uploaded files and map key entities, topics, and relationships across documents. Clearly distinguish between available information and information that is not provided in the knowledge base. If the source knowledge is primarily in Indonesian, generate the response in Indonesian."
 							)
 						}
-						className="flex flex-col items-start p-3 text-left rounded-xl border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
+						className="flex flex-col items-start p-3 text-left rounded-lg border border-zinc-200/70 bg-white hover:border-zinc-300 hover:bg-zinc-50/60 transition-all cursor-pointer shadow-none"
 					>
 						<RiGitMergeLine className="size-4 text-zinc-950 mb-1.5" />
 						<h3 className="font-semibold text-xs text-zinc-950 mb-0.5">Entity & Topic Mapping</h3>
@@ -242,6 +255,7 @@ function IngestContent() {
 						}
 						disabled={isProcessing}
 						isLoading={isProcessing}
+						uploadProgress={uploadProgress}
 					/>
 				</div>
 
@@ -312,7 +326,7 @@ function IngestContent() {
 										{selectedProjectName}
 									</SelectValue>
 								</SelectTrigger>
-								<SelectContent align="end" alignItemWithTrigger={false} sideOffset={4} className="bg-white max-w-xs">
+								<SelectContent align="end" alignItemWithTrigger={false} sideOffset={4} className="bg-white max-w-xs shadow-none">
 									<SelectItem value="none">
 										<span className="truncate">No Project</span>
 									</SelectItem>
@@ -330,15 +344,6 @@ function IngestContent() {
 						</div>
 					) : null}
 				</div>
-
-				{/* Loading Overlays */}
-				{isProcessing && (
-					<div className="absolute inset-0 bg-white/50 flex items-center justify-center rounded-xl z-10 backdrop-blur-sm">
-						<span className="text-sm font-medium text-blue-600">
-							{textIngestMutation.isPending ? "Ingesting knowledge text..." : "Uploading documents..."}
-						</span>
-					</div>
-				)}
 
 				{!isGeneralMode && (
 					<div className="mt-4 px-3.5 py-1.5 w-fit mx-auto border border-zinc-200/60 rounded-full flex items-center justify-center text-[11px] text-zinc-600 bg-zinc-50/50">

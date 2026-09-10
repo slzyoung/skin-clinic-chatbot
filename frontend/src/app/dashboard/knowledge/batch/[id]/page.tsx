@@ -358,17 +358,6 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 							</Button>
 						</div>
 					)}
-					{hasWriteAccess && (
-						<Button
-							variant="outline"
-							className="gap-2 border-gray-200 bg-white text-zinc-700 hover:bg-zinc-50 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none"
-							disabled={isLoading}
-							onClick={() => setIsBatchVisibilityOpen(true)}
-						>
-							<RiEyeLine className="size-4" />
-							Set Visibility
-						</Button>
-					)}
 					{hasWriteAccess && hasApprovableDocs && (
 						<Button
 							variant="default"
@@ -419,13 +408,36 @@ export default function BatchKnowledgePage({ params }: { params: Promise<{ id: s
 						const headerNode = (
 							<div className="flex flex-col gap-4 mb-4 w-full min-w-0 max-w-full">
 								{/* Batch Summary Box if present */}
-								{displayedSummary && (
+								{displayedSummary ? (
 									<BatchExecutiveSummary
 										summary={displayedSummary}
 										documentCount={batchDocuments.length}
 										isExpanded={isSummaryExpanded}
 										onToggleExpand={() => setIsSummaryExpanded((prev) => !prev)}
+										onSetVisibility={() => setIsBatchVisibilityOpen(true)}
+										hasWriteAccess={hasWriteAccess}
 									/>
+								) : (
+									hasWriteAccess && (
+										<div className="flex items-center justify-between gap-3 p-3.5 bg-zinc-50 border border-zinc-200/80 rounded-lg shadow-none">
+											<div className="flex items-center gap-2">
+												<RiEyeLine className="size-4 text-zinc-500" />
+												<span className="text-xs sm:text-sm text-zinc-600 font-medium">
+													Set branch, doctor type, or doctor access limits for all documents in this batch:
+												</span>
+											</div>
+											<Button
+												type="button"
+												size="default"
+												variant="default"
+												onClick={() => setIsBatchVisibilityOpen(true)}
+												className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none shrink-0"
+											>
+												<RiEyeLine className="size-4" />
+												Set Visibility
+											</Button>
+										</div>
+									)
 								)}
 
 								{/* Batch Documents Tabs Bar */}

@@ -59,15 +59,26 @@ export const useKnowledgeBatch = (batchId: string) => {
 		enabled: !!batchId,
 		refetchInterval: (query) => {
 			const data = query.state.data;
-			if (!data || data.length === 0) return false;
+			// 1. If data is not yet loaded or empty, poll rapidly
+			if (!data || data.length === 0) {
+				return 1500;
+			}
 
-			// 1. Continue polling if any document is still PROCESSING
-			const isAnyProcessing = data.some((item) => item.status === "PROCESSING");
+			// 2. If any document is still PROCESSING or in PARSING state
+			const isAnyProcessing = data.some(
+				(item) => item.status === "PROCESSING" || (item.metadata as Record<string, unknown>)?.status === "PARSING",
+			);
 			if (isAnyProcessing) {
 				return 1500;
 			}
 
-			// 2. If multi-document batch (>= 2) and any non-rejected doc is missing batch_summary,
+			// 3. If batch only has 1 document so far, continue polling because
+			// subsequent documents in the multi-file batch might still be extracting in the background
+			if (data.length === 1) {
+				return 1500;
+			}
+
+			// 4. If multi-document batch (>= 2) and any non-rejected doc is missing batch_summary,
 			// continue polling to allow the background/coordinator summary synthesis to complete and update
 			const hasMissingSummary = data.some(
 				(item) => item.status !== "REJECTED" && !(item.metadata as Record<string, unknown>)?.batch_summary,
@@ -85,8 +96,25 @@ export const useUploadKnowledge = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: async (formData: FormData) => {
-			const response = await api.post("/knowledge/upload", formData);
+		mutationFn: async (
+			params:
+				| FormData
+				| {
+						formData: FormData;
+						onProgress?: (percent: number) => void;
+				  },
+		) => {
+			const data = params instanceof FormData ? params : params.formData;
+			const progressCb = params instanceof FormData ? undefined : params.onProgress;
+
+			const response = await api.post("/knowledge/upload", data, {
+				onUploadProgress: (progressEvent) => {
+					if (progressEvent.total && progressCb) {
+						const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+						progressCb(percent);
+					}
+				},
+			});
 			return response.data;
 		},
 		onSuccess: () => {
@@ -99,6 +127,42 @@ export const useUploadKnowledge = () => {
 		},
 		onError: (error: unknown) => {
 			toast.error(getErrorMessage(error, "Failed to upload knowledge files."));
+		},
+	});
+};
+
+export const useReplaceKnowledgeFile = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({
+			knowledgeId,
+			formData,
+			onProgress,
+		}: {
+			knowledgeId: string;
+			formData: FormData;
+			onProgress?: (percent: number) => void;
+		}) => {
+			const response = await api.post(`/knowledge/${knowledgeId}/replace-file`, formData, {
+				onUploadProgress: (progressEvent) => {
+					if (progressEvent.total && onProgress) {
+						const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+						onProgress(percent);
+					}
+				},
+			});
+			return response.data;
+		},
+		onSuccess: (_, variables) => {
+			toast.success("File replaced! Ingestion re-processing in background.");
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
+			queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(variables.knowledgeId) });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
+			queryClient.invalidateQueries({ queryKey: ["knowledge-ingestion-quota"] });
+		},
+		onError: (error: unknown) => {
+			toast.error(getErrorMessage(error, "Failed to replace file."));
 		},
 	});
 };

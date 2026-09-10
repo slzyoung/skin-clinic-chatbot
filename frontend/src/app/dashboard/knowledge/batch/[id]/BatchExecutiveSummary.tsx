@@ -7,6 +7,7 @@ import {
 	RiArrowDownSLine,
 	RiArrowUpSLine,
 	RiCheckLine,
+	RiEyeLine,
 	RiFileCopyLine,
 	RiSparklingLine,
 } from "@remixicon/react";
@@ -19,6 +20,8 @@ interface BatchExecutiveSummaryProps {
 	className?: string;
 	isExpanded?: boolean;
 	onToggleExpand?: () => void;
+	onSetVisibility?: () => void;
+	hasWriteAccess?: boolean;
 }
 
 export function BatchExecutiveSummary({
@@ -27,6 +30,8 @@ export function BatchExecutiveSummary({
 	className,
 	isExpanded: propIsExpanded,
 	onToggleExpand,
+	onSetVisibility,
+	hasWriteAccess,
 }: BatchExecutiveSummaryProps) {
 	const [internalIsExpanded, setInternalIsExpanded] = useState(true);
 	const [hasCopied, setHasCopied] = useState(false);
@@ -106,6 +111,25 @@ export function BatchExecutiveSummary({
 			{isExpanded && (
 				<div className="pt-3 border-t border-zinc-200/60 text-xs sm:text-sm text-zinc-800 leading-normal overflow-hidden">
 					<MarkdownContent content={summary} />
+				</div>
+			)}
+
+			{/* Bottom Action Footer for Batch Settings */}
+			{onSetVisibility && hasWriteAccess && (
+				<div className="mt-3 pt-3 border-t border-zinc-200/60 flex flex-wrap items-center justify-between gap-3">
+					<span className="text-xs sm:text-sm text-zinc-600 font-medium">
+						Set branch, doctor type, or doctor access limits for all documents in this batch:
+					</span>
+					<Button
+						type="button"
+						size="default"
+						variant="default"
+						onClick={onSetVisibility}
+						className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none shrink-0"
+					>
+						<RiEyeLine className="size-4" />
+						Set Visibility
+					</Button>
 				</div>
 			)}
 		</div>

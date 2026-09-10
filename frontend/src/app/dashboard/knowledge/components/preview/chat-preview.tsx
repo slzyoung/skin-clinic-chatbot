@@ -61,8 +61,10 @@ import {
 	useConfirmOperation,
 	useGeneralChatSession,
 	useSendGeneralChatMessage,
+	useReplaceKnowledgeFile,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { MarkdownContent } from "@/components/shared/markdown-content";
+import { StreamingMarkdown } from "@/components/shared/streaming-markdown";
 import { cleanMessageTurn } from "@/components/shared/markdown/utils";
 import { toast } from "sonner";
 import { ApprovalActions } from "./approval-actions";
@@ -70,6 +72,7 @@ import { CategorySettings } from "./category-settings";
 import { SectionCategoriesEditor } from "./section-categories-editor";
 import { TitleSettings } from "./title-settings";
 import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
+import { ProcessingPipelineCard } from "./processing-pipeline-card";
 
 interface ChatPreviewProps {
 	mode?: "knowledge" | "general";
@@ -123,7 +126,7 @@ function getInitialMessages(
 ): Message[] {
 	const currentSummary = aiSummary || knowledge?.ai_summary;
 
-	// For APPROVED documents, always provide the single current approved summary as Turn 0 baseline
+	// 1. For APPROVED documents, always provide the single current approved summary as Turn 0 baseline
 	if (
 		knowledgeStatus?.toUpperCase() === "APPROVED" ||
 		knowledge?.status?.toUpperCase() === "APPROVED"
@@ -134,7 +137,31 @@ function getInitialMessages(
 		return [];
 	}
 
+	const isProcessing =
+		knowledgeStatus?.toUpperCase() === "PROCESSING" ||
+		knowledge?.status?.toUpperCase() === "PROCESSING";
+
 	const meta = knowledge?.metadata as Record<string, unknown> | undefined;
+	const effectivePrompt =
+		(initialPrompt && initialPrompt.trim()) ||
+		(typeof meta?.initial_prompt === "string" && meta.initial_prompt.trim()) ||
+		undefined;
+	const docFile = fileName || knowledge?.file_name || undefined;
+
+	// 2. While actively processing, NEVER render stale assistant bubbles or old history
+	if (isProcessing) {
+		if (effectivePrompt) {
+			return [
+				{
+					role: "user",
+					content: effectivePrompt,
+					attachmentName: docFile,
+				},
+			];
+		}
+		return [];
+	}
+
 	const history = (meta?.history || meta?.chat_history) as
 		| Array<{
 				role: "user" | "assistant";
@@ -144,13 +171,8 @@ function getInitialMessages(
 		  }>
 		| undefined;
 
-	const effectivePrompt =
-		(initialPrompt && initialPrompt.trim()) ||
-		(typeof meta?.initial_prompt === "string" && meta.initial_prompt.trim()) ||
-		undefined;
 	const initialSummary =
 		currentSummary || (meta?.initial_summary as string) || initialSummarySnapshot || undefined;
-	const docFile = fileName || knowledge?.file_name || undefined;
 
 	// Build Turn 0
 	const turn0: Message[] = [];
@@ -161,7 +183,7 @@ function getInitialMessages(
 			attachmentName: docFile,
 		});
 	}
-	if (initialSummary && knowledgeStatus !== "PROCESSING") {
+	if (initialSummary) {
 		turn0.push({
 			role: "assistant",
 			content: initialSummary,
@@ -221,7 +243,7 @@ function getInitialMessages(
 		return mapped;
 	}
 
-	if (initialSummary && knowledgeStatus !== "PROCESSING") {
+	if (initialSummary) {
 		if (effectivePrompt) {
 			return [
 				{ role: "user", content: effectivePrompt, attachmentName: docFile },
@@ -264,6 +286,9 @@ export function ChatPreview({
 	const sendGeneralMsg = useSendGeneralChatMessage(mode === "general" ? sessionId : null);
 	const confirmOp = useConfirmOperation();
 	const cancelOp = useCancelOperation();
+	const replaceFileMutation = useReplaceKnowledgeFile();
+	const retryFileInputRef = useRef<HTMLInputElement>(null);
+	const [isReplacingFile, setIsReplacingFile] = useState(false);
 	const [activeOpId, setActiveOpId] = useState<string | null>(null);
 	const [completedOps, setCompletedOps] = useState<Record<string, "confirmed" | "cancelled">>({});
 	const [activeEditTab, setActiveEditTab] = useState<"write" | "preview">("write");
@@ -273,6 +298,30 @@ export function ChatPreview({
 	const [localSummary, setLocalSummary] = useState(incomingSummary);
 	const manualTextareaRef = useRef<HTMLTextAreaElement>(null);
 	const [backupManualSummary, setBackupManualSummary] = useState<string>("");
+
+	const handleRetryFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const selectedFile = e.target.files?.[0];
+		if (!selectedFile || !knowledgeId) return;
+
+		const formData = new FormData();
+		formData.append("file", selectedFile);
+		if (initialPrompt) {
+			formData.append("prompt", initialPrompt);
+		}
+
+		setIsReplacingFile(true);
+		try {
+			await replaceFileMutation.mutateAsync({
+				knowledgeId,
+				formData,
+			});
+		} catch {
+			// handled in mutation
+		} finally {
+			setIsReplacingFile(false);
+			if (e.target) e.target.value = "";
+		}
+	};
 
 	if (incomingSummary !== prevIncomingSummary) {
 		setPrevIncomingSummary(incomingSummary);
@@ -623,6 +672,19 @@ export function ChatPreview({
 	const [prevScopeId, setPrevScopeId] = useState(`${knowledgeId}-${sessionId}`);
 	const [chatTurns, setChatTurns] = useState<Message[]>([]);
 	const [initialSnapshotMap, setInitialSnapshotMap] = useState<Record<string, string>>({});
+	const [streamedDocs, setStreamedDocs] = useState<Record<string, boolean>>({});
+	const prevStatusRef = useRef<string | undefined>(knowledgeStatus);
+
+	// Trigger smooth streaming typewriter animation when newly completed from PROCESSING -> PENDING
+	useEffect(() => {
+		if (prevStatusRef.current === "PROCESSING" && knowledgeStatus === "PENDING" && knowledgeId) {
+			const timer = setTimeout(() => {
+				setStreamedDocs((prev) => ({ ...prev, [knowledgeId]: true }));
+			}, 0);
+			return () => clearTimeout(timer);
+		}
+		prevStatusRef.current = knowledgeStatus;
+	}, [knowledgeStatus, knowledgeId]);
 
 	// Capture initial summary snapshot once per knowledgeId so Turn 0 is permanently immutable
 	useEffect(() => {
@@ -1474,27 +1536,27 @@ export function ChatPreview({
 
 		if (status === "confirmed") {
 			return (
-				<div className="mt-3 pt-3 border-t border-emerald-100 flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50/50 p-2.5 rounded-md">
+				<div className="mt-3 pt-3 border-t border-emerald-100 flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50/50 p-2.5 rounded-lg">
 					<RiCheckLine className="size-4 text-emerald-600 shrink-0" />
-					<span>Operasi telah berhasil dikonfirmasi dan diterapkan.</span>
+					<span>Operation successfully confirmed and applied.</span>
 				</div>
 			);
 		}
 
 		if (status === "cancelled") {
 			return (
-				<div className="mt-3 pt-3 border-t border-zinc-200 flex items-center gap-2 text-xs font-medium text-zinc-600 bg-zinc-50 p-2.5 rounded-md">
+				<div className="mt-3 pt-3 border-t border-zinc-200 flex items-center gap-2 text-xs font-medium text-zinc-600 bg-zinc-50 p-2.5 rounded-lg">
 					<RiCloseLine className="size-4 text-zinc-500 shrink-0" />
-					<span>Operasi telah dibatalkan.</span>
+					<span>Operation cancelled.</span>
 				</div>
 			);
 		}
 
 		return (
-			<div className="mt-3 pt-3 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-3 bg-zinc-50/80 p-3 rounded-md">
+			<div className="mt-3 pt-3 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-3 bg-zinc-50/80 p-3 rounded-lg shadow-none">
 				<div className="flex items-center gap-2 text-xs text-zinc-600">
-					<span className="font-semibold text-zinc-800">Tindakan Diperlukan:</span>
-					<span>Pilih konfirmasi untuk menerapkan perubahan</span>
+					<span className="font-semibold text-zinc-800">Action Required:</span>
+					<span>Confirm to apply proposed changes</span>
 				</div>
 				<div className="flex items-center gap-2">
 					<Button
@@ -1503,21 +1565,21 @@ export function ChatPreview({
 						variant="outline"
 						disabled={isPending || isProcessing}
 						onClick={() => handleCancelOperation(opId)}
-						className="text-xs h-8 px-3 border-zinc-300 hover:bg-zinc-100 text-zinc-700 font-medium"
+						className="text-xs h-8 px-3 border-zinc-300 hover:bg-zinc-100 text-zinc-700 font-medium rounded-lg shadow-none cursor-pointer"
 					>
 						{isPending ? (
 							<RiLoader4Line className="size-3.5 animate-spin mr-1.5" />
 						) : (
 							<RiCloseLine className="size-3.5 mr-1.5" />
 						)}
-						BATAL
+						Cancel
 					</Button>
 					<Button
 						type="button"
 						size="sm"
 						disabled={isPending || isProcessing}
 						onClick={() => handleConfirmOperation(opId)}
-						className={`text-xs h-8 px-3 font-semibold shadow-sm transition-all ${
+						className={`text-xs h-8 px-3 font-semibold rounded-lg shadow-none transition-all cursor-pointer ${
 							isDelete
 								? "bg-red-600 hover:bg-red-700 text-white focus:ring-red-500"
 								: "bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500"
@@ -1528,7 +1590,7 @@ export function ChatPreview({
 						) : (
 							<RiCheckLine className="size-3.5 mr-1.5" />
 						)}
-						{isDelete ? "YA, HAPUS" : "YA, TERAPKAN"}
+						{isDelete ? "Confirm & Delete" : "Confirm & Apply"}
 					</Button>
 				</div>
 			</div>
@@ -1546,16 +1608,16 @@ export function ChatPreview({
 						{index === firstAssistantIndex && headerNode}
 						{index === firstAssistantIndex && renderConfidenceScore()}
 
-						{/* Primary Manual Edit Trigger Button matching header primary style */}
+						{/* Primary Manual Edit Trigger Button matching action bar style */}
 						<div className="flex items-center justify-end mb-3">
 							<Button
 								type="button"
-								size="default"
+								size="sm"
 								variant="default"
 								onClick={() => handleStartManualEdit(displayContent)}
-								className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-10 px-4 font-medium text-sm transition-colors cursor-pointer"
+								className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-8 px-3 font-medium text-xs transition-colors cursor-pointer"
 							>
-								<RiEdit2Line className="size-4" />
+								<RiEdit2Line className="size-3.5" />
 								Manual Edit
 							</Button>
 						</div>
@@ -1571,11 +1633,11 @@ export function ChatPreview({
 				<div className="flex flex-col gap-2.5 w-full">
 					{/* Header bar with Tabs and Cancel/Save Edit buttons */}
 					<div className="flex items-center justify-between border-b border-zinc-200 pb-2.5">
-						<div className="flex items-center gap-1 bg-zinc-100 p-1 rounded-lg border border-zinc-200">
+						<div className="flex items-center gap-1 bg-zinc-100 p-1 rounded-lg border border-zinc-200 shadow-none">
 							<button
 								type="button"
 								onClick={() => setActiveEditTab("preview")}
-								className={`inline-flex items-center gap-1.5 px-3.5 h-8 text-xs font-medium rounded-md transition-colors cursor-pointer shadow-none ${
+								className={`inline-flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-md transition-colors cursor-pointer shadow-none ${
 									activeEditTab === "preview"
 										? "bg-white text-zinc-900 border border-zinc-200/80 font-semibold"
 										: "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/60 border border-transparent"
@@ -1587,7 +1649,7 @@ export function ChatPreview({
 							<button
 								type="button"
 								onClick={() => setActiveEditTab("write")}
-								className={`inline-flex items-center gap-1.5 px-3.5 h-8 text-xs font-medium rounded-md transition-colors cursor-pointer shadow-none ${
+								className={`inline-flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-md transition-colors cursor-pointer shadow-none ${
 									activeEditTab === "write"
 										? "bg-white text-zinc-900 border border-zinc-200/80 font-semibold"
 										: "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/60 border border-transparent"
@@ -1601,21 +1663,21 @@ export function ChatPreview({
 						<div className="flex items-center gap-2">
 							<Button
 								type="button"
-								size="default"
+								size="sm"
 								variant="outline"
 								onClick={handleCancelManualEdit}
-								className="border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100 rounded-lg shadow-none h-9 px-4 font-semibold text-sm transition-colors cursor-pointer"
+								className="border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-100 rounded-lg shadow-none h-8 px-3 font-medium text-xs transition-colors cursor-pointer"
 							>
 								Cancel
 							</Button>
 							<Button
 								type="button"
-								size="default"
+								size="sm"
 								variant="default"
 								onClick={handleSaveManualEdit}
-								className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-9 px-4 font-semibold text-sm transition-colors cursor-pointer"
+								className="gap-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-none h-8 px-3 font-medium text-xs transition-colors cursor-pointer"
 							>
-								<RiCheckLine className="size-4" />
+								<RiCheckLine className="size-3.5" />
 								Save Edit
 							</Button>
 						</div>
@@ -1623,7 +1685,7 @@ export function ChatPreview({
 
 					{/* Industry Standard Markdown Formatting Toolbar */}
 					{activeEditTab === "write" && (
-						<div className="flex flex-wrap items-center gap-0.5 bg-zinc-50 border border-zinc-200 p-1 rounded-lg">
+						<div className="flex flex-wrap items-center gap-0.5 bg-zinc-50 border border-zinc-200 p-1 rounded-lg shadow-none">
 							{/* 1. Headings */}
 							<button
 								type="button"
@@ -1705,24 +1767,24 @@ export function ChatPreview({
 							>
 								<RiListCheck2 className="size-4" />
 							</button>
-
-							<div className="h-4 w-px bg-zinc-300 mx-1" />
-
-							{/* 4. Quote & Divider */}
 							<button
 								type="button"
-								title="Quote (> note)"
+								title="Quote Block (> text)"
 								onMouseDown={(e) => e.preventDefault()}
 								onClick={() => applyBlockFormatting("quote")}
 								className="size-7 rounded hover:bg-zinc-200/70 text-zinc-700 hover:text-zinc-950 flex items-center justify-center cursor-pointer transition-colors border border-transparent hover:border-zinc-300 shrink-0"
 							>
 								<RiDoubleQuotesL className="size-4" />
 							</button>
+
+							<div className="h-4 w-px bg-zinc-300 mx-1" />
+
+							{/* 4. Formatting Utilities */}
 							<button
 								type="button"
-								title="Horizontal Line (---)"
+								title="Horizontal Divider (---)"
 								onMouseDown={(e) => e.preventDefault()}
-								onClick={() => insertDivider()}
+								onClick={insertDivider}
 								className="size-7 rounded hover:bg-zinc-200/70 text-zinc-700 hover:text-zinc-950 flex items-center justify-center cursor-pointer transition-colors border border-transparent hover:border-zinc-300 shrink-0"
 							>
 								<RiSeparator className="size-4" />
@@ -1738,10 +1800,10 @@ export function ChatPreview({
 							onKeyDown={handleTextareaKeyDown}
 							rows={18}
 							placeholder="Type or edit document content manually here..."
-							className="w-full font-mono text-xs sm:text-sm text-zinc-900 leading-relaxed border border-gray-200 bg-white rounded-lg p-3.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-y min-h-80"
+							className="w-full font-mono text-xs sm:text-sm text-zinc-900 leading-relaxed border border-gray-200 bg-white rounded-lg p-3.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 resize-y min-h-80 shadow-none"
 						/>
 					) : (
-						<div className="min-h-80 p-3.5 bg-zinc-50/50 rounded-lg border border-zinc-200">
+						<div className="min-h-80 p-3.5 bg-zinc-50/50 rounded-lg border border-zinc-200 shadow-none">
 							<MarkdownContent content={localSummary || displayContent} />
 						</div>
 					)}
@@ -1766,7 +1828,15 @@ export function ChatPreview({
 			<>
 				{index === firstAssistantIndex && headerNode}
 				{index === firstAssistantIndex && renderConfidenceScore()}
-				<MarkdownContent content={msg.content} />
+				<StreamingMarkdown
+					content={msg.content}
+					animate={index === firstAssistantIndex && streamedDocs[knowledgeId || ""] === true}
+					onFinished={() => {
+						if (knowledgeId) {
+							setStreamedDocs((prev) => ({ ...prev, [knowledgeId]: false }));
+						}
+					}}
+				/>
 				{renderOperationActions(msg)}
 			</>
 		);
@@ -1796,10 +1866,10 @@ export function ChatPreview({
 							{isDetailLoading && (
 								<MessageScrollerItem>
 									<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
-										<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
+										<div className="bg-zinc-100 rounded-lg text-zinc-950 flex items-center justify-center p-2 mt-0.5 shrink-0 shadow-none">
 											<RiRobot2Line className="size-4 animate-pulse text-blue-500" />
 										</div>
-										<div className="bg-blue-50/70 text-zinc-950 p-3 rounded-md text-sm w-full min-w-0 max-w-full flex items-center gap-2 border border-blue-100/50">
+										<div className="bg-blue-50/70 text-zinc-950 p-3 rounded-lg text-sm w-full min-w-0 max-w-full flex items-center gap-2 border border-blue-100/50 shadow-none">
 											<RiLoader4Line className="size-4 animate-spin text-blue-600" />
 											<span className="text-zinc-700 font-medium">
 												Fetching document details and session...
@@ -1814,23 +1884,49 @@ export function ChatPreview({
 									<div className="flex flex-col w-full min-w-0 max-w-full gap-3">
 										{headerNode}
 										<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
-											<div className="bg-red-50 rounded-lg text-red-600 flex items-center justify-center p-2 mt-0.5 shrink-0 border border-red-200">
+											<div className="bg-red-50 rounded-lg text-red-600 flex items-center justify-center p-2.5 mt-0.5 shrink-0 border border-red-200 shadow-none">
 												<RiAlertLine className="size-5 text-red-600" />
 											</div>
-											<div className="bg-red-50/70 text-zinc-950 p-4 rounded-lg text-sm w-full min-w-0 max-w-full border border-red-200 flex flex-col gap-2">
+											<div className="bg-red-50/70 text-zinc-950 p-4 rounded-lg text-sm w-full min-w-0 max-w-full border border-red-200 flex flex-col gap-3 shadow-none">
 												<div className="flex items-center justify-between">
 													<span className="font-semibold text-red-700 text-sm">
-														Dokumen Gagal Diekstrak / Diproses
+														Document Processing Failed
 													</span>
 												</div>
-												<p className="text-xs text-zinc-700 leading-relaxed font-mono bg-white p-2.5 rounded border border-red-200">
+												<p className="text-xs text-zinc-700 leading-relaxed font-mono bg-white p-3 rounded-lg border border-red-200/80 shadow-none">
 													{failureErrorMsg}
 												</p>
-												<p className="text-[11px] text-zinc-500">
-													Silakan periksa apakah file memiliki proteksi kata sandi, rusak, atau coba
-													upload kembali dokumen dalam format standar (PDF, DOCX, XLSX, TXT,
-													Gambar).
+												<p className="text-[11px] text-zinc-600 leading-relaxed">
+													Please check if the file is password-protected, corrupted, or re-upload the document in a standard format (PDF, DOCX, XLSX, TXT, Images).
 												</p>
+
+												<div className="flex flex-wrap items-center gap-2 pt-1">
+													<input
+														ref={retryFileInputRef}
+														type="file"
+														className="hidden"
+														accept=".docx,.pptx,.xlsx,.pdf,.txt,.csv,.png,.jpg,.jpeg,.webp"
+														onChange={handleRetryFileSelected}
+													/>
+													<Button
+														type="button"
+														onClick={() => retryFileInputRef.current?.click()}
+														disabled={isReplacingFile || replaceFileMutation.isPending}
+														className="gap-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-3.5 h-8 text-xs font-medium cursor-pointer shadow-none"
+													>
+														{isReplacingFile || replaceFileMutation.isPending ? (
+															<>
+																<RiLoader4Line className="size-4 animate-spin" />
+																Uploading Replacement...
+															</>
+														) : (
+															<>
+																<RiUploadCloud2Line className="size-4" />
+																Replace File & Retry
+															</>
+														)}
+													</Button>
+												</div>
 											</div>
 										</div>
 									</div>
@@ -1844,7 +1940,7 @@ export function ChatPreview({
 									<MessageScrollerItem>
 										{mode === "general" ? (
 											<div className="flex flex-col items-center justify-center text-center py-16 px-4 max-w-lg mx-auto space-y-3">
-												<div className="size-12 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center">
+												<div className="size-12 rounded-lg bg-blue-50 text-blue-500 flex items-center justify-center">
 													<RiRobot2Line className="size-6" />
 												</div>
 												<h2 className="text-base font-semibold text-zinc-950">
@@ -1893,56 +1989,16 @@ export function ChatPreview({
 																	<AttachmentTitle className="text-[13px] font-medium text-zinc-950 truncate block">
 																		{fileName}
 																	</AttachmentTitle>
-																	<AttachmentDescription className="text-[11px] text-zinc-500 uppercase">
+																	<span className="text-[11px] text-zinc-500 uppercase font-medium">
 																		DOCUMENT
-																	</AttachmentDescription>
+																	</span>
 																</AttachmentContent>
 															</Attachment>
 														</div>
 													);
 												})()}
 
-										<div className="flex items-start gap-3 w-full min-w-0 max-w-full">
-											<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-												<RiRobot2Line className="size-4" />
-											</div>
-											<div className="bg-blue-50/80 text-zinc-950 p-4 rounded-md text-sm w-full min-w-0 max-w-full border border-blue-100 flex flex-col gap-3 overflow-hidden">
-												{headerNode}
-												<div className="flex items-center gap-2">
-													<span className="relative flex h-3 w-3">
-														<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-														<span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
-													</span>
-													<span className="font-semibold text-blue-700">Processing Document</span>
-												</div>
-												<p className="text-zinc-600 text-xs leading-relaxed">
-													Document processing progress:
-												</p>
-												<div className="flex flex-col gap-2.5 bg-white/90 rounded border border-blue-100 p-3.5 text-xs text-zinc-700">
-													<div className="flex items-center gap-2.5 text-emerald-600 font-medium">
-														<RiCheckLine className="size-4 shrink-0" />
-														<span>1. Extracting Content</span>
-													</div>
-													<div className="flex items-center gap-2.5 text-emerald-600 font-medium">
-														<RiCheckLine className="size-4 shrink-0" />
-														<span>2. Structuring Information</span>
-													</div>
-													<div className="flex items-center gap-2.5 text-blue-600 font-semibold animate-pulse">
-														<RiLoader4Line className="size-4 animate-spin shrink-0" />
-														<span>3. Building Search Index...</span>
-													</div>
-													<div className="flex items-center gap-2.5 text-zinc-600">
-														<span className="size-4 flex items-center justify-center text-[10px]">
-															○
-														</span>
-														<span>4. Generating Summary</span>
-													</div>
-												</div>
-												<span className="text-[11px] text-zinc-500 mt-0.5">
-													You can navigate away anytime. Processing continues in the background.
-												</span>
-											</div>
-										</div>
+										<ProcessingPipelineCard headerNode={headerNode} fileName={fileName} />
 									</div>
 								</MessageScrollerItem>
 							)}
@@ -2124,10 +2180,12 @@ export function ChatPreview({
 								<MessageScrollerItem scrollAnchor>
 									<div className="flex items-start gap-3 w-full">
 										<div className="bg-zinc-100 rounded text-zinc-950 flex items-center justify-center p-1.5 mt-0.5 shrink-0">
-											<RiRobot2Line className="size-4 animate-bounce text-blue-500" />
+											<RiRobot2Line className="size-4 text-blue-600" />
 										</div>
-										<div className="text-sm text-zinc-500 pt-1.5 italic animate-pulse">
-											Thinking...
+										<div className="bg-transparent border border-zinc-200 rounded-md px-3.5 py-3 text-sm min-w-0 flex items-center gap-1.5">
+											<span className="size-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.3s]" />
+											<span className="size-1.5 rounded-full bg-blue-600 animate-bounce [animation-delay:-0.15s]" />
+											<span className="size-1.5 rounded-full bg-blue-600 animate-bounce" />
 										</div>
 									</div>
 								</MessageScrollerItem>

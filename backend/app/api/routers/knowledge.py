@@ -810,8 +810,12 @@ async def get_knowledge(
                 if isinstance(data, dict):
                     merged_meta = dict(knowledge.metadata_) if isinstance(knowledge.metadata_, dict) else {}
                     merged_meta.update(data)
+                    # If document is actively processing, keep active history empty so no stale bubbles render
+                    if knowledge.status == KnowledgeStatus.PROCESSING:
+                        merged_meta["history"] = []
+                        merged_meta["chat_history"] = []
                     # If approved, ensure active history is clean while staging_history and edit_history are retained
-                    if knowledge.status == KnowledgeStatus.APPROVED:
+                    elif knowledge.status == KnowledgeStatus.APPROVED:
                         merged_meta["history"] = []
                         merged_meta["chat_history"] = []
                         db_edit_hist = knowledge.metadata_.get("edit_history") if isinstance(knowledge.metadata_, dict) else []
@@ -1447,7 +1451,7 @@ async def upload_knowledge_file(
                     detail=f"File type '{target_file.content_type}' not allowed for file '{target_file.filename}'. Allowed types: PDF, Word, Excel, PowerPoint, Text, CSV, and Images."
                 )
         
-    # Check monthly ingestion quota (soft warning / notice model)
+    # Check monthly ingestion quota (soft warning / notice model for Staff/Admin)
     allowed, quota_info = await check_ingestion_quota(db)
     if quota_info.get("exceeded"):
         logger.warning(f"Monthly knowledge ingestion threshold exceeded ({quota_info['tokens_used']:,} / {quota_info['token_limit']:,} tokens). Ingestion proceeding with soft warning.")
@@ -1476,6 +1480,7 @@ async def upload_knowledge_file(
 
     if isinstance(ingest_res, dict):
         docs = ingest_res.get("documents", [])
+        batch_id = ingest_res.get("batch_id")
         for doc in docs:
             k_id = doc.get("knowledge_id")
             if k_id:
@@ -1486,16 +1491,30 @@ async def upload_knowledge_file(
                     k_obj = res.scalar_one_or_none()
                     if k_obj:
                         modified = False
+                        if k_obj.metadata_ is None:
+                            k_obj.metadata_ = {}
+                        # Clear stale chat history and prior feedback from re-uploaded or replaced documents
+                        k_obj.metadata_["history"] = []
+                        k_obj.metadata_["chat_history"] = []
+                        k_obj.metadata_["staging_history"] = []
+                        k_obj.metadata_["edit_history"] = []
+                        k_obj.metadata_.pop("feedback", None)
+                        k_obj.metadata_.pop("batch_summary", None)
+                        k_obj.metadata_.pop("initial_summary", None)
+
+                        if batch_id:
+                            k_obj.metadata_["batch_id"] = batch_id
+                            modified = True
                         if project_id:
                             k_obj.project_id = project_id
                             modified = True
                         if prompt and str(prompt).strip():
-                            if k_obj.metadata_ is None:
-                                k_obj.metadata_ = {}
                             k_obj.metadata_["initial_prompt"] = str(prompt).strip()
-                            from sqlalchemy.orm.attributes import flag_modified
-                            flag_modified(k_obj, "metadata_")
-                            modified = True
+                        else:
+                            k_obj.metadata_.pop("initial_prompt", None)
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(k_obj, "metadata_")
+                        modified = True
                         if modified:
                             await db.commit()
                 except Exception as up_err:
@@ -1520,7 +1539,7 @@ async def ingest_knowledge_text_endpoint(
     if not payload.text_content or not payload.text_content.strip():
         raise HTTPException(status_code=400, detail="Text content cannot be empty.")
 
-    # 1. Check monthly ingestion quota
+    # 1. Check monthly ingestion quota (soft warning / notice model for Staff/Admin)
     allowed, quota_info = await check_ingestion_quota(db)
     if quota_info.get("exceeded"):
         logger.warning(f"Monthly knowledge ingestion threshold exceeded ({quota_info['tokens_used']:,} / {quota_info['token_limit']:,} tokens). Ingestion proceeding with soft warning.")
@@ -1588,6 +1607,67 @@ async def ingest_knowledge_text_endpoint(
         original_s3_key=ingest_res.get("original_s3_key"),
         message=ingest_res.get("message", "Document text ingestion initiated.")
     )
+
+@router.post("/{knowledge_id}/replace-file", status_code=status.HTTP_202_ACCEPTED)
+async def replace_knowledge_file_endpoint(
+    knowledge_id: uuid.UUID,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    prompt: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(RequireAccess("knowledge:write")),
+    llm: BaseLLMAdapter = Depends(get_llm)
+):
+    """
+    Replace the file attachment of a specific Knowledge Document (e.g. after a parsing failure or rejected draft)
+    and re-trigger the background parsing and AI generation pipeline in-place.
+    """
+    stmt = select(Knowledge).where(Knowledge.id == knowledge_id, Knowledge.deleted_at.is_(None))
+    res = await db.execute(stmt)
+    k_entry = res.scalar_one_or_none()
+    if not k_entry:
+        raise HTTPException(status_code=404, detail="Knowledge document not found.")
+
+    raw_ctype = (file.content_type or "").lower().strip()
+    if raw_ctype not in ALLOWED_MIME_TYPES:
+        guessed_type, _ = mimetypes.guess_type(file.filename or "")
+        if not guessed_type or guessed_type.lower().strip() not in ALLOWED_MIME_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type '{file.content_type}' not allowed for file '{file.filename}'. Allowed types: PDF, Word, Excel, PowerPoint, Text, CSV, and Images."
+            )
+
+    pipeline = get_ingestion_pipeline(request)
+    
+    # Update DB record status back to PROCESSING and reset previous error
+    k_entry.status = KnowledgeStatus.PROCESSING
+    k_entry.file_name = file.filename
+    if k_entry.metadata_ is None:
+        k_entry.metadata_ = {}
+    k_entry.metadata_["error"] = None
+    k_entry.metadata_["status"] = "PROCESSING"
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(k_entry, "metadata_")
+    await db.commit()
+
+    # Trigger ingest_document with replace_existing=True
+    effective_prompt = prompt or (k_entry.metadata_.get("initial_prompt") if isinstance(k_entry.metadata_, dict) else None)
+    ingest_res = await ingest_document(
+        background_tasks=background_tasks,
+        file=[file],
+        prompt=effective_prompt,
+        replace_existing=True,
+        pipeline=pipeline,
+        llm=llm
+    )
+
+    return {
+        "status": "success",
+        "knowledge_id": str(knowledge_id),
+        "file_name": file.filename,
+        "message": "File replacement initiated. Document is now re-processing in background."
+    }
 
 @router.put("/{knowledge_id}/status", response_model=KnowledgeResponse)
 @router.patch("/{knowledge_id}/status", response_model=KnowledgeResponse)
