@@ -42,6 +42,7 @@ from app.rag.deps import (
 )
 from app.rag.services.interfaces import BaseLLMAdapter, BaseVectorStoreAdapter
 from app.rag.services.general_knowledge_service import GeneralKnowledgeService
+from app.services.storage import expand_image_urls_in_markdown
 
 
 def safe_json_loads(json_str: str) -> dict:
@@ -5501,8 +5502,12 @@ async def query_general_endpoint(
         # Post-process: Ensure image tag is always positioned RIGHT BELOW the item title line (above bullet points)
         clean_answer = re.sub(r'(\*\*[^\*\n]+\*\*)\n+((?:[ \t]*-\s*\*\*[^\n]+\n+)+)\n*(!\[.*?\]\([^\)]+\))', r'\1\n\n\3\n\n\2', clean_answer)
 
+        # Ensure all image URLs are expanded to full absolute URLs using S3_PUBLIC_URL
+        clean_answer = expand_image_urls_in_markdown(clean_answer)
+
         # Normalize excessive consecutive newlines (max 2)
         clean_answer = re.sub(r'\n{3,}', '\n\n', clean_answer).strip()
+
 
         # Strip redundant trailing disclaimer if answer already contains valid factual content
         disclaimer_phrase = "Untuk saat ini informasi tersebut belum tersedia."

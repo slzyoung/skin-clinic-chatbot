@@ -2,7 +2,24 @@
 
 All notable changes to the Arya Noble AI Chatbot Backend are documented in this file.
 
+## [1.3.5] - 2026-09-10
+
+### Backend Dynamic Image URL Expansion for CIS Floating Chat & Frontend
+- **Storage Service URL Expansion (`app/services/storage.py`)**:
+  - Enhanced `_format_browser_url()` to intelligently normalize raw S3 keys (`images/...`), relative proxy paths (`/api/storage/images/...`), and already absolute external URLs against the configured `S3_PUBLIC_URL`.
+  - Implemented `expand_image_urls_in_markdown()` to scan and expand markdown image tags `![alt](url)` to absolute URLs dynamically.
+- **RAG Subsystem Dynamic Normalization (`app/rag/services/rag_generator.py`, `app/rag/router.py`)**:
+  - Enhanced `build_prompt()` to dynamically expand relative image URLs inside retrieved context chunks prior to LLM synthesis, enabling the model to stream absolute URLs in real time.
+  - Enhanced `_normalize_image_captions_in_text()` and `_sanitize_answer()` to rewrite all output markdown image URLs using `expand_image_urls_in_markdown()`.
+  - Enhanced SSE streaming in `generate_answer_stream()` to dynamically normalize `results` context metadata before emitting initial SSE payload.
+  - Updated `run_chat_pipeline()` in `app/rag/router.py` to ensure final chat messages always contain absolute URLs.
+- **Cross-Origin & Multi-Tenant Compatibility**:
+  - Enabled external CIS floating chat (`https://cis.erha.co.id`) to embed images directly from standard Markdown responses without 404 domain collisions or authentication requirements.
+
+---
+
 ## [1.3.4] - 2026-09-10
+
 
 ### BM25 Sparse Search Metadata Visibility Filtering Fix
 - **BM25 Whitelist Enforcement (`app/rag/services/rag_retriever.py`)**:

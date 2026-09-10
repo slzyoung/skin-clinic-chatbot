@@ -33,6 +33,9 @@ def _resolve_mime_type(filename: str, default: str = "application/octet-stream")
     return guessed or default
 
 
+import urllib.parse
+
+
 @router.get("/{s3_key:path}", summary="Stream storage asset or proxy image")
 async def get_storage_asset(s3_key: str):
     """
@@ -40,21 +43,19 @@ async def get_storage_asset(s3_key: str):
     Streams images and documents directly from MinIO or fallback local storage.
     Enables client browsers to access assets in production/CIS with minimal memory footprint.
     """
-    clean_key = s3_key.lstrip("/")
+    raw_key = urllib.parse.unquote(s3_key).strip()
+    clean_key = raw_key.lstrip("/")
+    if clean_key.startswith("api/storage/"):
+        clean_key = clean_key[len("api/storage/"):]
+    elif clean_key.startswith("storage/"):
+        clean_key = clean_key[len("storage/"):]
+    clean_key = clean_key.lstrip("/")
+
     fname = os.path.basename(clean_key)
     media_type = _resolve_mime_type(fname)
 
-    # 1. Direct Presigned URL Redirect for browser offloading (Stateless Enterprise Pattern)
-    try:
-        from app.services.storage import get_presigned_url
-        presigned_url = get_presigned_url(clean_key, expires=3600)
-        if presigned_url and not presigned_url.startswith("/api/storage"):
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url=presigned_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-    except Exception as e:
-        logger.debug(f"Presigned redirect fallback: {e}")
 
-    # 2. Try streaming from MinIO Object Storage
+    # 1. Try streaming directly from MinIO Object Storage
     try:
         stream_gen, ctype, content_length = get_s3_object_stream(clean_key)
         if stream_gen:
@@ -73,6 +74,7 @@ async def get_storage_asset(s3_key: str):
         logger.warning(f"Storage proxy S3 stream error for '{clean_key}': {err}")
 
     # 2. Direct fallback: Check local disk storage folders
+
     clean_norm = os.path.normpath(clean_key)
     search_folders = [
         "data/temp",

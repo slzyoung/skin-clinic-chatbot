@@ -29,6 +29,8 @@ from app.rag.services.intent import (
 )
 from app.rag.services.guardrails import GuardrailsPipeline
 from app.rag.config import settings
+from app.services.storage import _format_browser_url, expand_image_urls_in_markdown
+
 
 
 # --- LLM Adapter Implementations ---
@@ -537,7 +539,7 @@ def _normalize_image_captions_in_text(text: str, results: List[Dict[str, Any]]) 
         urls.extend(inline_imgs)
 
         for u in set(urls):
-            if not (u.startswith("http") or u.startswith("/api/storage/") or u.startswith("/storage/")):
+            if not (u.startswith("http") or u.startswith("/api/storage/") or u.startswith("/storage/") or u.startswith("images/")):
                 continue
             img_fn = os.path.basename(u).lower()
             item_name = _extract_specific_treatment_or_product_name(meta, chunk_text, "")
@@ -547,15 +549,20 @@ def _normalize_image_captions_in_text(text: str, results: List[Dict[str, Any]]) 
                 label = f"{img_type} - {item_name}"
             else:
                 label = img_type
+            expanded = _format_browser_url(raw_url=u, s3_key=u)
             url_to_label[u] = label
+            url_to_label[expanded] = label
 
-    # Replace markdown image alt texts in text
+    # Replace markdown image alt texts and expand URLs in text
     def _replace_alt(m):
         raw_alt = m.group(1)
-        img_url = m.group(2)
+        img_url = m.group(2).strip()
+        expanded_url = _format_browser_url(raw_url=img_url, s3_key=img_url)
         
         if img_url in url_to_label:
-            return f"![{url_to_label[img_url]}]({img_url})"
+            return f"![{url_to_label[img_url]}]({expanded_url})"
+        if expanded_url in url_to_label:
+            return f"![{url_to_label[expanded_url]}]({expanded_url})"
 
         img_fn = os.path.basename(img_url).lower()
         img_type = _determine_image_type({}, text, img_fn, "", url=img_url)
@@ -564,9 +571,10 @@ def _normalize_image_captions_in_text(text: str, results: List[Dict[str, Any]]) 
             label = f"{img_type} - {item_name}"
         else:
             label = img_type
-        return f"![{label}]({img_url})"
+        return f"![{label}]({expanded_url})"
 
     return re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', _replace_alt, text)
+
 
 
 def _determine_image_type(
@@ -773,6 +781,9 @@ class GenerationPipeline:
         doctor_name: Optional[str] = None
     ) -> str:
         """Compiles system prompt, retrieved context, intent instructions, history, and query into a grounded prompt."""
+        # Dynamically normalize any relative image URLs in retrieved context to absolute URLs
+        context = expand_image_urls_in_markdown(context)
+
         history_str = ""
         if history:
             for msg in history:
@@ -981,9 +992,10 @@ class GenerationPipeline:
         elif asks_for_before and asks_for_after and not asks_for_treatment_device:
             sanitized = re.sub(r'!\[Foto Treatment[^\]]*\]\([^)]+\)\s*', '', sanitized)
 
-        # Standardize all image captions across the entire synthesized text
+        # Standardize all image captions and expand URLs across the entire synthesized text
         sanitized = _normalize_image_captions_in_text(sanitized, results)
-        return True, sanitized
+        return True, expand_image_urls_in_markdown(sanitized)
+
 
 
     def generate_answer(
@@ -1287,8 +1299,27 @@ class GenerationPipeline:
 
         retrieval_ms = int((_time.time() - t0_retrieval) * 1000)
 
+        # Normalize context results for SSE JSON chunk
+        normalized_results = []
+        for r in results:
+            r_copy = dict(r)
+            if "text" in r_copy and isinstance(r_copy["text"], str):
+                r_copy["text"] = expand_image_urls_in_markdown(r_copy["text"])
+            if "content" in r_copy and isinstance(r_copy["content"], str):
+                r_copy["content"] = expand_image_urls_in_markdown(r_copy["content"])
+            if "metadata" in r_copy and isinstance(r_copy["metadata"], dict):
+                m_copy = dict(r_copy["metadata"])
+                if m_copy.get("image_url"):
+                    m_copy["image_url"] = _format_browser_url(raw_url=str(m_copy["image_url"]), s3_key=str(m_copy["image_url"]))
+                if m_copy.get("image"):
+                    m_copy["image"] = _format_browser_url(raw_url=str(m_copy["image"]), s3_key=str(m_copy["image"]))
+                if m_copy.get("image_urls") and isinstance(m_copy["image_urls"], list):
+                    m_copy["image_urls"] = [_format_browser_url(raw_url=str(u), s3_key=str(u)) for u in m_copy["image_urls"]]
+                r_copy["metadata"] = m_copy
+            normalized_results.append(r_copy)
+
         # First yield context SSE JSON chunk
-        yield json.dumps({"type": "context", "results": results}) + "\n"
+        yield json.dumps({"type": "context", "results": normalized_results}) + "\n"
 
         is_context_empty = (
             not results 

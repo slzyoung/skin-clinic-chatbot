@@ -259,25 +259,62 @@ def _generate_presigned_url(bucket_name: str, s3_key: str, expires: int = 604800
 
 def _format_browser_url(raw_url: str = None, s3_key: str = "") -> str:
     """
-    Ensures image URL is accessible by the doctor's browser across all network environments:
+    Ensures image URL is accessible by the doctor's browser and external CIS clients across all network environments:
     1. If S3_PUBLIC_URL is configured (e.g. 'https://domain.com/api/storage' or CDN), use that.
     2. If raw_url is a valid external HTTP(S) URL (not internal minio:9000 or localhost:9000), use that.
     3. Otherwise, returns universal relative backend proxy path '/api/storage/{s3_key}' streamed via FastAPI.
     """
-    clean_key = (s3_key or "").lstrip("/")
-    if hasattr(settings, "S3_PUBLIC_URL") and settings.S3_PUBLIC_URL and str(settings.S3_PUBLIC_URL).strip():
-        base = str(settings.S3_PUBLIC_URL).rstrip("/")
+    input_str = (s3_key or raw_url or "").strip()
+    if not input_str:
+        return ""
+
+    # If already a valid absolute external URL (not minio:9000 / internal localhost:9000)
+    if input_str.startswith("http://") or input_str.startswith("https://"):
+        if not any(internal_host in input_str for internal_host in ["minio:9000", "localhost:9000", "127.0.0.1:9000"]):
+            return input_str
+        # Strip internal host to re-bind to S3_PUBLIC_URL or /api/storage
+        input_str = re.sub(r'^https?://[^/]+/(?:images/|knowledge-documents/|api/storage/)?', '', input_str)
+
+    # Clean leading slashes and relative proxy prefixes
+    clean_key = input_str.lstrip("/")
+    if clean_key.startswith("api/storage/"):
+        clean_key = clean_key[len("api/storage/"):]
+    elif clean_key.startswith("storage/"):
+        clean_key = clean_key[len("storage/"):]
+    clean_key = clean_key.lstrip("/")
+
+    s3_pub = getattr(settings, "S3_PUBLIC_URL", None)
+    if s3_pub and str(s3_pub).strip():
+        base = str(s3_pub).strip()
+        if base.startswith("S3_PUBLIC_URL="):
+            base = base[len("S3_PUBLIC_URL="):].strip()
+        base = base.strip("\"'").rstrip("/")
         if clean_key:
             return f"{base}/{clean_key}"
 
-    if raw_url and isinstance(raw_url, str) and raw_url.startswith("http"):
-        if not any(internal_host in raw_url for internal_host in ["minio:9000", "localhost:9000", "127.0.0.1:9000"]):
-            return raw_url
-
-    # Universal proxy path served by FastAPI backend (supports doctor interface across all IP addresses)
+    # Universal proxy path served by FastAPI backend
     if clean_key:
         return f"/api/storage/{clean_key}"
     return raw_url or ""
+
+
+
+def expand_image_urls_in_markdown(text: str) -> str:
+    """
+    Scans markdown content and dynamically expands any relative or local image URLs (![alt](url))
+    into full absolute URLs using the configured S3_PUBLIC_URL.
+    """
+    if not text or not isinstance(text, str):
+        return text or ""
+
+    def _replace_md_img(match):
+        alt = match.group(1)
+        raw_url = match.group(2).strip()
+        expanded_url = _format_browser_url(raw_url=raw_url, s3_key=raw_url)
+        return f"![{alt}]({expanded_url})"
+
+    return re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', _replace_md_img, text)
+
 
 
 
@@ -294,27 +331,34 @@ def get_s3_object_stream(s3_key: str, chunk_size: int = 65536) -> tuple:
         client = _get_client()
 
     if client:
+        candidates = [clean_key]
+        if clean_key.startswith("images/"):
+            candidates.append(clean_key[len("images/"):])
+        else:
+            candidates.append(f"images/{clean_key}")
+
         for bucket in [_images_bucket(), _docs_bucket(), _staging_bucket(), _approved_bucket()]:
-            try:
-                resp = client.get_object(Bucket=bucket, Key=clean_key)
-                body = resp.get("Body")
-                ctype = resp.get("ContentType", "image/png")
-                content_length = resp.get("ContentLength")
+            for cand in candidates:
+                try:
+                    resp = client.get_object(Bucket=bucket, Key=cand)
+                    body = resp.get("Body")
+                    ctype = resp.get("ContentType", "image/png")
+                    content_length = resp.get("ContentLength")
 
-                def _stream_iterator():
-                    try:
-                        for chunk in body.iter_chunks(chunk_size=chunk_size):
-                            yield chunk
-                    finally:
-                        body.close()
+                    def _stream_iterator():
+                        try:
+                            for chunk in body.iter_chunks(chunk_size=chunk_size):
+                                yield chunk
+                        finally:
+                            body.close()
 
-                return _stream_iterator(), ctype, content_length
-            except Exception as e:
-                err_str = str(e)
-                if "NoSuchKey" in err_str or "Not Found" in err_str or "404" in err_str:
-                    logger.debug(f"S3 object '{clean_key}' not found in bucket '{bucket}': {e}")
-                else:
-                    logger.warning(f"Failed to fetch S3 object '{clean_key}' from bucket '{bucket}': {e}")
+                    return _stream_iterator(), ctype, content_length
+                except Exception as e:
+                    err_str = str(e)
+                    if "NoSuchKey" in err_str or "Not Found" in err_str or "404" in err_str:
+                        logger.debug(f"S3 object '{cand}' not found in bucket '{bucket}': {e}")
+                    else:
+                        logger.warning(f"Failed to fetch S3 object '{cand}' from bucket '{bucket}': {e}")
 
     return None, None, None
 
@@ -331,23 +375,31 @@ def get_s3_object_data(s3_key: str) -> tuple:
         client = _get_client()
 
     if client:
+        candidates = [clean_key]
+        if clean_key.startswith("images/"):
+            candidates.append(clean_key[len("images/"):])
+        else:
+            candidates.append(f"images/{clean_key}")
+
         for bucket in [_images_bucket(), _docs_bucket(), _staging_bucket(), _approved_bucket()]:
-            try:
-                resp = client.get_object(Bucket=bucket, Key=clean_key)
-                body = resp["Body"].read()
-                ctype = resp.get("ContentType", "image/png")
-                return body, ctype
-            except Exception as e:
-                err_str = str(e)
-                if "NoSuchKey" in err_str or "Not Found" in err_str or "404" in err_str:
-                    logger.debug(f"S3 object '{clean_key}' not found in bucket '{bucket}': {e}")
-                else:
-                    logger.warning(f"Failed to fetch S3 object '{clean_key}' from bucket '{bucket}': {e}")
+            for cand in candidates:
+                try:
+                    resp = client.get_object(Bucket=bucket, Key=cand)
+                    body = resp["Body"].read()
+                    ctype = resp.get("ContentType", "image/png")
+                    return body, ctype
+                except Exception as e:
+                    err_str = str(e)
+                    if "NoSuchKey" in err_str or "Not Found" in err_str or "404" in err_str:
+                        logger.debug(f"S3 object '{cand}' not found in bucket '{bucket}': {e}")
+                    else:
+                        logger.warning(f"Failed to fetch S3 object '{cand}' from bucket '{bucket}': {e}")
 
     # Fallback: check local disk storage folders
     fname = os.path.basename(clean_key)
     clean_norm = os.path.normpath(clean_key)
     for folder in ["data/temp", "data/images", "data/uploads", "data/documents", "data/storage"]:
+
         for candidate in [clean_key, clean_norm, fname]:
             local_path = os.path.normpath(os.path.join(folder, candidate))
             if os.path.exists(local_path) and os.path.isfile(local_path):
