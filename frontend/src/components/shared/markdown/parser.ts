@@ -42,7 +42,7 @@ export function parseMarkdownSegments(markdown: string): Segment[] {
 
 	// Pattern 9: Action / Mutation Confirmation Card
 	const actionConfirmationPattern =
-		/(?:(?:📝\s*)?\*\*Pratinjau\s+Perubahan\*\*|(?:⚠️\s*)?\*\*Konfirmasi\s+Penghapusan\*\*|###\s*(?:Pratinjau\s+Perubahan|Konfirmasi\s+Penghapusan))\s*\n+((?:[ \t]*[-*]\s*\*\*[^*]+\*\*\s*[:–-][^\n]+(?:\n|$))+)(?:[ \t]*\n+)?(?:```(?:json)?\s*(\{[\s\S]*?"action"\s*:[\s\S]*?\})\s*```)?/gi;
+		/(?:(?:\*\*(?:Pratinjau\s+Perubahan(?:\s+Data)?|Konfirmasi\s+Penghapusan|Preview\s+Knowledge\s+Changes|Knowledge\s+Base\s+Update\s+Preview|Confirm\s+Document\s+Deletion)\*\*)|###\s*(?:Pratinjau\s+Perubahan(?:\s+Data)?|Konfirmasi\s+Penghapusan|Preview\s+Knowledge\s+Changes|Knowledge\s+Base\s+Update\s+Preview|Confirm\s+Document\s+Deletion))\s*\n+((?:[ \t]*[-*]\s*\*\*[^*]+\*\*\s*[:–-][^\n]+(?:\n|$))+)(?:[ \t]*\n+)?(?:```(?:json)?\s*(\{[\s\S]*?"action"\s*:[\s\S]*?\})\s*```)?/gi;
 
 	interface MatchRange {
 		start: number;
@@ -458,7 +458,7 @@ export function parseMarkdownSegments(markdown: string): Segment[] {
 					knowledgeId,
 					fieldName,
 					newValue,
-					confirmationPrompt: "Menunggu konfirmasi: Balas 'YA' atau 'SETUJU' untuk menerapkan, atau 'BATAL'.",
+					confirmationPrompt: "Awaiting confirmation: Click the action button below to confirm or cancel this operation.",
 				},
 			},
 		});

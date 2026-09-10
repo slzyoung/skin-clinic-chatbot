@@ -1,4 +1,3 @@
-import { knowledgeKeys } from "@/app/dashboard/knowledge/api/keys";
 import {
 	Attachment,
 	AttachmentAction,
@@ -22,9 +21,12 @@ import {
 	RiAlertLine,
 	RiAttachment2,
 	RiBold,
+	RiCheckboxCircleFill,
 	RiCheckLine,
+	RiCloseCircleLine,
 	RiCloseLine,
 	RiCornerDownLeftLine,
+	RiDeleteBin7Line,
 	RiDoubleQuotesL,
 	RiEdit2Line,
 	RiEyeLine,
@@ -62,6 +64,7 @@ import {
 	useGeneralChatSession,
 	useSendGeneralChatMessage,
 	useReplaceKnowledgeFile,
+	invalidateAllKnowledgeQueries,
 } from "@/app/dashboard/knowledge/hooks/use-knowledge";
 import { MarkdownContent } from "@/components/shared/markdown-content";
 import { StreamingMarkdown } from "@/components/shared/streaming-markdown";
@@ -290,6 +293,7 @@ export function ChatPreview({
 	const retryFileInputRef = useRef<HTMLInputElement>(null);
 	const [isReplacingFile, setIsReplacingFile] = useState(false);
 	const [activeOpId, setActiveOpId] = useState<string | null>(null);
+	const [activeOpAction, setActiveOpAction] = useState<"confirm" | "cancel" | null>(null);
 	const [completedOps, setCompletedOps] = useState<Record<string, "confirmed" | "cancelled">>({});
 	const [activeEditTab, setActiveEditTab] = useState<"write" | "preview">("write");
 	const [isManualEditing, setIsManualEditing] = useState(false);
@@ -1384,14 +1388,10 @@ export function ChatPreview({
 						},
 					]);
 					if (data.action === "edit_applied" || data.action === "delete_applied") {
-						queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
-						queryClient.invalidateQueries({ queryKey: ["projects"] });
-						queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
-						if (data.target_knowledge_id) {
-							queryClient.invalidateQueries({
-								queryKey: knowledgeKeys.detail(data.target_knowledge_id),
-							});
-						}
+						invalidateAllKnowledgeQueries(queryClient, {
+							knowledgeId: data.target_knowledge_id,
+							knowledgeIds: data.affected_knowledge_ids,
+						});
 					}
 				}
 			} else if (
@@ -1441,10 +1441,7 @@ export function ChatPreview({
 				}
 
 				if (knowledgeId) {
-					queryClient.invalidateQueries({ queryKey: knowledgeKeys.detail(knowledgeId) });
-					queryClient.invalidateQueries({ queryKey: ["knowledge-batch"] });
-					queryClient.invalidateQueries({ queryKey: knowledgeKeys.all });
-					queryClient.invalidateQueries({ queryKey: ["projects"] });
+					invalidateAllKnowledgeQueries(queryClient, { knowledgeId });
 				}
 			} else {
 				const response = await api.post(
@@ -1482,6 +1479,7 @@ export function ChatPreview({
 
 	const handleConfirmOperation = async (opId: string) => {
 		setActiveOpId(opId);
+		setActiveOpAction("confirm");
 		try {
 			const res = await confirmOp.mutateAsync({
 				operationId: opId,
@@ -1493,18 +1491,20 @@ export function ChatPreview({
 					...prev,
 					{
 						role: "assistant",
-						content: res.action.includes("delete") ? `🗑️ ${res.message}` : `✅ ${res.message}`,
+						content: res.message,
 						action: res.action,
 					},
 				]);
 			}
 		} finally {
 			setActiveOpId(null);
+			setActiveOpAction(null);
 		}
 	};
 
 	const handleCancelOperation = async (opId: string) => {
 		setActiveOpId(opId);
+		setActiveOpAction("cancel");
 		try {
 			const res = await cancelOp.mutateAsync({
 				operationId: opId,
@@ -1516,13 +1516,14 @@ export function ChatPreview({
 					...prev,
 					{
 						role: "assistant",
-						content: `❌ ${res.message}`,
+						content: res.message,
 						action: "cancelled",
 					},
 				]);
 			}
 		} finally {
 			setActiveOpId(null);
+			setActiveOpAction(null);
 		}
 	};
 
@@ -1532,63 +1533,83 @@ export function ChatPreview({
 		const status =
 			completedOps[opId] || msg.operation_status || (msg.attachments?.operation_status as string);
 		const isPending = activeOpId === opId;
+		const isConfirming = isPending && activeOpAction === "confirm";
+		const isCancelling = isPending && activeOpAction === "cancel";
 		const isDelete = msg.action?.toLowerCase().includes("delete");
 
 		if (status === "confirmed") {
 			return (
-				<div className="mt-3 pt-3 border-t border-emerald-100 flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50/50 p-2.5 rounded-lg">
-					<RiCheckLine className="size-4 text-emerald-600 shrink-0" />
-					<span>Operation successfully confirmed and applied.</span>
+				<div className="mt-3.5 rounded-lg border border-emerald-200/80 bg-emerald-50/70 p-3 text-xs sm:text-sm text-emerald-900 font-medium flex items-center justify-between gap-2 shadow-none">
+					<div className="flex items-center gap-2">
+						<RiCheckboxCircleFill className="size-4 text-emerald-600 shrink-0" />
+						<span>
+							{typeof (msg.attachments as Record<string, unknown>)?.success_message === "string"
+								? ((msg.attachments as Record<string, unknown>).success_message as string)
+								: "Changes successfully confirmed and applied to Knowledge Base."}
+						</span>
+					</div>
+					<span className="text-[11px] font-semibold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-200/80 shrink-0">
+						Applied
+					</span>
 				</div>
 			);
 		}
 
 		if (status === "cancelled") {
 			return (
-				<div className="mt-3 pt-3 border-t border-zinc-200 flex items-center gap-2 text-xs font-medium text-zinc-600 bg-zinc-50 p-2.5 rounded-lg">
-					<RiCloseLine className="size-4 text-zinc-500 shrink-0" />
-					<span>Operation cancelled.</span>
+				<div className="mt-3.5 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs sm:text-sm text-zinc-700 font-medium flex items-center justify-between gap-2 shadow-none">
+					<div className="flex items-center gap-2">
+						<RiCloseCircleLine className="size-4 text-zinc-500 shrink-0" />
+						<span>Operation has been cancelled.</span>
+					</div>
+					<span className="text-[11px] font-semibold text-zinc-600 bg-zinc-200/70 px-2 py-0.5 rounded-md border border-zinc-300 shrink-0">
+						Cancelled
+					</span>
 				</div>
 			);
 		}
 
 		return (
-			<div className="mt-3 pt-3 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-3 bg-zinc-50/80 p-3 rounded-lg shadow-none">
+			<div className="mt-3.5 pt-3.5 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-3 bg-zinc-50/80 p-3 rounded-lg shadow-none">
 				<div className="flex items-center gap-2 text-xs text-zinc-600">
-					<span className="font-semibold text-zinc-800">Action Required:</span>
-					<span>Confirm to apply proposed changes</span>
+					<span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200/80">
+						Action Required
+					</span>
+					<span className="font-normal text-zinc-600">
+						Confirm to apply proposed changes
+					</span>
 				</div>
 				<div className="flex items-center gap-2">
 					<Button
 						type="button"
-						size="sm"
 						variant="outline"
 						disabled={isPending || isProcessing}
 						onClick={() => handleCancelOperation(opId)}
-						className="text-xs h-8 px-3 border-zinc-300 hover:bg-zinc-100 text-zinc-700 font-medium rounded-lg shadow-none cursor-pointer"
+						className="h-9 px-4 text-xs sm:text-sm font-medium border-zinc-300 hover:bg-zinc-100 text-zinc-700 rounded-lg shadow-none gap-1.5 cursor-pointer transition-colors"
 					>
-						{isPending ? (
-							<RiLoader4Line className="size-3.5 animate-spin mr-1.5" />
+						{isCancelling ? (
+							<RiLoader4Line className="size-4 animate-spin" />
 						) : (
-							<RiCloseLine className="size-3.5 mr-1.5" />
+							<RiCloseLine className="size-4" />
 						)}
 						Cancel
 					</Button>
 					<Button
 						type="button"
-						size="sm"
 						disabled={isPending || isProcessing}
 						onClick={() => handleConfirmOperation(opId)}
-						className={`text-xs h-8 px-3 font-semibold rounded-lg shadow-none transition-all cursor-pointer ${
+						className={`h-9 px-4 text-xs sm:text-sm font-medium rounded-lg shadow-none gap-1.5 cursor-pointer transition-colors ${
 							isDelete
 								? "bg-red-600 hover:bg-red-700 text-white focus:ring-red-500"
 								: "bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500"
 						}`}
 					>
-						{isPending ? (
-							<RiLoader4Line className="size-3.5 animate-spin mr-1.5" />
+						{isConfirming ? (
+							<RiLoader4Line className="size-4 animate-spin" />
+						) : isDelete ? (
+							<RiDeleteBin7Line className="size-4" />
 						) : (
-							<RiCheckLine className="size-3.5 mr-1.5" />
+							<RiCheckLine className="size-4" />
 						)}
 						{isDelete ? "Confirm & Delete" : "Confirm & Apply"}
 					</Button>
