@@ -581,40 +581,8 @@ def chunk_summary_markdown(
                         meta["valid_until"] = valid_until
 
         if categories:
-            str_cats = [c["name"] if isinstance(c, dict) else str(c) for c in categories]
-            chunk_txt_lower = (chunk_text + " " + entity_name).lower()
-            matched_cat = None
-
-            # First: check if any category name is explicitly mentioned in chunk text
-            for cat_name in str_cats:
-                if cat_name.lower() in chunk_txt_lower:
-                    matched_cat = cat_name
-                    break
-
-            # Second: if no direct match, check common keyword synonyms
-            if not matched_cat:
-                synonym_map = {
-                    "acne": ["jerawat", "acne", "bha", "salicylic", "spot gel"],
-                    "brightening": ["truwhite", "brightening", "cerah", "niacinamide", "vitamin c"],
-                    "anti-aging": ["wrinkle", "retinol", "aging", "penuaan", "firming"],
-                    "moisturizer": ["moisturizer", "pelembap", "hydrating", "hydration"],
-                    "cleanser": ["facial wash", "cleansing", "cleanser", "sabun", "scrub"],
-                }
-                for cat_name in str_cats:
-                    cat_key = cat_name.lower()
-                    for syn_group_key, keywords in synonym_map.items():
-                        if syn_group_key in cat_key:
-                            if any(kw in chunk_txt_lower for kw in keywords):
-                                matched_cat = cat_name
-                                break
-                    if matched_cat:
-                        break
-
-            if matched_cat:
-                reordered = [matched_cat] + [c for c in str_cats if c != matched_cat]
-                meta["category"] = matched_cat
-                meta["categories"] = reordered
-            else:
+            str_cats = [c["name"] if isinstance(c, dict) else str(c) for c in categories if c]
+            if str_cats:
                 meta["category"] = str_cats[0]
                 meta["categories"] = str_cats
         return meta

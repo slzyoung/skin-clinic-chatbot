@@ -72,7 +72,6 @@ import { cleanMessageTurn } from "@/components/shared/markdown/utils";
 import { toast } from "sonner";
 import { ApprovalActions } from "./approval-actions";
 import { CategorySettings } from "./category-settings";
-import { SectionCategoriesEditor } from "./section-categories-editor";
 import { TitleSettings } from "./title-settings";
 import { VisibilitySettings as VisibilitySettingsUI } from "./visibility-settings";
 import { ProcessingPipelineCard } from "./processing-pipeline-card";
@@ -94,7 +93,6 @@ interface ChatPreviewProps {
 	categories?: string[];
 	onChangeCategories?: (newCategories: string[]) => void;
 	chunks?: KnowledgeChunkItem[];
-	onChangeChunks?: (newChunks: KnowledgeChunkItem[]) => void;
 	visibilitySettings?: IVisibilitySettings;
 	onChangeVisibilitySettings?: (settings: IVisibilitySettings) => void;
 	title?: string;
@@ -276,7 +274,6 @@ export function ChatPreview({
 	categories = [],
 	onChangeCategories,
 	chunks = [],
-	onChangeChunks,
 	visibilitySettings,
 	onChangeVisibilitySettings,
 	title,
@@ -1227,27 +1224,14 @@ export function ChatPreview({
 				(isEditMode && knowledgeStatus === "APPROVED") ||
 				knowledgeStatus === "PENDING");
 
-		const hasMultipleChunks = chunks && chunks.length > 1;
-
 		const content = (
 			<div className={`flex flex-col gap-4 w-full mt-4 ${!shouldShow ? "hidden" : ""}`}>
-				{hasMultipleChunks ? (
-					<SectionCategoriesEditor
-						chunks={chunks}
-						onChangeChunks={onChangeChunks}
-						categories={categories}
-						onChangeCategories={onChangeCategories}
-						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
-						showSaveActions={isEditMode}
-					/>
-				) : (
-					<CategorySettings
-						categories={categories}
-						onChangeCategories={(c) => onChangeCategories?.(c)}
-						isEditMode={isEditMode || knowledgeStatus === "PENDING"}
-						showSaveActions={isEditMode}
-					/>
-				)}
+				<CategorySettings
+					categories={categories}
+					onChangeCategories={(c) => onChangeCategories?.(c)}
+					isEditMode={isEditMode || knowledgeStatus === "PENDING"}
+					showSaveActions={isEditMode}
+				/>
 				{visibilitySettings && onChangeVisibilitySettings && (
 					<VisibilitySettingsUI
 						settings={visibilitySettings}
