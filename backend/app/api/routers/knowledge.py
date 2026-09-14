@@ -2152,17 +2152,19 @@ async def refine_knowledge(
                 media_note = ""
                 replace_guidance = ""
                 if all_attached_images:
-                    media_lines = [f"![Asset Gambar {i+1}]({url})" for i, url in enumerate(all_attached_images)]
-                    media_note = f"\n\n### Asset Media dari File Terlampir:\n" + "\n\n".join(media_lines) + "\n"
+                    media_lines = [f"- Attached Image {i+1}: {url}" for i, url in enumerate(all_attached_images)]
                     primary_img = all_attached_images[0]
-                    replace_guidance = (
-                        f"\n[INSTRUCTION FOR IMAGE REPLACEMENT: If the admin instruction asks to change, swap, or update an image for a product or section, "
-                        f"you MUST embed the EXACT URL '{primary_img}' in that product's table cell or heading. DO NOT output placeholder text like 'URL_GAMBAR' or 'new_image'.]\n"
+                    media_note = (
+                        f"\n\n[ATTACHED MEDIA ASSET URLS FOR THIS TURN:\n"
+                        + "\n".join(media_lines)
+                        + f"\nCRITICAL INSTRUCTION: If the admin instruction adds a product or section, embed the exact URL '{primary_img}' inside that product's '### Detail Produk' block as ![Product Name]({primary_img}). "
+                        f"If updating/replacing an image, swap the old image tag with ![Product Name]({primary_img}). DO NOT output placeholder text like 'URL_GAMBAR' or 'new_image'. "
+                        f"NEVER create an 'Asset Media' heading or append raw media asset lists at the end of the summary.]\n"
                     )
 
                 file_note = (
                     f"\n\n[SUPPLEMENTARY ATTACHED FILE CONTENT: '{attached_file_name}']\n"
-                    f"{content_snippet}{media_note}{replace_guidance}\n"
+                    f"{content_snippet}{media_note}\n"
                     f"[END OF ATTACHED FILE CONTENT]"
                 )
                 payload.prompt = f"{payload.prompt}\n{file_note}" if payload.prompt else file_note
