@@ -93,6 +93,7 @@ interface ChatPreviewProps {
 	categories?: string[];
 	onChangeCategories?: (newCategories: string[]) => void;
 	chunks?: KnowledgeChunkItem[];
+	onChangeChunks?: (chunks: KnowledgeChunkItem[]) => void;
 	visibilitySettings?: IVisibilitySettings;
 	onChangeVisibilitySettings?: (settings: IVisibilitySettings) => void;
 	title?: string;
