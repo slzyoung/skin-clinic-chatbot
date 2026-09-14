@@ -19,6 +19,9 @@ export default function RolesPage() {
 		handleEditRole,
 		isLoading,
 		pagination,
+		sortKey,
+		sortOrder,
+		handleSort,
 	} = useRolesState();
 
 	return (
@@ -44,6 +47,9 @@ export default function RolesPage() {
 					hasFilter={Boolean(searchQuery.trim())}
 					onClearFilter={handleClearSearch}
 					onEditRole={handleEditRole}
+					sortKey={sortKey}
+					sortOrder={sortOrder}
+					onSort={handleSort}
 				/>
 
 				<DataTablePagination

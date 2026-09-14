@@ -1,5 +1,6 @@
 "use client";
 
+import { SortableTableHead, type SortOrder } from "@/components/shared/sortable-table-head";
 import { TableEmptyState } from "@/components/shared/table-empty-state";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { BranchResponse } from "../api/types";
@@ -13,6 +14,9 @@ interface BranchesTableProps {
 	isGlobalLimitActive: boolean;
 	globalBranchLimit: string;
 	onClearFilter: () => void;
+	sortKey?: string | null;
+	sortOrder?: SortOrder;
+	onSort?: (key: string) => void;
 }
 
 export function BranchesTable({
@@ -22,18 +26,51 @@ export function BranchesTable({
 	isGlobalLimitActive,
 	globalBranchLimit,
 	onClearFilter,
+	sortKey,
+	sortOrder,
+	onSort,
 }: BranchesTableProps) {
 	return (
 		<div className="border border-gray-200 rounded-lg bg-white overflow-hidden">
 			<Table className="[&_tr]:border-gray-100">
 				<TableHeader className="bg-gray-50/50">
 					<TableRow className="hover:bg-gray-50/50 border-b-gray-100">
-						<TableHead className="w-[15%]">Branch Code</TableHead>
+						<SortableTableHead
+							sortKey="code"
+							currentSortKey={sortKey}
+							sortOrder={sortOrder}
+							onSort={onSort}
+							className="w-[15%]"
+						>
+							Branch Code
+						</SortableTableHead>
 						<TableHead className="w-[15%]">Ecosystem</TableHead>
-						<TableHead className="w-[25%]">Branch</TableHead>
-						<TableHead>Tokens/Month</TableHead>
+						<SortableTableHead
+							sortKey="name"
+							currentSortKey={sortKey}
+							sortOrder={sortOrder}
+							onSort={onSort}
+							className="w-[25%]"
+						>
+							Branch
+						</SortableTableHead>
+						<SortableTableHead
+							sortKey="token_limit"
+							currentSortKey={sortKey}
+							sortOrder={sortOrder}
+							onSort={onSort}
+						>
+							Tokens/Month
+						</SortableTableHead>
 						<TableHead>Used</TableHead>
-						<TableHead>Remaining</TableHead>
+						<SortableTableHead
+							sortKey="remaining"
+							currentSortKey={sortKey}
+							sortOrder={sortOrder}
+							onSort={onSort}
+						>
+							Remaining
+						</SortableTableHead>
 						<TableHead className="text-right">Actions</TableHead>
 					</TableRow>
 				</TableHeader>

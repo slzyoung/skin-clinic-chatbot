@@ -6,6 +6,7 @@ export * from "./markdown";
 export * from "./markdown-content";
 export * from "./pagination-utils";
 export * from "./search-bar";
+export * from "./sortable-table-head";
 export * from "./streaming-markdown";
 export * from "./table-empty-state";
 export * from "./table-skeleton";

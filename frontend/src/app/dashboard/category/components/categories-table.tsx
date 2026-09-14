@@ -1,5 +1,6 @@
 "use client";
 
+import { SortableTableHead, type SortOrder } from "@/components/shared/sortable-table-head";
 import { TableEmptyState } from "@/components/shared/table-empty-state";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CategoryResponse } from "../api/types";
@@ -14,6 +15,9 @@ interface CategoriesTableProps {
 	onClearFilter?: () => void;
 	onEditCategory: (category: CategoryResponse) => void;
 	onDeleteCategory: (category: CategoryResponse) => void;
+	sortKey?: string | null;
+	sortOrder?: SortOrder;
+	onSort?: (key: string) => void;
 }
 
 export function CategoriesTable({
@@ -24,13 +28,24 @@ export function CategoriesTable({
 	onClearFilter,
 	onEditCategory,
 	onDeleteCategory,
+	sortKey,
+	sortOrder,
+	onSort,
 }: CategoriesTableProps) {
 	return (
 		<div className="border border-gray-200 rounded-lg bg-white overflow-hidden">
 			<Table className="[&_tr]:border-gray-100">
 				<TableHeader className="bg-gray-50/50">
 					<TableRow>
-						<TableHead className="w-[35%]">Category</TableHead>
+						<SortableTableHead
+							sortKey="name"
+							currentSortKey={sortKey}
+							sortOrder={sortOrder}
+							onSort={onSort}
+							className="w-[35%]"
+						>
+							Category
+						</SortableTableHead>
 						<TableHead className="w-50 text-right">Actions</TableHead>
 					</TableRow>
 				</TableHeader>

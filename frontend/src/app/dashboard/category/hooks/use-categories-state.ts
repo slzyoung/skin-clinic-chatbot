@@ -1,5 +1,6 @@
 import { useDebounce } from "@/hooks/use-debounce";
 import { usePagination } from "@/hooks/use-pagination";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { useMemo, useState } from "react";
 import { CategoryResponse } from "../api/types";
 import { useCategories, useDeleteCategory } from "./use-categories";
@@ -16,6 +17,11 @@ export function useCategoriesState() {
 
 	const { data: categories = [], isLoading } = useCategories();
 	const { mutate: deleteCategory, isPending: isDeleting } = useDeleteCategory();
+
+	const { sortKey, sortOrder, handleSort, sortItems } = useTableSort({
+		initialSortKey: "name",
+		initialSortOrder: "asc",
+	});
 
 	const handleAddCategory = () => {
 		setDialogMode("add");
@@ -50,10 +56,13 @@ export function useCategoriesState() {
 
 	// Filter categories based on search query
 	const filteredCategories = useMemo(() => {
-		if (!debouncedSearch.trim()) return categories;
-		const q = debouncedSearch.toLowerCase();
-		return categories.filter((c) => c.name.toLowerCase().includes(q));
-	}, [categories, debouncedSearch]);
+		let result = categories;
+		if (debouncedSearch.trim()) {
+			const q = debouncedSearch.toLowerCase();
+			result = categories.filter((c) => c.name.toLowerCase().includes(q));
+		}
+		return sortItems<CategoryResponse>(result);
+	}, [categories, debouncedSearch, sortItems]);
 
 	const pagination = usePagination({ items: filteredCategories, initialPageSize: 10 });
 
@@ -78,5 +87,8 @@ export function useCategoriesState() {
 		handleEditCategory,
 		handleDeleteClick,
 		handleConfirmDelete,
+		sortKey,
+		sortOrder,
+		handleSort,
 	};
 }

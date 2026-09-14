@@ -13,9 +13,7 @@ export function BranchesFilterBar({ searchQuery, onSearchChange }: BranchesFilte
 			{/* Search */}
 			<SearchBar
 				containerClassName="max-w-md flex-1"
-				iconClassName="left-3 top-1/2 -translate-y-1/2 size-4 text-black-200"
 				placeholder="Search for branch..."
-				className="pl-9 border-black-50 text-sm h-10 rounded-lg"
 				value={searchQuery}
 				onChange={(e) => onSearchChange(e.target.value)}
 			/>

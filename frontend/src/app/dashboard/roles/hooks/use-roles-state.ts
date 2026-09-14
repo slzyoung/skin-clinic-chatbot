@@ -1,5 +1,6 @@
 import { useDebounce } from "@/hooks/use-debounce";
 import { usePagination } from "@/hooks/use-pagination";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { useMemo, useState } from "react";
 import { RoleDetailResponse } from "../api/types";
 import { useRoles } from "./use-roles";
@@ -12,6 +13,10 @@ export function useRolesState() {
 	const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false);
 
 	const { data: rolesData = [], isLoading } = useRoles();
+	const { sortKey, sortOrder, handleSort, sortItems } = useTableSort({
+		initialSortKey: "name",
+		initialSortOrder: "asc",
+	});
 
 	const handleAddRole = () => {
 		setSelectedRole(null);
@@ -29,13 +34,16 @@ export function useRolesState() {
 
 	// Filtered roles based on search query
 	const filteredRoles = useMemo(() => {
-		if (!debouncedSearch.trim()) return rolesData;
-		const q = debouncedSearch.toLowerCase();
-		return rolesData.filter(
-			(r) =>
-				r.name.toLowerCase().includes(q) || r.accesses?.some((a) => a.toLowerCase().includes(q)),
-		);
-	}, [rolesData, debouncedSearch]);
+		let result = rolesData;
+		if (debouncedSearch.trim()) {
+			const q = debouncedSearch.toLowerCase();
+			result = rolesData.filter(
+				(r) =>
+					r.name.toLowerCase().includes(q) || r.accesses?.some((a) => a.toLowerCase().includes(q)),
+			);
+		}
+		return sortItems<RoleDetailResponse>(result);
+	}, [rolesData, debouncedSearch, sortItems]);
 
 	const pagination = usePagination({ items: filteredRoles, initialPageSize: 10 });
 
@@ -57,5 +65,8 @@ export function useRolesState() {
 		rolesData,
 		filteredRoles,
 		pagination,
+		sortKey,
+		sortOrder,
+		handleSort,
 	};
 }

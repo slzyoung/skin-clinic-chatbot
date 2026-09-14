@@ -27,6 +27,9 @@ export default function CategoriesPage() {
 		handleEditCategory,
 		handleDeleteClick,
 		handleConfirmDelete,
+		sortKey,
+		sortOrder,
+		handleSort,
 	} = useCategoriesState();
 
 	return (
@@ -34,7 +37,9 @@ export default function CategoriesPage() {
 			{/* Header */}
 			<div className="flex flex-col gap-1">
 				<h1 className="text-xl font-semibold text-foreground">Category</h1>
-				<p className="text-sm text-muted-foreground">Explore a wide array of categorized products.</p>
+				<p className="text-sm text-muted-foreground">
+					Explore a wide array of categorized products.
+				</p>
 			</div>
 
 			<div className="flex flex-col">
@@ -52,6 +57,9 @@ export default function CategoriesPage() {
 					onClearFilter={handleClearSearch}
 					onEditCategory={handleEditCategory}
 					onDeleteCategory={handleDeleteClick}
+					sortKey={sortKey}
+					sortOrder={sortOrder}
+					onSort={handleSort}
 				/>
 
 				<DataTablePagination

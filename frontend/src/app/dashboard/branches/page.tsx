@@ -15,6 +15,9 @@ export default function BranchPage() {
 		isGlobalLimitActive,
 		globalBranchLimit,
 		pagination,
+		sortKey,
+		sortOrder,
+		handleSort,
 	} = useBranchesState();
 
 	return (
@@ -37,6 +40,9 @@ export default function BranchPage() {
 						isGlobalLimitActive={isGlobalLimitActive}
 						globalBranchLimit={globalBranchLimit}
 						onClearFilter={handleClearSearch}
+						sortKey={sortKey}
+						sortOrder={sortOrder}
+						onSort={handleSort}
 					/>
 
 					<DataTablePagination

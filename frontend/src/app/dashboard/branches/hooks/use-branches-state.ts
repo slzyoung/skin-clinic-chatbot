@@ -3,6 +3,7 @@
 import { useConfigs } from "@/app/dashboard/configuration/hooks/use-config";
 import { useDebounce } from "@/hooks/use-debounce";
 import { usePagination } from "@/hooks/use-pagination";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { useMemo, useState } from "react";
 import { BranchResponse } from "../api/types";
 import { useBranches } from "./use-branches";
@@ -19,17 +20,30 @@ export function useBranchesState() {
 	const globalBranchLimit =
 		configs?.find((c) => c.key === "GLOBAL_TOKEN_LIMIT")?.value || "3000000";
 
+	const { sortKey, sortOrder, handleSort, sortItems } = useTableSort({
+		initialSortKey: "name",
+		initialSortOrder: "asc",
+	});
+
 	const filteredBranches = useMemo(() => {
 		if (!branches) return [];
-		if (!debouncedSearch.trim()) return branches;
-		const q = debouncedSearch.toLowerCase();
-		return branches.filter(
-			(branch) =>
-				branch.name?.toLowerCase().includes(q) ||
-				branch.code?.toLowerCase().includes(q) ||
-				branch.ecosystem?.toLowerCase().includes(q),
-		);
-	}, [branches, debouncedSearch]);
+		let result = branches;
+		if (debouncedSearch.trim()) {
+			const q = debouncedSearch.toLowerCase();
+			result = branches.filter(
+				(branch) =>
+					branch.name?.toLowerCase().includes(q) ||
+					branch.code?.toLowerCase().includes(q) ||
+					branch.ecosystem?.toLowerCase().includes(q),
+			);
+		}
+		return sortItems<BranchResponse>(result, (branch: BranchResponse, key: string) => {
+			if (key === "remaining") return branch.remaining ?? branch.token_limit - (branch.used || 0);
+			if (key === "token_limit") return branch.token_limit ?? 0;
+			if (key === "used") return branch.used ?? 0;
+			return (branch as unknown as Record<string, unknown>)[key];
+		});
+	}, [branches, debouncedSearch, sortItems]);
 
 	const pagination = usePagination<BranchResponse>({
 		items: filteredBranches,
@@ -50,5 +64,8 @@ export function useBranchesState() {
 		globalBranchLimit,
 		filteredBranches,
 		pagination,
+		sortKey,
+		sortOrder,
+		handleSort,
 	};
 }

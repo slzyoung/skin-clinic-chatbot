@@ -2,6 +2,7 @@
 
 import { useDebounce } from "@/hooks/use-debounce";
 import { usePagination } from "@/hooks/use-pagination";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { useMemo, useState } from "react";
 import { useBranches } from "../../branches/hooks/use-branches";
 import type { UserResponse } from "../api/types";
@@ -20,6 +21,9 @@ export function useUsersState() {
 	const { data: staffData = [], isLoading: isStaffLoading } = useUsers("STAFF");
 	const { data: doctorData = [], isLoading: isDoctorLoading } = useUsers("DOCTOR");
 	const { data: branches = [] } = useBranches();
+
+	const staffSort = useTableSort();
+	const doctorSort = useTableSort();
 
 	const [selectedDoctor, setSelectedDoctor] = useState<UserResponse | null>(null);
 	const [isSheetOpen, setIsSheetOpen] = useState(false);
@@ -52,20 +56,23 @@ export function useUsersState() {
 
 	// Filtered items based on search query
 	const filteredStaff = useMemo(() => {
-		if (!debouncedSearch.trim()) return staffData;
-		const q = debouncedSearch.toLowerCase();
-		return staffData.filter(
-			(s) =>
-				s.name?.toLowerCase().includes(q) ||
-				s.email?.toLowerCase().includes(q) ||
-				s.roles?.some((r) => r.name.toLowerCase().includes(q)),
-		);
-	}, [staffData, debouncedSearch]);
+		let result = staffData;
+		if (debouncedSearch.trim()) {
+			const q = debouncedSearch.toLowerCase();
+			result = staffData.filter(
+				(s) =>
+					s.name?.toLowerCase().includes(q) ||
+					s.email?.toLowerCase().includes(q) ||
+					s.roles?.some((r) => r.name.toLowerCase().includes(q)),
+			);
+		}
+		return staffSort.sortItems<UserResponse>(result);
+	}, [staffData, debouncedSearch, staffSort]);
 
 	const isAllBranchesSelected = branches.length > 0 && selectedBranches.length === branches.length;
 
 	const filteredDoctors = useMemo(() => {
-		return doctorData.filter((d) => {
+		const result = doctorData.filter((d) => {
 			// Search query match
 			if (debouncedSearch.trim()) {
 				const q = debouncedSearch.toLowerCase();
@@ -93,7 +100,9 @@ export function useUsersState() {
 
 			return true;
 		});
-	}, [doctorData, debouncedSearch, selectedDrType, selectedBranches, branches.length]);
+
+		return doctorSort.sortItems<UserResponse>(result);
+	}, [doctorData, debouncedSearch, selectedDrType, selectedBranches, branches.length, doctorSort]);
 
 	const staffPagination = usePagination({ items: filteredStaff, initialPageSize: 10 });
 	const doctorPagination = usePagination({ items: filteredDoctors, initialPageSize: 10 });
@@ -197,5 +206,12 @@ export function useUsersState() {
 		hasDoctorFilter,
 		handleClearStaffFilter,
 		handleClearDoctorFilter,
+		// Sorting
+		staffSortKey: staffSort.sortKey,
+		staffSortOrder: staffSort.sortOrder,
+		handleStaffSort: staffSort.handleSort,
+		doctorSortKey: doctorSort.sortKey,
+		doctorSortOrder: doctorSort.sortOrder,
+		handleDoctorSort: doctorSort.handleSort,
 	};
 }

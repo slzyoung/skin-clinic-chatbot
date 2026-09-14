@@ -53,6 +53,13 @@ export default function UsersPage() {
 		hasDoctorFilter,
 		handleClearStaffFilter,
 		handleClearDoctorFilter,
+		// Sorting
+		staffSortKey,
+		staffSortOrder,
+		handleStaffSort,
+		doctorSortKey,
+		doctorSortOrder,
+		handleDoctorSort,
 	} = useUsersState();
 
 	return (
@@ -111,6 +118,9 @@ export default function UsersPage() {
 						hasFilter={hasStaffFilter}
 						onClearFilter={handleClearStaffFilter}
 						onViewStaff={handleViewStaff}
+						sortKey={staffSortKey}
+						sortOrder={staffSortOrder}
+						onSort={handleStaffSort}
 					/>
 
 					<DataTablePagination
@@ -134,6 +144,9 @@ export default function UsersPage() {
 						hasFilter={hasDoctorFilter}
 						onClearFilter={handleClearDoctorFilter}
 						onViewDoctor={handleViewDoctor}
+						sortKey={doctorSortKey}
+						sortOrder={doctorSortOrder}
+						onSort={handleDoctorSort}
 					/>
 
 					<DataTablePagination
