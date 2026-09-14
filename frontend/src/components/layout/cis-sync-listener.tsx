@@ -1,6 +1,6 @@
 "use client";
 
-import { useCisSyncListener } from "./use-cis-sync-listener";
+import { useCisSyncListener } from "./hooks/use-cis-sync-listener";
 
 export function CisSyncListener() {
 	useCisSyncListener();

@@ -1,12 +1,12 @@
 "use client";
 
+import { branchKeys } from "@/app/dashboard/branches/api/keys";
+import { chatHistoryKeys } from "@/app/dashboard/chat-history/api/keys";
+import { NOTIFICATION_KEYS } from "@/app/dashboard/notifications/api/keys";
+import { userKeys } from "@/app/dashboard/users/api/keys";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { chatHistoryKeys } from "../chat-history/api/keys";
-import { branchKeys } from "../configuration/api/keys";
-import { NOTIFICATION_KEYS } from "../notifications/api/keys";
-import { userKeys } from "../users/api/keys";
 
 export function useCisSyncListener() {
 	const queryClient = useQueryClient();

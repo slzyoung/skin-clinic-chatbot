@@ -1,6 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { searchGlobal, UnifiedSearchResponse } from "@/app/dashboard/api/search";
+"use client";
+
 import { useDebounce } from "@/hooks/use-debounce";
+import { useQuery } from "@tanstack/react-query";
+import { searchGlobal, searchKeys, type UnifiedSearchResponse } from "../api";
 
 export { useDebounce };
 
@@ -12,7 +14,7 @@ export function useGlobalSearch(
 	const debouncedQuery = useDebounce(query, debounceMs);
 
 	const queryResult = useQuery<UnifiedSearchResponse>({
-		queryKey: ["global-search", debouncedQuery, category],
+		queryKey: searchKeys.global(debouncedQuery, category),
 		queryFn: () => searchGlobal(debouncedQuery, category),
 		enabled: debouncedQuery.trim().length > 0,
 		staleTime: 1000 * 30,
