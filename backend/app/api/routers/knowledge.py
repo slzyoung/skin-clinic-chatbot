@@ -2540,6 +2540,7 @@ async def delete_knowledge(
     file_name = knowledge.file_name if knowledge else None
     d_meta = knowledge.metadata_ if knowledge and isinstance(knowledge.metadata_, dict) else {}
     ai_summary = knowledge.ai_summary if knowledge else ""
+    batch_id = str(d_meta.get("batch_id") or "").strip()
 
     pipeline = get_ingestion_pipeline(request)
     bm25 = get_bm25_index(request)
@@ -2555,6 +2556,8 @@ async def delete_knowledge(
 
     # 3. Collect all identifier variants for secondary fail-safe multi-key purge
     identifiers_to_purge = {kid_str, f"{kid_str}_parsed", f"{kid_str}.json", f"{kid_str}_parsed.json"}
+    if batch_id:
+        identifiers_to_purge.update({batch_id, f"{batch_id}_parsed", f"{batch_id}.json", f"{batch_id}_parsed.json"})
     if file_name:
         base_name, _ = os.path.splitext(file_name)
         identifiers_to_purge.update({
@@ -2588,7 +2591,8 @@ async def delete_knowledge(
                         if isinstance(f_data, dict):
                             doc_kid = str(f_data.get("knowledge_id", ""))
                             doc_fname = str(f_data.get("file_name", ""))
-                            if doc_kid == kid_str or (file_name and doc_fname.lower() == file_name.lower()):
+                            doc_bid = str(f_data.get("batch_id") or (f_data.get("metadata") or {}).get("batch_id") or "")
+                            if doc_kid == kid_str or (batch_id and doc_bid == batch_id) or (file_name and doc_fname.lower() == file_name.lower()):
                                 should_delete = True
                     except Exception:
                         pass
@@ -2605,7 +2609,7 @@ async def delete_knowledge(
         from app.services.storage import delete_knowledge_images_and_assets
         delete_knowledge_images_and_assets(
             kid_str,
-            doc_data={"summary": ai_summary, "metadata": d_meta, "image_urls": d_meta.get("image_urls", [])}
+            doc_data={"summary": ai_summary, "metadata": d_meta, "batch_id": batch_id, "image_urls": d_meta.get("image_urls", [])}
         )
     except Exception as s3_del_err:
         logger.debug(f"MinIO secondary delete note for {kid_str}: {s3_del_err}")

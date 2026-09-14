@@ -2677,18 +2677,23 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
                 old_img_match = re.search(r'!\[([^\]]*)\]\(([^\)]+)\)', current_doc_summary)
                 if old_img_match:
                     old_tag = old_img_match.group(0)
+                    old_url = old_img_match.group(2)
                     alt_text = old_img_match.group(1) or cur_title or "Foto Produk"
                     new_tag = f"![{alt_text}]({all_attached_images[0]})"
                     updated_data["summary"] = current_doc_summary.replace(old_tag, new_tag, 1)
                     updated_data["feedback"] = "Gambar berhasil diganti dengan file terlampir yang baru."
+                    # Purge old replaced image from MinIO & disk immediately
+                    try:
+                        from app.services.storage import delete_image_by_ref
+                        delete_image_by_ref(old_url, knowledge_id=knowledge_id)
+                        logger.info(f"🗑️ Purged old replaced image '{old_url}' from MinIO on pending refine swap.")
+                    except Exception as del_old_err:
+                        logger.debug(f"Failed deleting old swapped image: {del_old_err}")
             else:
                 missing_new_imgs = [u for u in all_attached_images if u and u not in updated_data.get("summary", "")]
                 if missing_new_imgs:
-                    updated_data["summary"] = auto_embed_images_in_summary(
-                        updated_data.get("summary", ""),
-                        missing_new_imgs,
-                        title=cur_title or "Knowledge Image"
-                    )
+                    appended_tags = "\n\n" + "\n\n".join([f"![{cur_title or 'Foto Produk'}]({u})" for u in missing_new_imgs])
+                    updated_data["summary"] = updated_data.get("summary", "") + appended_tags
 
         # Dynamically synchronize image_urls from the updated summary (Single Source of Truth)
         # Any image of a deleted product/section will naturally not be in the summary and thus cleanly excluded.
@@ -3620,6 +3625,12 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
                     url = itag.group(2)
                     if any(tw.lower() in alt.lower() or tw.lower() in url.lower() for tw in target_words):
                         updated_summary = updated_summary.replace(itag.group(0), "")
+                        try:
+                            from app.services.storage import delete_image_by_ref
+                            delete_image_by_ref(url, knowledge_id=knowledge_id)
+                            logger.info(f"🗑️ Purged deleted image '{url}' from MinIO on admin request.")
+                        except Exception as del_err:
+                            logger.debug(f"Failed deleting requested image: {del_err}")
             updated_summary = re.sub(r'\n{3,}', '\n\n', updated_summary)
 
         # Embed or Swap newly attached image assets if uploaded in this turn
@@ -3629,17 +3640,21 @@ CRITICAL REQUIREMENT FOR THE "summary" FIELD:
                 old_img_match = re.search(r'!\[([^\]]*)\]\(([^\)]+)\)', updated_summary)
                 if old_img_match:
                     old_tag = old_img_match.group(0)
+                    old_url = old_img_match.group(2)
                     alt_text = old_img_match.group(1) or doc_title or "Foto Produk"
                     new_tag = f"![{alt_text}]({all_attached_images[0]})"
                     updated_summary = updated_summary.replace(old_tag, new_tag, 1)
+                    try:
+                        from app.services.storage import delete_image_by_ref
+                        delete_image_by_ref(old_url, knowledge_id=knowledge_id)
+                        logger.info(f"🗑️ Purged old replaced image '{old_url}' from MinIO on approved refine swap.")
+                    except Exception as del_old_err:
+                        logger.debug(f"Failed deleting old swapped image: {del_old_err}")
             else:
                 missing_new_imgs = [u for u in all_attached_images if u and u not in updated_summary]
                 if missing_new_imgs:
-                    updated_summary = auto_embed_images_in_summary(
-                        updated_summary,
-                        missing_new_imgs,
-                        title=doc_title or "Knowledge Image"
-                    )
+                    appended_tags = "\n\n" + "\n\n".join([f"![{doc_title or 'Foto Produk'}]({u})" for u in missing_new_imgs])
+                    updated_summary = updated_summary + appended_tags
 
         # Dynamically synchronize image_urls from the updated summary (Single Source of Truth)
         # Any image of a deleted product/section or deleted image will naturally not be in the summary and thus cleanly excluded.
@@ -4243,6 +4258,7 @@ async def delete_document_endpoint(
                                 # Purge associated images in MinIO 'images' bucket and documents
                                 try:
                                     from app.services.storage import delete_knowledge_images_and_assets
+                                    doc_bid = str(f_data.get("batch_id") or (f_data.get("metadata") or {}).get("batch_id") or "")
                                     img_res = delete_knowledge_images_and_assets(doc_id or k_id, doc_data=f_data)
                                     total_images_deleted += img_res.get("deleted_images_count", 0)
                                     logger.info(f"Purged {img_res.get('deleted_images_count', 0)} image(s) from MinIO for doc '{k_id}'")
@@ -4303,9 +4319,10 @@ async def delete_document_endpoint(
                     try:
                         from app.services.storage import delete_knowledge_images_and_assets
                         d_meta = d_doc.metadata_ if isinstance(d_doc.metadata_, dict) else {}
+                        d_bid = str(d_meta.get("batch_id") or "").strip()
                         img_res = delete_knowledge_images_and_assets(
                             str(d_doc.id),
-                            doc_data={"summary": d_doc.ai_summary, "metadata": d_meta, "image_urls": d_meta.get("image_urls", [])}
+                            doc_data={"summary": d_doc.ai_summary, "metadata": d_meta, "batch_id": d_bid, "image_urls": d_meta.get("image_urls", [])}
                         )
                         total_images_deleted += img_res.get("deleted_images_count", 0)
                     except Exception as s3_db_err:
