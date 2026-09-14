@@ -1,18 +1,19 @@
 "use client";
 
-import * as React from "react";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+	DialogTrigger,
+} from "@/components/ui/dialog";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { RiEdit2Line, RiLoader4Line } from "@remixicon/react";
-import { useUpdateBranch } from "../hooks/use-branches";
-import { useForm } from "@tanstack/react-form";
-import { Field, FieldLabel, FieldError } from "@/components/ui/field";
-import { z } from "zod";
-import { BranchResponse } from "../../configuration/api/types";
-import { editTokenSchema } from "./branch-schema";
-
-
+import * as React from "react";
+import { BranchResponse } from "../api/types";
+import { useEditBranchTokenForm } from "../hooks/use-edit-branch-token-form";
 
 interface EditBranchTokenDialogProps {
 	branch: BranchResponse;
@@ -20,53 +21,16 @@ interface EditBranchTokenDialogProps {
 
 export function EditBranchTokenDialog({ branch }: EditBranchTokenDialogProps) {
 	const [open, setOpen] = React.useState(false);
-	const updateBranch = useUpdateBranch();
-
-	const tokenLimitValue = (branch.token_limit ?? branch.tokensMonth ?? 0).toString();
-
-	const form = useForm({
-		defaultValues: {
-			token_limit: tokenLimitValue,
-		} as z.input<typeof editTokenSchema>,
-		validators: {
-			onChange: editTokenSchema,
-		},
-		onSubmit: async ({ value, formApi }) => {
-			const parsedData = editTokenSchema.parse(value);
-
-			updateBranch.mutate(
-				{
-					id: branch.id,
-					data: {
-						token_limit: parsedData.token_limit,
-					},
-				},
-				{
-					onSuccess: () => {
-						setOpen(false);
-						formApi.reset();
-					},
-				}
-			);
-		},
+	const { form, isPending } = useEditBranchTokenForm({
+		branch,
+		isOpen: open,
+		onSuccess: () => setOpen(false),
 	});
-
-	// Reset form when opened with latest branch data
-	React.useEffect(() => {
-		if (open) {
-			form.reset();
-		}
-	}, [open, branch.token_limit, branch.tokensMonth, form]);
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger
-				render={
-					<Button
-						variant="outline"
-						className="border-gray-200 h-9 px-4 py-2 font-medium"
-					/>
-				}
+				render={<Button variant="outline" className="border-gray-200 h-9 px-4 py-2 font-medium" />}
 			>
 				<RiEdit2Line className="size-4 mr-2" />
 				Edit Token Limit
@@ -92,7 +56,9 @@ export function EditBranchTokenDialog({ branch }: EditBranchTokenDialogProps) {
 								const isInvalid = field.state.meta.errors && field.state.meta.errors.length > 0;
 								return (
 									<Field data-invalid={isInvalid}>
-										<FieldLabel htmlFor="token_limit" className="text-xs font-medium text-zinc-700">Token Limit</FieldLabel>
+										<FieldLabel htmlFor="token_limit" className="text-xs font-medium text-zinc-700">
+											Token Limit
+										</FieldLabel>
 										<div className="relative">
 											<Input
 												name={field.name}
@@ -131,13 +97,13 @@ export function EditBranchTokenDialog({ branch }: EditBranchTokenDialogProps) {
 							{([canSubmit, isSubmitting]) => (
 								<Button
 									type="submit"
-									disabled={!canSubmit || updateBranch.isPending || isSubmitting}
+									disabled={!canSubmit || isPending || isSubmitting}
 									className="bg-blue-600 text-white hover:bg-blue-700 rounded-lg px-4 h-10 font-medium text-sm transition-colors cursor-pointer shadow-none disabled:opacity-50"
 								>
-									{updateBranch.isPending || isSubmitting ? (
+									{isPending || isSubmitting ? (
 										<RiLoader4Line className="mr-2 h-4 w-4 animate-spin shrink-0" />
 									) : null}
-									{updateBranch.isPending || isSubmitting ? "Saving..." : "Save Changes"}
+									{isPending || isSubmitting ? "Saving..." : "Save Changes"}
 								</Button>
 							)}
 						</form.Subscribe>
