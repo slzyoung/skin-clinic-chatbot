@@ -18,11 +18,31 @@ export function resolveImageUrl(src?: string | null): string {
 	) {
 		return encodeURI(decodeURI(trimmed));
 	}
+
 	const backendBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(
 		/\/api\/?$/,
 		"",
 	);
-	const fullUrl = trimmed.startsWith("/") ? `${backendBase}${trimmed}` : `${backendBase}/${trimmed}`;
+
+	// Normalize storage / images paths to /api/storage/...
+	let normalizedPath = trimmed;
+	if (normalizedPath.startsWith("/api/storage/")) {
+		// already standard /api/storage/...
+	} else if (normalizedPath.startsWith("api/storage/")) {
+		normalizedPath = `/${normalizedPath}`;
+	} else if (normalizedPath.startsWith("/storage/")) {
+		normalizedPath = `/api${normalizedPath}`;
+	} else if (normalizedPath.startsWith("storage/")) {
+		normalizedPath = `/api/${normalizedPath}`;
+	} else if (normalizedPath.startsWith("/images/")) {
+		normalizedPath = `/api/storage${normalizedPath}`;
+	} else if (normalizedPath.startsWith("images/")) {
+		normalizedPath = `/api/storage/${normalizedPath}`;
+	} else if (!normalizedPath.startsWith("/")) {
+		normalizedPath = `/${normalizedPath}`;
+	}
+
+	const fullUrl = `${backendBase}${normalizedPath}`;
 	return encodeURI(decodeURI(fullUrl));
 }
 
