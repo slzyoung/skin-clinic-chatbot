@@ -11,7 +11,7 @@ export function NotificationEmptyState({
 	activeTab,
 }: NotificationEmptyStateProps) {
 	return (
-		<div className="bg-white border border-gray-100 rounded-md flex flex-col items-center justify-center p-10 text-center">
+		<div className="bg-white border border-gray-200 rounded-lg flex flex-col items-center justify-center p-10 text-center">
 			<div className="bg-gray-50 size-10 rounded-full flex items-center justify-center mb-2.5 text-muted-foreground">
 				<RiNotification3Line className="size-5 text-gray-400" />
 			</div>
@@ -26,7 +26,7 @@ export function NotificationEmptyState({
 			</h3>
 			<p className="text-[11px] text-muted-foreground mt-0.5 max-w-xs">
 				{hasActiveFilters
-					? "Try changing or resetting your doctor or doctor type filters."
+					? "Try changing your search keywords or resetting active filters."
 					: activeTab === "unread"
 						? "You are caught up with all reported data issues."
 						: activeTab === "read"

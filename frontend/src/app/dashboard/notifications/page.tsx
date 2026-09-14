@@ -11,6 +11,8 @@ export default function NotificationsPage() {
 		isLoading,
 		activeTab,
 		setActiveTab,
+		searchQuery,
+		setSearchQuery,
 		doctorFilter,
 		setDoctorFilter,
 		doctorTypeFilter,
@@ -39,6 +41,8 @@ export default function NotificationsPage() {
 			<NotificationFilterBar
 				activeTab={activeTab}
 				onTabChange={setActiveTab}
+				searchQuery={searchQuery}
+				onSearchChange={setSearchQuery}
 				totalCount={feedbacks.length}
 				unreadCount={unreadCount}
 				readCount={readCount}
